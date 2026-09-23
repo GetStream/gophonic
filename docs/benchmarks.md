@@ -67,6 +67,13 @@ encoder experiments, not an additive estimate of end-to-end speedup. An
 end-to-end C win is not yet established; repeat both runtimes in a quiet,
 matched window and compare complete warm inference before claiming one.
 
+The later [decoder SIMD experiment](benchmarks/whisper/decoder-dot-summary.json)
+compares the complete 24-token official JFK decode, including `BeginDecode`.
+Two warmed, same-process paired runs found a 2.1–2.5% median improvement with
+eight workers and 2.7–3.7% with one worker. All official tokens matched, and
+the 256 measured decodes allocated no objects or bytes. These gains do not
+establish a full-transcription win over C.
+
 ## TinyMelNet on Apple M4 Max
 
 Recorded September 23, 2026 on macOS 26.3.1, ARM64. Go used **1.27.0** with

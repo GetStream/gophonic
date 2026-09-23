@@ -9,8 +9,8 @@ import (
 )
 
 func TestMulVectorOracleAndTails(t *testing.T) {
-	for _, rows := range []int{0, 1, 2, 3, 4, 5, 7, 8, 9} {
-		for _, columns := range []int{0, 1, 2, 3, 4, 7, 15, 16, 17, 31, 32, 33, 64, 65, 384, 1536} {
+	for _, rows := range []int{0, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12, 15, 16, 17} {
+		for _, columns := range []int{0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 64, 65, 384, 511, 512, 513, 1499, 1500, 1501, 1536} {
 			stride := columns + 3
 			// Both input slices have a one-float offset, deliberately removing
 			// vector alignment. Sentinel output elements bound all writes.
@@ -45,14 +45,14 @@ func TestMulVectorOracleAndTails(t *testing.T) {
 
 func TestMulVectorSpecialValidationAndAllocations(t *testing.T) {
 	for _, value := range []float32{0, float32(math.Copysign(0, -1)), math.SmallestNonzeroFloat32, float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN())} {
-		input, weights, output := make([]float32, 17), make([]float32, 5*17), make([]float32, 5)
+		input, weights, output := make([]float32, 17), make([]float32, 13*19), make([]float32, 13)
 		for i := range input {
 			input[i] = 1
 		}
 		for i := range weights {
 			weights[i] = value
 		}
-		if err := MulVector(output, weights, 17, input, 5); err != nil {
+		if err := MulVector(output, weights, 19, input, 13); err != nil {
 			t.Fatal(err)
 		}
 		want := value * 17
@@ -72,6 +72,16 @@ func TestMulVectorSpecialValidationAndAllocations(t *testing.T) {
 		}
 	}); allocations != 0 {
 		t.Fatalf("MulVector allocated %g objects", allocations)
+	}
+	for _, columns := range []int{64, 384, 1500, 1536} {
+		input, weights, output := make([]float32, columns), make([]float32, 17*(columns+3)), make([]float32, 17)
+		if allocations := testing.AllocsPerRun(10, func() {
+			if err := MulVector(output, weights, columns+3, input, 17); err != nil {
+				panic(err)
+			}
+		}); allocations != 0 {
+			t.Fatalf("MulVector columns=%d allocated %g objects", columns, allocations)
+		}
 	}
 }
 
