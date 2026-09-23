@@ -1,4 +1,4 @@
-module github.com/GetStream/gofloor
+module github.com/GetStream/gophonic
 
 go 1.27.0
 

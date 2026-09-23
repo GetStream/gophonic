@@ -1,9 +1,9 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
 //go:build !goexperiment.simd || (!amd64 && !arm64)
 
-package gofloor
+package gophonic
 
 func attentionContext4(scores0, scores1, scores2, scores3, values, output0, output1, output2, output3 []float32, headOffset int) {
 	clear(output0[:headSize])

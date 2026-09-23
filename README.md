@@ -1,8 +1,8 @@
-# gofloor
+# gophonic
 
 **Audio turn detection, written in Go.**
 
-`gofloor` runs audio turn detectors inside your Go process. Its built-in models
+`gophonic` runs audio turn detectors inside your Go process. Its built-in models
 estimate whether a speaker has finished their turn from the last eight seconds
 of audio. Other architectures can implement the same PCM session interface.
 
@@ -39,14 +39,14 @@ python3 -m venv .venv
 curl -fL \
   https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-gpu.onnx \
   -o smart-turn-v3.2-gpu.onnx
-.venv/bin/python tools/onnx_to_gofloor.py \
-  smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gofloor
+.venv/bin/python tools/onnx_to_gophonic.py \
+  smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gophonic
 
-CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gofloor ./cmd/gofloor
-./gofloor -model smart-turn-v3.2.gofloor speech.wav
+CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
+./gophonic -model smart-turn-v3.2.gophonic speech.wav
 ```
 
-The `-gpu` suffix is the upstream FP32 checkpoint's filename. GoFloor executes
+The `-gpu` suffix is the upstream FP32 checkpoint's filename. Gophonic executes
 it on the CPU. The converter verifies the checkpoint's SHA-256 before reading
 its weights. No model download occurs during prediction or tests.
 
@@ -75,11 +75,11 @@ covered in [Models](docs/models.md). Choosing it is explicit:
 curl -fL \
   https://huggingface.co/deveshu/hinglish-turn-detector/resolve/main/model_tinymel_int8.onnx \
   -o model_tinymel_int8.onnx
-.venv/bin/python tools/tinymel_to_gofloor.py \
-  model_tinymel_int8.onnx --bundle tinymel.gofloor
+.venv/bin/python tools/tinymel_to_gophonic.py \
+  model_tinymel_int8.onnx --bundle tinymel.gophonic
 
-GOMAXPROCS=8 ./gofloor \
-  -tiny-model tinymel.gofloor -tiny-workers 7 speech.wav
+GOMAXPROCS=8 ./gophonic \
+  -tiny-model tinymel.gophonic -tiny-workers 7 speech.wav
 ```
 
 `-tiny-workers` counts helper goroutines; the caller also does work. The default
@@ -92,14 +92,14 @@ share the model between sessions. In the following excerpt, `pcm` is the
 application's mono 16 kHz `[]float32` audio:
 
 ```go
-import "github.com/GetStream/gofloor"
+import "github.com/GetStream/gophonic"
 
-model, err := gofloor.LoadTinyMel("tinymel.gofloor")
+model, err := gophonic.LoadTinyMel("tinymel.gophonic")
 if err != nil {
 	return err
 }
 
-session, err := gofloor.NewTinyMelSession(model, 7)
+session, err := gophonic.NewTinyMelSession(model, 7)
 if err != nil {
 	return err
 }
@@ -150,7 +150,7 @@ warmed sample-rate configuration. Model loading, workspace construction,
 resampler growth, file decoding, and JSON output are outside that boundary.
 
 Tests compare the frontend with saved Whisper features, model probabilities
-with ONNX Runtime outputs, and SIMD kernels with scalar references. GoFloor is
+with ONNX Runtime outputs, and SIMD kernels with scalar references. Gophonic is
 under active development; these parity checks establish numerical behavior on
 the covered fixtures, not application-level accuracy. See
 [validation coverage and limits](docs/validation.md).
@@ -159,13 +159,13 @@ the covered fixtures, not application-level accuracy. See
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 GOEXPERIMENT=simd go test ./...
 
-GOFLOOR_TEST_MODEL=smart-turn-v3.2.gofloor \
-GOFLOOR_TEST_TINYMEL_MODEL=tinymel.gofloor \
+GOPHONIC_TEST_MODEL=smart-turn-v3.2.gophonic \
+GOPHONIC_TEST_TINYMEL_MODEL=tinymel.gophonic \
 GOEXPERIMENT=simd go test ./...
 ```
 
 ## License
 
-GoFloor code is [BSD-2-Clause](LICENSE). Model weights and `gopus` retain their
+Gophonic code is [BSD-2-Clause](LICENSE). Model weights and `gopus` retain their
 own licenses. Weights are downloaded separately; see
 [model provenance and terms](docs/models.md#provenance-and-licenses).

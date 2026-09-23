@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"math"
@@ -12,9 +12,9 @@ import (
 )
 
 func BenchmarkTinyMelStageBreakdown(b *testing.B) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {
@@ -95,9 +95,9 @@ func runTinyAttentionHead(model *TinyMelModel, ws *TinyMelWorkspace) {
 }
 
 func BenchmarkTinyMelEncoderSubstages(b *testing.B) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {

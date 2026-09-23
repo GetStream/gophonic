@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 // WhisperFeatureWorkspace owns only the scratch required by the shared
 // waveform-to-Whisper-frontend path. It is private to one prediction lane and

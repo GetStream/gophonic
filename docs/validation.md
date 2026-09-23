@@ -18,8 +18,8 @@ Run with both converted models to include model-level parity and allocation
 checks:
 
 ```sh
-export GOFLOOR_TEST_MODEL="$PWD/smart-turn-v3.2.gofloor"
-export GOFLOOR_TEST_TINYMEL_MODEL="$PWD/tinymel.gofloor"
+export GOPHONIC_TEST_MODEL="$PWD/smart-turn-v3.2.gophonic"
+export GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic"
 
 go test ./...
 GOEXPERIMENT=simd go test ./...
@@ -72,8 +72,8 @@ Use the original, SHA-pinned ONNX checkpoint and an ONNX Runtime environment:
 
 ```sh
 .venv/bin/python -m pip install numpy onnx onnxruntime
-.venv/bin/python tools/tinymel_to_gofloor.py \
-  model_tinymel_int8.onnx --oracle-dir /tmp/gofloor-oracle
+.venv/bin/python tools/tinymel_to_gophonic.py \
+  model_tinymel_int8.onnx --oracle-dir /tmp/gophonic-oracle
 ```
 
 The converter reads `testdata/tone.mel.f32le` by default and can take another

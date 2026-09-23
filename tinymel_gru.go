@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 const (
 	tinyGRUSequenceLength  = 100
@@ -50,7 +50,7 @@ func (work *tinyGRUWorkspace) buffer() []float32 { return work.output }
 // returned slices for forward and reverse never overlap.
 func (work *tinyGRUWorkspace) directionScratch(direction int) []float32 {
 	if direction < 0 || direction >= tinyGRUDirectionCount {
-		panic("gofloor: invalid TinyMelNet GRU direction")
+		panic("gophonic: invalid TinyMelNet GRU direction")
 	}
 	stride := tinyGRUSequenceLength * tinyGRUGateSize
 	return work.inputGates[direction*stride : (direction+1)*stride]
@@ -73,7 +73,7 @@ func runTinyGRU(input, W, R, B, output []float32, work *tinyGRUWorkspace) {
 		len(output) != tinyGRUSequenceLength*tinyGRUOutputSize ||
 		work == nil || len(work.inputGates) != tinyGRUDirectionCount*tinyGRUSequenceLength*tinyGRUGateSize ||
 		len(work.output) != tinyGRUSequenceLength*tinyGRUOutputSize {
-		panic("gofloor: invalid TinyMelNet GRU tensor or workspace size")
+		panic("gophonic: invalid TinyMelNet GRU tensor or workspace size")
 	}
 	runTinyGRUWithDimensions(input, W, R, B, output, work.inputGates, tinyMelGRUDimensions)
 }
@@ -93,7 +93,7 @@ func runTinyGRUWithDimensions(input, W, R, B, output, inputGates []float32, dims
 		len(R) != directions*recurrentStride || len(B) != directions*biasStride ||
 		len(output) != sequenceLength*outputSize ||
 		len(inputGates) != directions*sequenceLength*gateSize {
-		panic("gofloor: invalid TinyMelNet GRU dimensions or tensor size")
+		panic("gophonic: invalid TinyMelNet GRU dimensions or tensor size")
 	}
 	for direction := 0; direction < directions; direction++ {
 		w := W[direction*inputStride : (direction+1)*inputStride]
@@ -112,7 +112,7 @@ func runTinyGRUDirection(input, Wdir, Rdir, Bdir, output, inputGates []float32, 
 	if len(Wdir) != tinyGRUInputStride || len(Rdir) != tinyGRURecurrentStride ||
 		len(Bdir) != tinyGRUBiasStride || len(inputGates) != tinyGRUSequenceLength*tinyGRUGateSize ||
 		direction < 0 || direction >= tinyGRUDirectionCount || len(output) != tinyGRUSequenceLength*tinyGRUOutputSize {
-		panic("gofloor: invalid TinyMelNet GRU direction tensor or workspace size")
+		panic("gophonic: invalid TinyMelNet GRU direction tensor or workspace size")
 	}
 	runTinyGRUDirectionWithDimensions(input, Wdir, Rdir, Bdir, output, inputGates, direction, tinyMelGRUDimensions)
 }
@@ -129,7 +129,7 @@ func runTinyGRUDirectionWithDimensions(input, W, R, B, output, inputGates []floa
 		len(input) != sequenceLength*inputSize || len(W) != inputStride || len(R) != recurrentStride ||
 		len(B) != biasStride || len(output) != sequenceLength*outputSize ||
 		len(inputGates) != sequenceLength*gateSize {
-		panic("gofloor: invalid TinyMelNet GRU direction dimensions or tensor size")
+		panic("gophonic: invalid TinyMelNet GRU direction dimensions or tensor size")
 	}
 
 	// XW does not depend on recurrent state. Project all three gates once for

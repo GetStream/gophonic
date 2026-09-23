@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 // packTinyDepthwiseWeights stores one kernel tap's channels contiguously.
 // Packing is performed once with immutable model weights, never per inference.

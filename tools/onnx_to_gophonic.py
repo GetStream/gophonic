@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the public Pipecat Smart Turn v3.2 FP32 ONNX weights to gofloor's bundle."""
+"""Convert the public Pipecat Smart Turn v3.2 FP32 ONNX weights to gophonic's bundle."""
 
 import argparse
 import hashlib
@@ -119,7 +119,7 @@ def mappings():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("onnx_model", help="smart-turn-v3.2-gpu.onnx from pipecat-ai/smart-turn-v3")
-    parser.add_argument("output", help="output .gofloor weight bundle")
+    parser.add_argument("output", help="output .gophonic weight bundle")
     args = parser.parse_args()
 
     digest = hashlib.sha256()

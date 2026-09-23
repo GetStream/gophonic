@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"bytes"
@@ -93,7 +93,7 @@ type TinyMelModel struct {
 }
 
 // LoadTinyMel loads the pinned TinyMelNet INT8 model bundle produced by
-// tools/tinymel_to_gofloor.py.
+// tools/tinymel_to_gophonic.py.
 func LoadTinyMel(path string) (*TinyMelModel, error) {
 	f, err := os.Open(path)
 	if err != nil {

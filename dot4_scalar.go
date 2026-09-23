@@ -1,9 +1,9 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
 //go:build !goexperiment.simd || (!amd64 && !arm64)
 
-package gofloor
+package gophonic
 
 func dotProduct4(a, b0, b1, b2, b3 []float32) (float32, float32, float32, float32) {
 	var s0, s1, s2, s3 float32

@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"math"
@@ -131,9 +131,9 @@ func TestTinyGRUSmallONNNSemantics(t *testing.T) {
 }
 
 func TestTinyGRUOnnxRuntimeStageFixture(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to the converted TinyMelNet bundle for ORT GRU-stage parity")
+		t.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to the converted TinyMelNet bundle for ORT GRU-stage parity")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {

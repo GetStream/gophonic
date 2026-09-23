@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"errors"
@@ -36,9 +36,9 @@ func TestAudioSessionConstructorsAndClosedState(t *testing.T) {
 }
 
 func TestSmartTurnSessionAdapterParityAndZeroAllocations(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_MODEL to a converted Smart Turn bundle to run session adapter checks")
+		t.Skip("set GOPHONIC_TEST_MODEL to a converted Smart Turn bundle to run session adapter checks")
 	}
 	model, err := Load(path)
 	if err != nil {
@@ -86,9 +86,9 @@ func TestSmartTurnSessionAdapterParityAndZeroAllocations(t *testing.T) {
 }
 
 func TestTinyMelSessionAdapterParityAndZeroAllocations(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet bundle to run session adapter checks")
+		t.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet bundle to run session adapter checks")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {

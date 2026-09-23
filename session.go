@@ -1,22 +1,22 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import "errors"
 
 // ErrNilModel is returned when a session constructor receives a nil model.
-var ErrNilModel = errors.New("gofloor: model is nil")
+var ErrNilModel = errors.New("gophonic: model is nil")
 
 // ErrSessionClosed is returned when PredictInto is called after Close.
-var ErrSessionClosed = errors.New("gofloor: audio session is closed")
+var ErrSessionClosed = errors.New("gophonic: audio session is closed")
 
 // AudioSession runs one turn detector on interleaved PCM audio.
 //
 // Implementations own any mutable scratch state needed for predictions. Use a
 // separate session for each concurrent prediction lane; PredictInto and Close
 // must not overlap on the same session. A custom backend can implement this
-// interface without registering itself with gofloor or using an ONNX runtime.
+// interface without registering itself with gophonic or using an ONNX runtime.
 type AudioSession interface {
 	PredictInto(pcm []float32, sampleRate, channels int) (Prediction, error)
 	Close() error

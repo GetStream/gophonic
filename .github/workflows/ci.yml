@@ -29,4 +29,4 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Build CLI
-        run: go build ./cmd/gofloor
+        run: go build ./cmd/gophonic

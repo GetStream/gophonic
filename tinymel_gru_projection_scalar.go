@@ -1,9 +1,9 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
 //go:build !goexperiment.simd || !arm64
 
-package gofloor
+package gophonic
 
 func tinyGRUProjectInputs(input, weights, projected []float32, sequenceLength, inputSize, outputSize int) {
 	tinyGRUProjectInputsRowwise(input, weights, projected, sequenceLength, inputSize, outputSize)

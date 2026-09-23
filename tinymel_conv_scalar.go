@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 // runTinyConvScalarRange is the portable range kernel used by non-SIMD builds
 // and by SIMD cases that do not have packed dense weights. fromT and toT are

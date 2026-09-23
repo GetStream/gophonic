@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"math"
@@ -36,9 +36,9 @@ func TestTinyGRUProjectionExact(t *testing.T) {
 }
 
 func TestTinyGRUProjectionRealWeights(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_TINYMEL_MODEL for real projection parity")
+		t.Skip("set GOPHONIC_TEST_TINYMEL_MODEL for real projection parity")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {

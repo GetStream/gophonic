@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"encoding/json"
@@ -37,9 +37,9 @@ func TestTinyQuantizeDynamicMatchesONNXRules(t *testing.T) {
 }
 
 func TestTinyMelOnnxOracleAndZeroAllocations(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		t.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {
@@ -94,9 +94,9 @@ func TestTinyMelOnnxOracleAndZeroAllocations(t *testing.T) {
 }
 
 func TestTinyMelWorkerWorkspaceParityAndZeroAllocations(t *testing.T) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		t.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		t.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {
@@ -284,9 +284,9 @@ func checkTinyConvStages(t *testing.T, model *TinyMelModel, features []float32, 
 }
 
 func BenchmarkTinyMelPredictFeatures(b *testing.B) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {
@@ -308,9 +308,9 @@ func BenchmarkTinyMelPredictFeatures(b *testing.B) {
 }
 
 func BenchmarkTinyMelPredictMono16k(b *testing.B) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {
@@ -332,9 +332,9 @@ func BenchmarkTinyMelPredictMono16k(b *testing.B) {
 }
 
 func BenchmarkTinyMelWorkers(b *testing.B) {
-	path := os.Getenv("GOFLOOR_TEST_TINYMEL_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_TINYMEL_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_TINYMEL_MODEL to a converted TinyMelNet .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_TINYMEL_MODEL to a converted TinyMelNet .gophonic bundle")
 	}
 	model, err := LoadTinyMel(path)
 	if err != nil {

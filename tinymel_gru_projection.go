@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 // tinyGRUProjectInputsRowwise retains the existing three-gate GEMV traversal.
 // weights is [three*hidden,inputSize], projected is [time,three*hidden].

@@ -1,9 +1,9 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
 //go:build goexperiment.simd && arm64
 
-package gofloor
+package gophonic
 
 // quantizeTinyMelSIMD uses the contiguous SIMD quantizer for the band-major
 // mel tensor, then transposes the quantized bytes into the channels-last

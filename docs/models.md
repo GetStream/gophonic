@@ -1,6 +1,6 @@
 # Models and weight bundles
 
-GoFloor ships two specialized inference graphs. Each built-in loader accepts
+Gophonic ships two specialized inference graphs. Each built-in loader accepts
 the bundle for its corresponding graph. Additional audio turn-detector
 architectures implement [`AudioSession`](api.md#add-an-audio-backend) with their
 own loader and execution code; they can optionally reuse the standalone Whisper
@@ -31,8 +31,8 @@ Download and convert the audited FP32 artifact:
 curl -fL \
   https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-gpu.onnx \
   -o smart-turn-v3.2-gpu.onnx
-.venv/bin/python tools/onnx_to_gofloor.py \
-  smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gofloor
+.venv/bin/python tools/onnx_to_gophonic.py \
+  smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gophonic
 ```
 
 Expected source SHA-256:
@@ -59,8 +59,8 @@ The same Python dependencies are enough for bundle conversion:
 curl -fL \
   https://huggingface.co/deveshu/hinglish-turn-detector/resolve/main/model_tinymel_int8.onnx \
   -o model_tinymel_int8.onnx
-.venv/bin/python tools/tinymel_to_gofloor.py \
-  model_tinymel_int8.onnx --bundle tinymel.gofloor
+.venv/bin/python tools/tinymel_to_gophonic.py \
+  model_tinymel_int8.onnx --bundle tinymel.gophonic
 ```
 
 Expected source SHA-256:
@@ -80,8 +80,8 @@ Install ONNX Runtime only if you want to regenerate independent oracle fixtures:
 
 ```sh
 .venv/bin/python -m pip install onnxruntime
-.venv/bin/python tools/tinymel_to_gofloor.py \
-  model_tinymel_int8.onnx --oracle-dir /tmp/gofloor-tinymel-oracle
+.venv/bin/python tools/tinymel_to_gophonic.py \
+  model_tinymel_int8.onnx --oracle-dir /tmp/gophonic-tinymel-oracle
 ```
 
 This writes CPU reference probabilities, selected intermediate tensors,
@@ -109,7 +109,7 @@ will interrupt or wait in a particular application. Application code can use
 
 | Component | Published license / terms |
 | --- | --- |
-| GoFloor implementation | [BSD-2-Clause](../LICENSE) |
+| Gophonic implementation | [BSD-2-Clause](../LICENSE) |
 | Pipecat Smart Turn model | [BSD-2-Clause model metadata](https://huggingface.co/pipecat-ai/smart-turn-v3), [upstream code license](https://github.com/pipecat-ai/smart-turn/blob/main/LICENSE) |
 | TinyMelNet model | [MIT model metadata](https://huggingface.co/deveshu/hinglish-turn-detector); its card states that upstream dataset terms govern redistribution and commercial use of trained weights |
 | `gopus` dependency | [BSD-3-Clause](https://github.com/thesyncim/gopus/blob/main/LICENSE) |

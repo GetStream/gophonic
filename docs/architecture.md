@@ -1,6 +1,6 @@
 # Runtime architecture
 
-GoFloor separates an extensible audio boundary from specialized model execution.
+Gophonic separates an extensible audio boundary from specialized model execution.
 An application can use `AudioSession` for the two built-in models or another
 audio turn-detector architecture. Each backend owns its loader, preprocessing,
 operator sequence, and scratch. Built-in converters extract audited weights;
@@ -130,8 +130,8 @@ where it affects quantization or recurrence.
 | Quantization and layouts | `tinymel_quant*`, `tinymel_mel_quant*`, `tinymel_conv_pack.go` |
 | SIMD kernels and dispatch | `*_simd.go`, `*_dispatch_*.go` |
 | Recurrent math | `tinymel_gru*` |
-| Offline conversion | `tools/onnx_to_gofloor.py`, `tools/tinymel_to_gofloor.py` |
-| File decoding and JSON CLI | `cmd/gofloor/` |
+| Offline conversion | `tools/onnx_to_gophonic.py`, `tools/tinymel_to_gophonic.py` |
+| File decoding and JSON CLI | `cmd/gophonic/` |
 
 `internal/int8probe` is an isolated Smart Turn GEMM experiment. It is not called
 by the production inference graph.

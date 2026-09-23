@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"encoding/binary"
@@ -119,9 +119,9 @@ func TestAudioOutsideLastEightSecondsIsIgnored(t *testing.T) {
 }
 
 func TestPredictionMatchesOnnxOracle(t *testing.T) {
-	modelPath := os.Getenv("GOFLOOR_TEST_MODEL")
+	modelPath := os.Getenv("GOPHONIC_TEST_MODEL")
 	if modelPath == "" {
-		t.Skip("set GOFLOOR_TEST_MODEL to a converted Smart Turn v3.2 .gofloor bundle to run ONNX parity checks")
+		t.Skip("set GOPHONIC_TEST_MODEL to a converted Smart Turn v3.2 .gophonic bundle to run ONNX parity checks")
 	}
 	model, err := Load(modelPath)
 	if err != nil {

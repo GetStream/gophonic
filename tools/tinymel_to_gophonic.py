@@ -459,7 +459,7 @@ def run_oracles(
     expected_outputs: list[float] = []
     case_results = []
     gru_fixtures: dict[str, Any] = {}
-    with tempfile.TemporaryDirectory(prefix="gofloor-tinymel-ort-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="gophonic-tinymel-ort-") as scratch:
         try:
             os.chdir(scratch)
             options = ort.SessionOptions()
@@ -543,7 +543,7 @@ def run_oracles(
     expected_path = oracle_dir / "tinymel_oracle_logits.f32le"
     expected_path.write_bytes(np.asarray(expected_outputs, dtype="<f4").tobytes(order="C"))
     manifest = {
-        "format": "gofloor-tinymel-ort-oracle-v1",
+        "format": "gophonic-tinymel-ort-oracle-v1",
         "model": MODEL_ID,
         "checkpointSha256": digest,
         "runtime": {

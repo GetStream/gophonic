@@ -1,6 +1,6 @@
-# Embedding GoFloor
+# Embedding Gophonic
 
-Import `github.com/GetStream/gofloor`. Load weights once, then create one session
+Import `github.com/GetStream/gophonic`. Load weights once, then create one session
 or workspace for every concurrent prediction lane. Built-in models can be
 shared across goroutines because inference reads their weights without
 modifying them.
@@ -22,11 +22,11 @@ one workspace and delegates to the model's existing prediction path. Load the
 model separately, then create as many independent sessions as needed:
 
 ```go
-concrete, err := gofloor.NewTinyMelSession(model, 3)
+concrete, err := gophonic.NewTinyMelSession(model, 3)
 if err != nil {
 	return err
 }
-var detector gofloor.AudioSession = concrete
+var detector gophonic.AudioSession = concrete
 defer detector.Close()
 
 prediction, err := detector.PredictInto(pcm, 16000, 1)
@@ -64,11 +64,11 @@ to physical cores.
 For example, load and initialize at startup:
 
 ```go
-model, err := gofloor.LoadTinyMel("tinymel.gofloor")
+model, err := gophonic.LoadTinyMel("tinymel.gophonic")
 if err != nil {
 	return err
 }
-workspace := gofloor.NewTinyMelWorkspaceWithWorkers(3)
+workspace := gophonic.NewTinyMelWorkspaceWithWorkers(3)
 defer workspace.Close()
 ```
 
@@ -116,12 +116,12 @@ it after the call.
 The standalone frontend allocates only feature-extraction scratch:
 
 ```go
-frontend := gofloor.NewWhisperFeatureWorkspace()
+frontend := gophonic.NewWhisperFeatureWorkspace()
 defer frontend.Close()
 features := make([]float32, 80*800)
 
 // Reuse frontend and features for each prediction.
-err := gofloor.ExtractWhisperFeaturesInto(pcm, 48000, 2, features, frontend)
+err := gophonic.ExtractWhisperFeaturesInto(pcm, 48000, 2, features, frontend)
 ```
 
 `ExtractWhisperFeaturesInto` accepts mono/stereo PCM at 8–96 kHz and writes the
@@ -139,12 +139,12 @@ uses its existing helpers to parallelize preprocessing.
 
 Implement `AudioSession` in your backend package and pass it directly to the
 application. A new architecture provides its own loader, model math, reusable
-scratch, and threshold. No registration or changes to GoFloor's model dispatch
+scratch, and threshold. No registration or changes to Gophonic's model dispatch
 are needed.
 
 This adapter sketch assumes your package already defines `LoadModel`,
 `NewScratch`, and a `Model.PredictPCMInto` method returning a probability. Those
-names represent your backend's implementation, not GoFloor APIs:
+names represent your backend's implementation, not Gophonic APIs:
 
 ```go
 type Session struct {
@@ -154,7 +154,7 @@ type Session struct {
 	closed    bool
 }
 
-var _ gofloor.AudioSession = (*Session)(nil)
+var _ gophonic.AudioSession = (*Session)(nil)
 
 func OpenSession(path string, threshold float32) (*Session, error) {
 	model, err := LoadModel(path)
@@ -164,15 +164,15 @@ func OpenSession(path string, threshold float32) (*Session, error) {
 	return &Session{model: model, scratch: NewScratch(), threshold: threshold}, nil
 }
 
-func (s *Session) PredictInto(pcm []float32, rate, channels int) (gofloor.Prediction, error) {
+func (s *Session) PredictInto(pcm []float32, rate, channels int) (gophonic.Prediction, error) {
 	if s == nil || s.closed {
-		return gofloor.Prediction{}, gofloor.ErrSessionClosed
+		return gophonic.Prediction{}, gophonic.ErrSessionClosed
 	}
 	p, err := s.model.PredictPCMInto(pcm, rate, channels, s.scratch)
 	if err != nil {
-		return gofloor.Prediction{}, err
+		return gophonic.Prediction{}, err
 	}
-	return gofloor.Prediction{Probability: p, Complete: p > s.threshold}, nil
+	return gophonic.Prediction{Probability: p, Complete: p > s.threshold}, nil
 }
 
 func (s *Session) Close() error {
@@ -225,8 +225,8 @@ provide better throughput even when a larger pool lowers isolated latency.
 ## CLI input and output
 
 ```sh
-./gofloor -model smart-turn-v3.2.gofloor speech.wav
-./gofloor -tiny-model tinymel.gofloor -tiny-workers 3 speech.ogg
+./gophonic -model smart-turn-v3.2.gophonic speech.wav
+./gophonic -tiny-model tinymel.gophonic -tiny-workers 3 speech.ogg
 ```
 
 Exactly one model flag and one audio path are required. `-tiny-workers` accepts

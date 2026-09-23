@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"os"
@@ -57,9 +57,9 @@ func BenchmarkPredictMono16k(b *testing.B) {
 
 func benchmarkModelAndFeatures(b *testing.B) (*Model, []float32) {
 	b.Helper()
-	path := os.Getenv("GOFLOOR_TEST_MODEL")
+	path := os.Getenv("GOPHONIC_TEST_MODEL")
 	if path == "" {
-		b.Skip("set GOFLOOR_TEST_MODEL to a converted Smart Turn v3.2 .gofloor bundle")
+		b.Skip("set GOPHONIC_TEST_MODEL to a converted Smart Turn v3.2 .gophonic bundle")
 	}
 	model, err := Load(path)
 	if err != nil {

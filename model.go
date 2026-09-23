@@ -1,7 +1,7 @@
-// Copyright 2026 The gofloor authors
+// Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package gofloor
+package gophonic
 
 import (
 	"encoding/binary"
@@ -109,7 +109,7 @@ func Load(path string) (*Model, error) {
 	return ReadWeights(f)
 }
 
-// ReadWeights reads a bundle produced by tools/onnx_to_gofloor.py.
+// ReadWeights reads a bundle produced by tools/onnx_to_gophonic.py.
 func ReadWeights(r io.Reader) (*Model, error) {
 	var magic [8]byte
 	if _, err := io.ReadFull(r, magic[:]); err != nil {

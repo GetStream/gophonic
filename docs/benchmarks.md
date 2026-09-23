@@ -61,7 +61,7 @@ First [convert the model](models.md#convert-tinymelnet). The full helper sweep
 also shows whether smaller pools perform better on your machine:
 
 ```sh
-GOFLOOR_TEST_TINYMEL_MODEL="$PWD/tinymel.gofloor" \
+GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic" \
 GOEXPERIMENT=simd go test . -run '^$' \
   -bench '^BenchmarkTinyMelWorkers$' -benchtime=200x -count=3 -cpu=1,2,4,8
 ```
@@ -69,7 +69,7 @@ GOEXPERIMENT=simd go test . -run '^$' \
 To measure just the eight-slot, seven-helper configuration:
 
 ```sh
-GOFLOOR_TEST_TINYMEL_MODEL="$PWD/tinymel.gofloor" \
+GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic" \
 GOMAXPROCS=8 GOEXPERIMENT=simd go test . -run '^$' \
   -bench '^BenchmarkTinyMelWorkers/(features|audio)/helpers=7$' \
   -benchtime=200x -count=3
@@ -87,7 +87,7 @@ Use the original TinyMelNet ONNX checkpoint, not the converted Go bundle:
 ```sh
 .venv/bin/python -m pip install numpy onnxruntime
 .venv/bin/python docs/benchmark_ort.py model_tinymel_int8.onnx \
-  --label "Your CPU model" --output /tmp/gofloor-ort-cpu.json
+  --label "Your CPU model" --output /tmp/gophonic-ort-cpu.json
 ```
 
 [`benchmark_ort.py`](benchmark_ort.py) verifies the checkpoint SHA-256 and
@@ -107,7 +107,7 @@ settings differ. The current Smart Turn Go path remains slower than that
 reference.
 
 ```sh
-GOFLOOR_TEST_MODEL="$PWD/smart-turn-v3.2.gofloor" \
+GOPHONIC_TEST_MODEL="$PWD/smart-turn-v3.2.gophonic" \
 GOEXPERIMENT=simd go test . -run '^$' \
   -bench '^BenchmarkPredict(Features|Mono16k)$' \
   -benchtime=50x -count=3 -cpu=12
