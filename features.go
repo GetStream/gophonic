@@ -106,6 +106,12 @@ func ExtractWhisperFeatures16k(pcm []float32, dst []float32, ws *Workspace) erro
 }
 
 func prepareAudio(pcm []float32, sampleRate, channels int, ws *Workspace) error {
+	return prepareAudioInto(pcm, sampleRate, channels, &ws.audio)
+}
+
+// prepareAudioInto is shared by model workspaces and the standalone Whisper
+// frontend used by external turn-detector implementations.
+func prepareAudioInto(pcm []float32, sampleRate, channels int, w *audioWorkspace) error {
 	if sampleRate < 8000 || sampleRate > 96000 {
 		return errInvalidRate
 	}
@@ -143,26 +149,26 @@ func prepareAudio(pcm []float32, sampleRate, channels int, ws *Workspace) error 
 		}
 	}
 	leftPad := maxWindowSamples - outCount
-	clear(ws.audio.samples)
+	clear(w.samples)
 	if sampleRate == 16000 {
 		first := frames - outCount
 		for i := 0; i < outCount; i++ {
-			ws.audio.samples[leftPad+i] = monoAt(pcm, first+i, channels)
+			w.samples[leftPad+i] = monoAt(pcm, first+i, channels)
 		}
 		return nil
 	}
-	if err := ws.audio.prepareResampler(sampleRate); err != nil {
+	if err := w.prepareResampler(sampleRate); err != nil {
 		return err
 	}
 	outStart := fullOutput64 - int64(outCount)
 	rem := int64(sampleRate)
 	denom := int64(16000)
-	coefficients := ws.audio.resampleCoefficients
+	coefficients := w.resampleCoefficients
 	for i := 0; i < outCount; i++ {
 		globalOut := outStart + int64(i)
 		numerator := globalOut * int64(sampleRate)
 		base := numerator / denom
-		phase := int(globalOut % int64(ws.audio.resamplePhases))
+		phase := int(globalOut % int64(w.resamplePhases))
 		coeff := coefficients[phase*resampleTaps : (phase+1)*resampleTaps]
 		var value float64
 		for tap := 0; tap < resampleTaps; tap++ {
@@ -171,7 +177,7 @@ func prepareAudio(pcm []float32, sampleRate, channels int, ws *Workspace) error 
 				value += float64(monoAt(pcm, int(sourceFrame), channels)) * coeff[tap]
 			}
 		}
-		ws.audio.samples[leftPad+i] = float32(value)
+		w.samples[leftPad+i] = float32(value)
 		rem += int64(sampleRate)
 		if rem >= denom {
 			rem %= denom

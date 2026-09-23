@@ -2,23 +2,26 @@
 
 **Audio turn detection, written in Go.**
 
-`gofloor` estimates whether a speaker has finished their turn from the last
-eight seconds of audio. Embed it in a voice agent, reuse a workspace, and get a
-probability without leaving your Go process.
+`gofloor` runs audio turn detectors inside your Go process. Its built-in models
+estimate whether a speaker has finished their turn from the last eight seconds
+of audio. Other architectures can implement the same PCM session interface.
 
 - **CPU inference in Go.** Build with `CGO_ENABLED=0`; optional Go 1.27
   `simd/archsimd` accelerates FP32 work on ARM64 and AMD64, with additional
   TinyMelNet integer kernels on ARM64 NEON.
-- **Zero allocations during warm prediction.** Models share immutable weights;
-  each concurrent prediction owns its scratch and persistent workers.
+- **Zero allocations during warm prediction.** Built-in models share immutable
+  weights; each concurrent prediction owns its scratch and persistent workers.
 - **Two explicit model choices.** Pipecat Smart Turn v3.2 FP32 and the smaller
   TinyMelNet INT8 graph have separate loaders and completion thresholds.
+- **An open audio interface.** Implement `AudioSession` for another turn detector
+  with its own loader, preprocessing, and inference graph.
 - **PCM in your application; WAV or Opus at the command line.** Ogg Opus decoding
   uses [`gopus`](https://github.com/thesyncim/gopus).
 
 Inference, feature extraction, and resampling run in Go. Python is used once to
-convert a published ONNX checkpoint into a weight bundle. The runtime implements
-these two model graphs; arbitrary ONNX models are outside its current scope.
+convert a supported ONNX checkpoint into a weight bundle. Built-in execution
+remains specialized for each model. External backends plug in through Go code;
+there is no model registry or general ONNX graph loader.
 
 [Models](docs/models.md) · [Go API](docs/api.md) ·
 [Architecture](docs/architecture.md) · [Benchmarks](docs/benchmarks.md) ·
@@ -84,8 +87,8 @@ is serial. A request for seven helpers is capped at `GOMAXPROCS-1`.
 
 ## Use it from Go
 
-Load a model at startup. Reuse one workspace for each concurrent prediction
-lane; share the model between lanes. In the following excerpt, `pcm` is the
+Load a model at startup. Reuse one session for each concurrent prediction lane;
+share the model between sessions. In the following excerpt, `pcm` is the
 application's mono 16 kHz `[]float32` audio:
 
 ```go
@@ -96,11 +99,14 @@ if err != nil {
 	return err
 }
 
-workspace := gofloor.NewTinyMelWorkspaceWithWorkers(7)
-defer workspace.Close()
+session, err := gofloor.NewTinyMelSession(model, 7)
+if err != nil {
+	return err
+}
+defer session.Close()
 
 // Repeat this call whenever your VAD detects a pause.
-prediction, err := model.PredictMono16kInto(pcm, workspace)
+prediction, err := session.PredictInto(pcm, 16000, 1)
 if err != nil {
 	return err
 }
@@ -108,12 +114,25 @@ if err != nil {
 // prediction.Complete applies this model's threshold.
 ```
 
-Use `NewTinyMelWorkspace()` for serial execution. For Smart Turn, use `Load`
-with `NewWorkspace()`. Both models also accept interleaved mono/stereo PCM at
-8–96 kHz through `PredictInto`, or normalized `[80,800]` log-mel features through
-`PredictFeaturesInto`.
+Pass zero helpers for serial TinyMelNet execution. For Smart Turn, use `Load`
+with `NewSmartTurnSession`. Both implement `AudioSession`, which accepts PCM and
+returns `Prediction`. A custom backend implements those same two methods:
 
-Short input is left-padded; long input keeps the most recent eight seconds.
+```go
+type AudioSession interface {
+	PredictInto(pcm []float32, sampleRate, channels int) (Prediction, error)
+	Close() error
+}
+```
+
+See [adding an audio backend](docs/api.md#add-an-audio-backend) for an adapter
+example and optional reuse of the standalone Whisper frontend. The direct
+model/workspace APIs remain available, including `PredictFeaturesInto` for
+normalized `[80,800]` log-mel input. Sessions delegate to those specialized
+implementations.
+
+Built-in sessions accept mono/stereo PCM at 8–96 kHz. Short input is left-padded;
+long input keeps the most recent eight seconds.
 Call from a VAD-gated pause decision and apply your application's turn policy
 to the result. The library does not contain a streaming VAD or dialogue policy.
 

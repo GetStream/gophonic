@@ -1,25 +1,40 @@
 # Runtime architecture
 
-GoFloor specializes its execution and memory layout for two known audio models.
-An offline converter extracts audited weights; Go code owns the operator
-sequence. There is no runtime graph interpreter or operator registry.
+GoFloor separates an extensible audio boundary from specialized model execution.
+An application can use `AudioSession` for the two built-in models or another
+audio turn-detector architecture. Each backend owns its loader, preprocessing,
+operator sequence, and scratch. Built-in converters extract audited weights;
+there is no runtime graph interpreter or operator registry.
 
 ```mermaid
 flowchart LR
-    A[Mono or stereo PCM] --> B[Last 8 seconds · mono 16 kHz]
-    B --> C[Whisper log-mel · 80 × 800]
-    C --> D[Smart Turn FP32]
-    C --> E[TinyMelNet INT8 + FP32]
-    D --> F[Probability + completion decision]
-    E --> F
+    A[PCM] --> B[AudioSession]
+    B --> C[Built-in session]
+    B --> D[External backend session]
+    C --> E[Whisper frontend]
+    E --> F[Specialized model graph]
+    D --> G[Backend frontend and graph]
+    F --> H[Prediction]
+    G --> H
 ```
 
-`PredictFeaturesInto` starts at the log-mel tensor. WAV and Ogg Opus decoding
-belong to the CLI; applications can pass their own PCM directly.
+`AudioSession` exposes PCM prediction and close operations. Concrete built-in
+sessions pair a shared immutable model with a private workspace and delegate to
+the existing specialized code. Interface dispatch occurs at the prediction
+boundary; inner kernels keep concrete types and their current SIMD dispatch.
+
+An external backend can reuse `WhisperFeatureWorkspace` when its model expects
+the same log-mel representation, or supply its own frontend. Its graph does not
+need to resemble either built-in model. See the
+[backend adapter example](api.md#add-an-audio-backend).
+
+The direct built-in `PredictFeaturesInto` methods start at the log-mel tensor.
+WAV and Ogg Opus decoding belong to the CLI; applications pass PCM directly.
 
 ## Frontend
 
-`features.go` implements the shared frontend:
+`features.go` implements the built-in models' shared frontend;
+`WhisperFeatureWorkspace` exposes that frontend independently of model scratch:
 
 1. Average stereo channels, resample when necessary, and right-align an
    eight-second window of 128,000 samples.
@@ -78,7 +93,8 @@ numbers are for ARM64; they do not establish AMD64 speed.
 
 ## Concurrency and ownership
 
-The model is shared read-only. The workspace owns mutable state. Each helper
+For built-in sessions, the model is shared read-only and one session owns one
+workspace. A caller may also manage the workspace directly. Each helper
 has a fixed identity and a private completion signal. TinyMelNet helpers also
 have private FFT scratch.
 A dispatched stage has one job descriptor that stays unchanged until all
@@ -104,6 +120,8 @@ where it affects quantization or recurrence.
 
 | Concern | Main files |
 | --- | --- |
+| PCM session interface and built-in adapters | `session.go` |
+| Standalone Whisper frontend API | `whisper_features.go` |
 | PCM, resampling, FFT, mel | `features.go` |
 | Smart Turn weights and graph | `model.go`, `inference.go` |
 | Smart Turn scratch and workers | `workspace.go`, `parallel.go` |

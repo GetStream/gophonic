@@ -1,8 +1,10 @@
 # Models and weight bundles
 
-GoFloor contains two fixed inference graphs. Each loader accepts the bundle for
-its corresponding graph. Converting an unrelated ONNX file does not add a new
-model architecture to the runtime.
+GoFloor ships two specialized inference graphs. Each built-in loader accepts
+the bundle for its corresponding graph. Additional audio turn-detector
+architectures implement [`AudioSession`](api.md#add-an-audio-backend) with their
+own loader and execution code; they can optionally reuse the standalone Whisper
+frontend. The built-in converters do not import arbitrary ONNX graphs.
 
 | | Smart Turn v3.2 | TinyMelNet |
 | --- | --- | --- |

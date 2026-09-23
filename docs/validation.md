@@ -43,12 +43,19 @@ built with `CGO_ENABLED=0`.
 | 400-point FFT | Independent direct-DFT comparison |
 | Whisper frontend | Saved 16 kHz tone features: max absolute error `2e-5`, RMSE `2e-6`; silence output |
 | Parallel frontend | Bitwise comparison with serial output across helper counts |
+| Standalone frontend | Comparison with the existing frontend, warmed allocation and closed-state checks |
 | Smart Turn prediction | Silence and tone ONNX probabilities within `2e-5` |
 | TinyMelNet prediction | Zero-feature, tone, and deterministic-pattern ONNX probabilities within `2e-5` |
 | TinyMelNet convolution stages | Selected ONNX tensor samples within `3e-5`, scale and zero-point checks |
 | TinyMelNet GRU | ONNX equation reference, gate/direction semantics, full saved GRU outputs within `2e-5` |
 | SIMD kernels | Scalar comparisons, tails/ranges, quantization rounding and saturation |
 | Reused workspaces | Warm public prediction allocation assertions and benchmark allocation reports |
+| Built-in session adapters | Direct-call prediction parity, nil/closed lifecycle checks, warm allocations through `AudioSession` |
+
+An external-package conformance test also implements `AudioSession` using only
+the standalone Whisper frontend. Its model head is a test stand-in; this proves
+that another package can implement the interface without access to internal
+model types, not that a third model architecture has been ported.
 
 “Zero features” means an all-zero input tensor. It is distinct from the
 frontend's representation of silent PCM, which is `-1.5` in every feature bin.
