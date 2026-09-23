@@ -1,0 +1,19 @@
+# Downloaded model checkpoints and local converted bundles.
+*.onnx
+*.gofloor
+*.goinfer
+
+# Local binaries and benchmark profiles.
+/gofloor
+/goinfer
+*.test
+*.prof
+*.pprof
+
+# Converter environments.
+.venv/
+__pycache__/
+*.pyc
+
+# Local optimization handoffs; public methodology lives in docs/.
+ASTRA_*.md
