@@ -12,7 +12,7 @@ import (
 const attentionTileRows = 32
 
 // audioAttention assigns independent query tiles to the persistent workers.
-// Each tile computes QK, exact softmax, and the value product before moving on,
+// Each tile computes QK, stable softmax, and the value product before moving on,
 // keeping its scores in private scratch and requiring one worker handoff for
 // the complete attention operation. The packed K/V matrices are read-only
 // during this phase; no complete time-by-time score matrix is materialized.
@@ -107,19 +107,12 @@ func softmaxRows(values []float32, rows, columns int) {
 	}
 }
 
-// Keep the row operation separate so math.Exp's assembly call preserves only
-// this row's state instead of the outer loop's matrix metadata on each value.
 func softmaxRow(x []float32) {
 	maxValue := x[0]
 	for _, value := range x[1:] {
 		maxValue = max(maxValue, value)
 	}
-	var total float32
-	for i, value := range x {
-		p := float32(math.Exp(float64(value - maxValue)))
-		x[i] = p
-		total += p
-	}
+	total := softmaxExpInPlace(x, maxValue)
 	inverse := 1 / total
 	for i := range x {
 		x[i] *= inverse

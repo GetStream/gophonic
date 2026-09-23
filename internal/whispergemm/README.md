@@ -27,9 +27,9 @@ to combine matrix and elementwise work inside one worker dispatch.
 With Go 1.27 and `GOEXPERIMENT=simd` on ARM64, dispatch selects a NEON 4 × 16
 kernel. Other builds use a scalar 4 × 4 kernel. Both paths are pure Go. The
 SIMD kernel uses fused FP32 multiply-add; its single-row path uses four
-independent reduction streams. The scalar path uses separately rounded FP32
-multiply and add in increasing K order. Results therefore need not be
-bit-identical between builds or to BLAS.
+independent reduction streams. The scalar path accumulates in increasing K
+order and permits compiler-fused FP32 multiply-add. Results therefore need
+not be bit-identical between builds, architectures, or BLAS implementations.
 
 The tests compare the public path against an independent FP64 oracle reading
 unpacked weights. For finite tested inputs, the accepted absolute error is

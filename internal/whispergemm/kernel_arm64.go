@@ -30,50 +30,48 @@ func mulPacked(dst []float32, dstStride int, a []float32, aStride int, packed []
 	}
 }
 
-// Two K values share each input vector load. Bitwise interleaves broadcast
-// each value without scalar GetElem temporaries, keeping the tile in registers.
+// Four reduction values share each input vector load. Byte table lookups
+// broadcast each float bit pattern without scalar GetElem temporaries.
 func kernel4x16(a0, a1, a2, a3, weights, d0, d1, d2, d3 []float32) {
 	k := len(a0)
-	_ = a1[k-1]
-	_ = a2[k-1]
-	_ = a3[k-1]
-	_ = weights[k*16-1]
+	a1, a2, a3 = a1[:k:k], a2[:k:k], a3[:k:k]
+	weights = weights[: k*16 : k*16]
 	var c00, c01, c02, c03 archsimd.Float32x4
 	var c10, c11, c12, c13 archsimd.Float32x4
 	var c20, c21, c22, c23 archsimd.Float32x4
 	var c30, c31, c32, c33 archsimd.Float32x4
+	index0 := archsimd.LoadUint8x16Array(&[16]uint8{0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3})
+	index1 := archsimd.LoadUint8x16Array(&[16]uint8{4, 5, 6, 7, 4, 5, 6, 7, 4, 5, 6, 7, 4, 5, 6, 7})
+	index2 := archsimd.LoadUint8x16Array(&[16]uint8{8, 9, 10, 11, 8, 9, 10, 11, 8, 9, 10, 11, 8, 9, 10, 11})
+	index3 := archsimd.LoadUint8x16Array(&[16]uint8{12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15})
 	p := 0
-	for ; p+4 <= k; p += 2 {
-		v0 := archsimd.LoadFloat32x4Array((*[4]float32)(a0[p : p+4])).ToBits()
-		pair0 := v0.InterleaveLo(v0).ReshapeToUint64s()
-		v1 := archsimd.LoadFloat32x4Array((*[4]float32)(a1[p : p+4])).ToBits()
-		pair1 := v1.InterleaveLo(v1).ReshapeToUint64s()
-		v2 := archsimd.LoadFloat32x4Array((*[4]float32)(a2[p : p+4])).ToBits()
-		pair2 := v2.InterleaveLo(v2).ReshapeToUint64s()
-		v3 := archsimd.LoadFloat32x4Array((*[4]float32)(a3[p : p+4])).ToBits()
-		pair3 := v3.InterleaveLo(v3).ReshapeToUint64s()
-		wb := (*[32]float32)(weights[p*16:])
+	for ; p+4 <= k; p += 4 {
+		v0 := archsimd.LoadFloat32x4Array((*[4]float32)(a0[p : p+4])).ToBits().ReshapeToUint8s()
+		v1 := archsimd.LoadFloat32x4Array((*[4]float32)(a1[p : p+4])).ToBits().ReshapeToUint8s()
+		v2 := archsimd.LoadFloat32x4Array((*[4]float32)(a2[p : p+4])).ToBits().ReshapeToUint8s()
+		v3 := archsimd.LoadFloat32x4Array((*[4]float32)(a3[p : p+4])).ToBits().ReshapeToUint8s()
+		wb := (*[64]float32)(weights[p*16 : p*16+64])
 		{
 			w0 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[0:4]))
 			w1 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[4:8]))
 			w2 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[8:12]))
 			w3 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[12:16]))
-			x0 := pair0.InterleaveLo(pair0).ReshapeToUint32s().BitsToFloat32()
+			x0 := v0.LookupOrZero(index0).ReshapeToUint32s().BitsToFloat32()
 			c00 = w0.MulAdd(x0, c00)
 			c01 = w1.MulAdd(x0, c01)
 			c02 = w2.MulAdd(x0, c02)
 			c03 = w3.MulAdd(x0, c03)
-			x1 := pair1.InterleaveLo(pair1).ReshapeToUint32s().BitsToFloat32()
+			x1 := v1.LookupOrZero(index0).ReshapeToUint32s().BitsToFloat32()
 			c10 = w0.MulAdd(x1, c10)
 			c11 = w1.MulAdd(x1, c11)
 			c12 = w2.MulAdd(x1, c12)
 			c13 = w3.MulAdd(x1, c13)
-			x2 := pair2.InterleaveLo(pair2).ReshapeToUint32s().BitsToFloat32()
+			x2 := v2.LookupOrZero(index0).ReshapeToUint32s().BitsToFloat32()
 			c20 = w0.MulAdd(x2, c20)
 			c21 = w1.MulAdd(x2, c21)
 			c22 = w2.MulAdd(x2, c22)
 			c23 = w3.MulAdd(x2, c23)
-			x3 := pair3.InterleaveLo(pair3).ReshapeToUint32s().BitsToFloat32()
+			x3 := v3.LookupOrZero(index0).ReshapeToUint32s().BitsToFloat32()
 			c30 = w0.MulAdd(x3, c30)
 			c31 = w1.MulAdd(x3, c31)
 			c32 = w2.MulAdd(x3, c32)
@@ -84,22 +82,74 @@ func kernel4x16(a0, a1, a2, a3, weights, d0, d1, d2, d3 []float32) {
 			w1 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[20:24]))
 			w2 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[24:28]))
 			w3 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[28:32]))
-			x0 := pair0.InterleaveHi(pair0).ReshapeToUint32s().BitsToFloat32()
+			x0 := v0.LookupOrZero(index1).ReshapeToUint32s().BitsToFloat32()
 			c00 = w0.MulAdd(x0, c00)
 			c01 = w1.MulAdd(x0, c01)
 			c02 = w2.MulAdd(x0, c02)
 			c03 = w3.MulAdd(x0, c03)
-			x1 := pair1.InterleaveHi(pair1).ReshapeToUint32s().BitsToFloat32()
+			x1 := v1.LookupOrZero(index1).ReshapeToUint32s().BitsToFloat32()
 			c10 = w0.MulAdd(x1, c10)
 			c11 = w1.MulAdd(x1, c11)
 			c12 = w2.MulAdd(x1, c12)
 			c13 = w3.MulAdd(x1, c13)
-			x2 := pair2.InterleaveHi(pair2).ReshapeToUint32s().BitsToFloat32()
+			x2 := v2.LookupOrZero(index1).ReshapeToUint32s().BitsToFloat32()
 			c20 = w0.MulAdd(x2, c20)
 			c21 = w1.MulAdd(x2, c21)
 			c22 = w2.MulAdd(x2, c22)
 			c23 = w3.MulAdd(x2, c23)
-			x3 := pair3.InterleaveHi(pair3).ReshapeToUint32s().BitsToFloat32()
+			x3 := v3.LookupOrZero(index1).ReshapeToUint32s().BitsToFloat32()
+			c30 = w0.MulAdd(x3, c30)
+			c31 = w1.MulAdd(x3, c31)
+			c32 = w2.MulAdd(x3, c32)
+			c33 = w3.MulAdd(x3, c33)
+		}
+		{
+			w0 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[32:36]))
+			w1 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[36:40]))
+			w2 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[40:44]))
+			w3 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[44:48]))
+			x0 := v0.LookupOrZero(index2).ReshapeToUint32s().BitsToFloat32()
+			c00 = w0.MulAdd(x0, c00)
+			c01 = w1.MulAdd(x0, c01)
+			c02 = w2.MulAdd(x0, c02)
+			c03 = w3.MulAdd(x0, c03)
+			x1 := v1.LookupOrZero(index2).ReshapeToUint32s().BitsToFloat32()
+			c10 = w0.MulAdd(x1, c10)
+			c11 = w1.MulAdd(x1, c11)
+			c12 = w2.MulAdd(x1, c12)
+			c13 = w3.MulAdd(x1, c13)
+			x2 := v2.LookupOrZero(index2).ReshapeToUint32s().BitsToFloat32()
+			c20 = w0.MulAdd(x2, c20)
+			c21 = w1.MulAdd(x2, c21)
+			c22 = w2.MulAdd(x2, c22)
+			c23 = w3.MulAdd(x2, c23)
+			x3 := v3.LookupOrZero(index2).ReshapeToUint32s().BitsToFloat32()
+			c30 = w0.MulAdd(x3, c30)
+			c31 = w1.MulAdd(x3, c31)
+			c32 = w2.MulAdd(x3, c32)
+			c33 = w3.MulAdd(x3, c33)
+		}
+		{
+			w0 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[48:52]))
+			w1 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[52:56]))
+			w2 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[56:60]))
+			w3 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[60:64]))
+			x0 := v0.LookupOrZero(index3).ReshapeToUint32s().BitsToFloat32()
+			c00 = w0.MulAdd(x0, c00)
+			c01 = w1.MulAdd(x0, c01)
+			c02 = w2.MulAdd(x0, c02)
+			c03 = w3.MulAdd(x0, c03)
+			x1 := v1.LookupOrZero(index3).ReshapeToUint32s().BitsToFloat32()
+			c10 = w0.MulAdd(x1, c10)
+			c11 = w1.MulAdd(x1, c11)
+			c12 = w2.MulAdd(x1, c12)
+			c13 = w3.MulAdd(x1, c13)
+			x2 := v2.LookupOrZero(index3).ReshapeToUint32s().BitsToFloat32()
+			c20 = w0.MulAdd(x2, c20)
+			c21 = w1.MulAdd(x2, c21)
+			c22 = w2.MulAdd(x2, c22)
+			c23 = w3.MulAdd(x2, c23)
+			x3 := v3.LookupOrZero(index3).ReshapeToUint32s().BitsToFloat32()
 			c30 = w0.MulAdd(x3, c30)
 			c31 = w1.MulAdd(x3, c31)
 			c32 = w2.MulAdd(x3, c32)
@@ -107,7 +157,7 @@ func kernel4x16(a0, a1, a2, a3, weights, d0, d1, d2, d3 []float32) {
 		}
 	}
 	for ; p < k; p++ {
-		wb := (*[16]float32)(weights[p*16:])
+		wb := (*[16]float32)(weights[p*16 : p*16+16])
 		w0 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[0:4]))
 		w1 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[4:8]))
 		w2 := archsimd.LoadFloat32x4Array((*[4]float32)(wb[8:12]))

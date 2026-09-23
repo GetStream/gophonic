@@ -4,8 +4,8 @@
 package whispergemm
 
 // Scalar tiles reuse each loaded value across four rows and four columns.
-// Explicit conversions pin a separately rounded multiply and add in ascending
-// K order; Go must not fuse across an explicit float32 conversion.
+// Accumulation follows ascending K order. Go may fuse each multiply-add;
+// an explicit float32 conversion would prevent that compiler optimization.
 func mulPackedScalar(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int) {
 	for c := 0; c < n; c += 4 {
 		width := min(4, n-c)
@@ -41,25 +41,25 @@ func scalar4x4(a0, a1, a2, a3, weights, d0, d1, d2, d3 []float32) {
 	for p, x0 := range a0 {
 		w := (*[4]float32)(weights[p*panelColumns:])
 		w0, w1, w2, w3 := w[0], w[1], w[2], w[3]
-		c00 += float32(x0 * w0)
-		c01 += float32(x0 * w1)
-		c02 += float32(x0 * w2)
-		c03 += float32(x0 * w3)
+		c00 += x0 * w0
+		c01 += x0 * w1
+		c02 += x0 * w2
+		c03 += x0 * w3
 		x1 := a1[p]
-		c10 += float32(x1 * w0)
-		c11 += float32(x1 * w1)
-		c12 += float32(x1 * w2)
-		c13 += float32(x1 * w3)
+		c10 += x1 * w0
+		c11 += x1 * w1
+		c12 += x1 * w2
+		c13 += x1 * w3
 		x2 := a2[p]
-		c20 += float32(x2 * w0)
-		c21 += float32(x2 * w1)
-		c22 += float32(x2 * w2)
-		c23 += float32(x2 * w3)
+		c20 += x2 * w0
+		c21 += x2 * w1
+		c22 += x2 * w2
+		c23 += x2 * w3
 		x3 := a3[p]
-		c30 += float32(x3 * w0)
-		c31 += float32(x3 * w1)
-		c32 += float32(x3 * w2)
-		c33 += float32(x3 * w3)
+		c30 += x3 * w0
+		c31 += x3 * w1
+		c32 += x3 * w2
+		c33 += x3 * w3
 	}
 	_ = d0[3]
 	d0[0], d0[1], d0[2], d0[3] = c00, c01, c02, c03
@@ -75,10 +75,10 @@ func scalar1x4(a, weights, dst []float32) {
 	var c0, c1, c2, c3 float32
 	for p, x := range a {
 		w := (*[4]float32)(weights[p*panelColumns:])
-		c0 += float32(x * w[0])
-		c1 += float32(x * w[1])
-		c2 += float32(x * w[2])
-		c3 += float32(x * w[3])
+		c0 += x * w[0]
+		c1 += x * w[1]
+		c2 += x * w[2]
+		c3 += x * w[3]
 	}
 	if len(dst) == 4 {
 		dst[0], dst[1], dst[2], dst[3] = c0, c1, c2, c3

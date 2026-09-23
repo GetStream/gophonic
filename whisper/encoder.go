@@ -482,12 +482,6 @@ func addPositionEmbedding(dst, positions []float32) {
 	}
 }
 
-func applyGELU(values []float32) {
-	for i, x := range values {
-		values[i] = float32(0.5 * float64(x) * (1 + math.Erf(float64(x)*0.707106781186547524400844362104849039)))
-	}
-}
-
 func layerNormRow(src, dst, gamma, beta []float32) {
 	var sum float64
 	for _, x := range src {
