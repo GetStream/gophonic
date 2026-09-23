@@ -1,0 +1,119 @@
+# Runtime architecture
+
+GoFloor specializes its execution and memory layout for two known audio models.
+An offline converter extracts audited weights; Go code owns the operator
+sequence. There is no runtime graph interpreter or operator registry.
+
+```mermaid
+flowchart LR
+    A[Mono or stereo PCM] --> B[Last 8 seconds · mono 16 kHz]
+    B --> C[Whisper log-mel · 80 × 800]
+    C --> D[Smart Turn FP32]
+    C --> E[TinyMelNet INT8 + FP32]
+    D --> F[Probability + completion decision]
+    E --> F
+```
+
+`PredictFeaturesInto` starts at the log-mel tensor. WAV and Ogg Opus decoding
+belong to the CLI; applications can pass their own PCM directly.
+
+## Frontend
+
+`features.go` implements the shared frontend:
+
+1. Average stereo channels, resample when necessary, and right-align an
+   eight-second window of 128,000 samples.
+2. Normalize the waveform, then apply centered reflection padding and a Hann
+   window.
+3. Compute the 400-point power STFT with a 160-sample hop. A mixed-radix
+   `2×2×2×2×5×5` FFT produces 800 retained frames.
+4. Apply the 80-band mel filterbank, logarithm, dynamic-range floor, and output
+   normalization to obtain `[80,800]` float32 features.
+
+The transform uses float64 scratch to preserve the frontend's numerical
+behavior. TinyMelNet helpers process distinct FFT frame ranges with private
+real/imaginary arrays, then distinct mel rows. Per-row accumulation order stays
+the same as the serial implementation. A global maximum determines the final
+log-mel floor, so the output step waits for all row maxima.
+
+The resampler is a 32-tap windowed-sinc implementation with cached polyphase
+coefficients. It is separate from the 16 kHz Whisper oracle coverage; see
+[validation limits](validation.md#what-the-tests-do-not-establish).
+
+## Model graphs
+
+Smart Turn uses two convolutions, positional embeddings, four Whisper encoder
+layers, attention pooling, and a classifier. Encoder width is 384, with six
+attention heads and a 1,536-wide feed-forward layer. Tiled dot products reuse
+inputs and weights across multiple output elements. Its nonlinear fast-math
+helpers are covered by numerical accuracy tests and model oracle tolerances.
+
+TinyMelNet uses a stride-two convolution stem, three depthwise-separable
+convolution blocks, a bidirectional GRU, attention pooling, and a classifier.
+The convolution channels are 192; the recurrent sequence has 100 steps and 128
+hidden values per direction. Dynamic affine quantization preserves the ONNX
+scale, zero-point, saturation, and ties-to-even rounding rules. Integer products
+accumulate into `int32`; the graph returns to floating point where specified.
+The GRU directions use independent state and run concurrently when helpers are
+available. TinyMelNet's GELU uses the standard-library error function.
+
+Weights become immutable after loading. TinyMelNet pre-packs convolution
+weights into kernel-friendly layouts during setup. Prediction alternates
+between preallocated activation buffers, reuses quantization storage, and
+performs layout conversion into dedicated scratch.
+
+## SIMD dispatch
+
+`GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and AMD64. ARM64 also
+uses Go 1.27's 128-bit NEON operations through `simd/archsimd` for TinyMelNet
+quantization, dense and depthwise integer convolutions, mel-layout conversion,
+and selected GRU projection tiles. TinyMelNet's integer stages use scalar Go
+fallbacks on AMD64; other architectures use scalar Go kernels throughout.
+
+These are Go compiler intrinsics expressed in Go source. SIMD support is
+experimental in Go 1.27, so changing the toolchain requires rebuilding and
+checking the numerical and performance gates. The development performance
+numbers are for ARM64; they do not establish AMD64 speed.
+[Go 1.27 SIMD documentation](https://go.dev/doc/go1.27).
+
+## Concurrency and ownership
+
+The model is shared read-only. The workspace owns mutable state. Each helper
+has a fixed identity and a private completion signal. TinyMelNet helpers also
+have private FFT scratch.
+A dispatched stage has one job descriptor that stays unchanged until all
+helpers finish. Output ranges do not overlap; the caller participates in the
+same partitioned work.
+
+Persistent helpers use channels to wait for work and report completion. Idle
+workers block. The caller waits at data dependencies before republishing the
+job or reusing a buffer. This is a blocking channel protocol, with no library
+global work queue or shared atomic completion counter.
+
+TinyMelNet fuses work when the same lane can consume its own output immediately:
+convolution plus GELU, and a mel row plus its logarithm. This removes whole
+dispatch/completion rounds while retaining each lane's output range. Reduction
+and tensor dependencies still have explicit barriers.
+
+The design minimizes shared mutable ownership rather than duplicating the
+model or every tensor for each helper. Read-only inputs and disjoint output
+ranges remain in common backing arrays. Numerical reduction order is preserved
+where it affects quantization or recurrence.
+
+## Source map
+
+| Concern | Main files |
+| --- | --- |
+| PCM, resampling, FFT, mel | `features.go` |
+| Smart Turn weights and graph | `model.go`, `inference.go` |
+| Smart Turn scratch and workers | `workspace.go`, `parallel.go` |
+| TinyMelNet weights and graph | `tinymel_model.go`, `tinymel_inference.go` |
+| TinyMelNet scratch and workers | `tinymel_workspace.go` |
+| Quantization and layouts | `tinymel_quant*`, `tinymel_mel_quant*`, `tinymel_conv_pack.go` |
+| SIMD kernels and dispatch | `*_simd.go`, `*_dispatch_*.go` |
+| Recurrent math | `tinymel_gru*` |
+| Offline conversion | `tools/onnx_to_gofloor.py`, `tools/tinymel_to_gofloor.py` |
+| File decoding and JSON CLI | `cmd/gofloor/` |
+
+`internal/int8probe` is an isolated Smart Turn GEMM experiment. It is not called
+by the production inference graph.

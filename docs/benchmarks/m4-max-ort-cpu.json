@@ -1,0 +1,64 @@
+{
+  "hardware": "Apple M4 Max",
+  "platform": "macOS-26.3.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "python": "3.14.3",
+  "numpy": "2.5.3",
+  "onnxruntime": "1.30.0",
+  "checkpointSha256": "6b986a0440b30f533f0f7e473695939c347a2c95c5280eb2e090d0076b3dbbd1",
+  "featuresSha256": "1a64209c751c8d1e330639a565f60a3ce21c08ed9a2afd805dfe1dc71ee9cb35",
+  "provider": "CPUExecutionProvider",
+  "executionMode": "sequential",
+  "graphOptimization": "all",
+  "interOpThreads": 1,
+  "warmups": 10,
+  "batches": 3,
+  "iterationsPerBatch": 200,
+  "measurement": "mean milliseconds per session.run, including Python call overhead",
+  "results": [
+    {
+      "intraOpThreads": 1,
+      "batchMeansMs": [
+        2.854105205,
+        2.83477104,
+        2.87522771
+      ],
+      "medianBatchMeanMs": 2.854105205,
+      "logit": -4.104090690612793,
+      "probability": 0.016237027716454883
+    },
+    {
+      "intraOpThreads": 2,
+      "batchMeansMs": [
+        2.652452705,
+        2.62388271,
+        2.650701875
+      ],
+      "medianBatchMeanMs": 2.650701875,
+      "logit": -4.104090690612793,
+      "probability": 0.016237027716454883
+    },
+    {
+      "intraOpThreads": 4,
+      "batchMeansMs": [
+        2.656845625,
+        2.61680292,
+        2.64142375
+      ],
+      "medianBatchMeanMs": 2.64142375,
+      "logit": -4.104090690612793,
+      "probability": 0.016237027716454883
+    },
+    {
+      "intraOpThreads": 8,
+      "batchMeansMs": [
+        3.503837085,
+        3.194913335,
+        3.184908125
+      ],
+      "medianBatchMeanMs": 3.194913335,
+      "logit": -4.104090690612793,
+      "probability": 0.016237027716454883
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+GoFloor TinyMelNet benchmark record
+Date: 2026-09-23
+CPU: Apple M4 Max
+OS/architecture: macOS 26.3.1 / darwin/arm64
+Go: go1.27.0
+GOEXPERIMENT: simd
+Checkpoint SHA-256: 6b986a0440b30f533f0f7e473695939c347a2c95c5280eb2e090d0076b3dbbd1
+Feature SHA-256: 1a64209c751c8d1e330639a565f60a3ce21c08ed9a2afd805dfe1dc71ee9cb35
+Features: testdata/tone.mel.f32le, 80x800 float32 values
+Audio: testdata/tone.pcm.f32le, 128000 mono float32 samples at 16000 Hz
+Method: warm prediction, then 3 runs of 200 timed predictions per setting
+Allocation result: every recorded sample reports 0 B/op and 0 allocs/op
+Scope: loaded model and reused workspace; no file reading or model setup timed
+Values below are transcribed from the final benchmark output; units are ns/op.
+
+Model-only: BenchmarkTinyMelWorkers/features
+GOMAXPROCS=1 helpers=0: 6340191, 6299595, 6313350; median 6313350
+GOMAXPROCS=2 helpers=1: 3397260, 3370834, 3350117; median 3370834
+GOMAXPROCS=4 helpers=3: 2411311, 2415866, 2408252; median 2411311
+GOMAXPROCS=8 helpers=7: 2109213, 2083639, 2090098; median 2090098
+
+PCM-to-prediction: BenchmarkTinyMelWorkers/audio
+GOMAXPROCS=1 helpers=0: 9935253, 10004449, 9986981; median 9986981
+GOMAXPROCS=2 helpers=1: 5632491, 5638348, 5842599; median 5638348
+GOMAXPROCS=4 helpers=3: 4056014, 4079481, 4060338; median 4060338
+GOMAXPROCS=8 helpers=7: 3552861, 3540482, 3565060; median 3552861
+
+Reproduction commands (run from the repository root with a converted model):
+
+export GOFLOOR_TEST_TINYMEL_MODEL="$PWD/tinymel.gofloor"
+for procs in 1 2 4 8; do
+  GOMAXPROCS=$procs GOEXPERIMENT=simd go test . -run '^$' \
+    -bench "^BenchmarkTinyMelWorkers/(features|audio)/helpers=$((procs - 1))$" \
+    -benchtime=200x -count=3
+done
