@@ -3,6 +3,40 @@
 Measure the public prediction call with loaded weights and a reused workspace.
 Report the model, input boundary, compiler, CPU budget, and allocations together.
 
+## Whisper tiny.en CPU comparison
+
+Whisper transcription is a separate workload from the turn-detector results
+below. Use the same official `tiny.en` checkpoint, JFK 16 kHz PCM, FP32
+weights, greedy decoding, and CPU budget. Validate the transcript before
+comparing latency. The Go benchmark measures a warm `TranscribeInto` call from
+PCM to text, including full-file log-mel extraction, encoder, incremental
+decoder, and BPE. Loading, construction, first weight packing, file reading,
+and command-line JSON output are excluded.
+
+```sh
+GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic" GOMAXPROCS=8 \
+  GOEXPERIMENT=simd go test ./whisper -run '^$' \
+  -bench '^BenchmarkOfficialTinyENTranscribe$' -benchtime=10x -count=3
+```
+
+The encoder-only benchmark receives the same saved `[80,3000]` mel fixture:
+
+```sh
+GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic" GOMAXPROCS=8 \
+  GOEXPERIMENT=simd go test ./whisper -run '^$' \
+  -bench '^BenchmarkEncoder/workers8$' -benchtime=10x -count=3
+```
+
+The pinned CPU-only [whisper.cpp comparison script](../tools/benchmark_whisper_cpp.py)
+checks source commit, CMake flags, checkpoint and WAV hashes, and output text.
+Its reported `total time` includes model loading; compare warm Go inference
+with an explicitly named C++ inference estimate (`total - load`) or use a
+matched repeated in-process C++ benchmark. Report encoder and decoder stage
+timings separately. Metal, Accelerate, BLAS, and CoreML must be disabled for
+the CPU comparison. Run one benchmark process at a time; concurrent builds or
+model tests can change results substantially. Controlled medians will be
+recorded here once scalar, SIMD, and end-to-end paths finish validation.
+
 ## TinyMelNet on Apple M4 Max
 
 Recorded September 23, 2026 on macOS 26.3.1, ARM64. Go used **1.27.0** with

@@ -23,6 +23,28 @@ sessions pair a shared immutable model with a private workspace and delegate to
 the existing specialized code. Interface dispatch occurs at the prediction
 boundary; inner kernels keep concrete types and their current SIMD dispatch.
 
+Full speech-to-text uses the separate `whisper` package. Its `Transcriber`
+owns a whole-file mel workspace, encoder scratch, incremental decoder KV
+caches, a greedy token policy, and BPE tokenizer. The immutable `whisper.Model`
+is shareable across workers; each transcriber and its persistent CPU helpers
+belong to one concurrent lane. This text path is separate from `AudioSession`.
+
+```mermaid
+flowchart LR
+    P[Mono 16 kHz PCM] --> M[Whole-file log-mel]
+    M --> W[30-second mel windows]
+    W --> E[FP32 audio encoder]
+    E --> D[Incremental text decoder and KV cache]
+    D --> T[Greedy policy and BPE]
+    T --> X[Transcript]
+```
+
+The decoder borrows the encoder workspace's persistent worker executor.
+Matrix and row operations publish a generation to each helper, use atomic
+completion, and write disjoint output ranges. No worker pool is created per
+token. `internal/whispergemm` holds scalar and Go 1.27 ARM64 SIMD kernels;
+model loading and first weight packing occur outside warm inference.
+
 An external backend can reuse `WhisperFeatureWorkspace` when its model expects
 the same log-mel representation, or supply its own frontend. Its graph does not
 need to resemble either built-in model. See the
@@ -132,6 +154,9 @@ where it affects quantization or recurrence.
 | Recurrent math | `tinymel_gru*` |
 | Offline conversion | `tools/onnx_to_gophonic.py`, `tools/tinymel_to_gophonic.py` |
 | File decoding and JSON CLI | `cmd/gophonic/` |
+| Whisper tiny.en bundle, audio, encoder, decoder, tokenizer, transcription | `whisper/` |
+| Whisper scalar/SIMD GEMM, GEMV, worker executor | `internal/whispergemm/` |
+| Whisper checkpoint and oracle tools | `tools/whisper_pt_to_gophonic.py`, `tools/whisper_oracle.py` |
 
 `internal/int8probe` is an isolated Smart Turn GEMM experiment. It is not called
 by the production inference graph.

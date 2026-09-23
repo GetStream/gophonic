@@ -14,12 +14,13 @@ CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 GOEXPERIMENT=simd go test ./...
 ```
 
-Run with both converted models to include model-level parity and allocation
+Run with converted models to include model-level parity and allocation
 checks:
 
 ```sh
 export GOPHONIC_TEST_MODEL="$PWD/smart-turn-v3.2.gophonic"
 export GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic"
+export GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic"
 
 go test ./...
 GOEXPERIMENT=simd go test ./...
@@ -51,6 +52,10 @@ built with `CGO_ENABLED=0`.
 | SIMD kernels | Scalar comparisons, tails/ranges, quantization rounding and saturation |
 | Reused workspaces | Warm public prediction allocation assertions and benchmark allocation reports |
 | Built-in session adapters | Direct-call prediction parity, nil/closed lifecycle checks, warm allocations through `AudioSession` |
+| Whisper tiny.en bundle | Official checkpoint SHA-256, exact 167-tensor manifest and shapes, bundle checksum and finite FP32 validation |
+| Whisper whole-file frontend | Pinned PyTorch JFK and long-file mel samples; separate single-window full-array oracle |
+| Whisper encoder and decoder | Pinned PyTorch stem, all four encoder blocks, final encoder, prefix/next-token logits, cache reset, and JFK token sequence; scalar/SIMD worker parity |
+| Whisper full transcription | Pinned OpenAI JFK, silence, and JFK plus 35 seconds of silence transcripts; warm allocation checks |
 
 An external-package conformance test also implements `AudioSession` using only
 the standalone Whisper frontend. Its model head is a test stand-in; this proves

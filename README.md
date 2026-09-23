@@ -1,10 +1,13 @@
 # gophonic
 
-**Audio turn detection, written in Go.**
+**CPU speech inference in Go: turn detection and Whisper transcription.**
 
 `gophonic` runs audio turn detectors inside your Go process. Its built-in models
 estimate whether a speaker has finished their turn from the last eight seconds
 of audio. Other architectures can implement the same PCM session interface.
+The separate `whisper` package runs the official OpenAI Whisper `tiny.en`
+checkpoint for English speech-to-text, including its encoder, incremental
+decoder, and tokenizer.
 
 - **CPU inference in Go.** Build with `CGO_ENABLED=0`; optional Go 1.27
   `simd/archsimd` accelerates FP32 work on ARM64 and AMD64, with additional
@@ -15,6 +18,10 @@ of audio. Other architectures can implement the same PCM session interface.
   TinyMelNet INT8 graph have separate loaders and completion thresholds.
 - **An open audio interface.** Implement `AudioSession` for another turn detector
   with its own loader, preprocessing, and inference graph.
+- **Full Whisper tiny.en transcription.** An offline converter checks the
+  official checkpoint hash and exports FP32 weights. A reusable transcriber
+  handles arbitrary-length mono 16 kHz PCM with whole-file mel features,
+  previous-window context, and silence skipping.
 - **PCM in your application; WAV or Opus at the command line.** Ogg Opus decoding
   uses [`gopus`](https://github.com/thesyncim/gopus).
 
@@ -24,8 +31,44 @@ remains specialized for each model. External backends plug in through Go code;
 there is no model registry or general ONNX graph loader.
 
 [Models](docs/models.md) · [Go API](docs/api.md) ·
+[Whisper design](docs/whisper-plan.md) ·
 [Architecture](docs/architecture.md) · [Benchmarks](docs/benchmarks.md) ·
 [Validation](docs/validation.md)
+
+## Whisper transcription
+
+Convert the [official tiny.en checkpoint](https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt)
+once with Python and NumPy installed:
+
+```sh
+python3 tools/whisper_pt_to_gophonic.py tiny.en.pt tiny.en.gophonic
+CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
+./gophonic -whisper-model tiny.en.gophonic speech.wav
+```
+
+The CLI also accepts Ogg Opus. It emits `{"text":"..."}`. For Go callers,
+share a loaded `*whisper.Model` and create one `*whisper.Transcriber` per
+concurrent lane:
+
+```go
+model, err := whisper.Load("tiny.en.gophonic")
+if err != nil { return err }
+worker, err := whisper.NewTranscriber(model)
+if err != nil { return err }
+defer worker.Close()
+
+text, err := worker.TranscribeInto(mono16kPCM, make([]byte, 0, 4096))
+if err != nil { return err }
+fmt.Println(string(text))
+```
+
+`TranscribeInto` uses whole-file mel normalization, greedy decoding at
+temperature zero, timestamp token seeking, and the pinned no-speech rule.
+It does not implement temperature fallback, beam search, multilingual models,
+or word timestamps. Repeated calls with the same audio and sufficient output
+capacity perform no heap allocations after warmup. The model bundle is not
+checked in; the converter verifies the official checkpoint SHA-256 before
+conversion.
 
 ## Quick start
 
