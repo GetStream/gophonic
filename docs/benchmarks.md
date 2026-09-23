@@ -34,8 +34,38 @@ with an explicitly named C++ inference estimate (`total - load`) or use a
 matched repeated in-process C++ benchmark. Report encoder and decoder stage
 timings separately. Metal, Accelerate, BLAS, and CoreML must be disabled for
 the CPU comparison. Run one benchmark process at a time; concurrent builds or
-model tests can change results substantially. Controlled medians will be
-recorded here once scalar, SIMD, and end-to-end paths finish validation.
+model tests can change results substantially.
+
+### September 23, 2026 M4 Max reference sweep
+
+The [raw Go and C records](benchmarks/whisper/) use Go 1.27.0 with
+`GOEXPERIMENT=simd`, the official tiny.en checkpoint, and CPU-only
+whisper.cpp at commit `a664346ea5c6dddff3e61a2b7b32dd4514613f50`.
+Each Go value is the median of three five-iteration encoder benchmark means;
+each C value is the median of three independent CLI runs. The C warm estimate
+subtracts its measured model-load time from total time. All Go encoder runs
+reported 0 B/op and 0 allocs/op.
+
+| Execution slots | Go encoder, before the September kernel changes | C encoder stage | C total minus load |
+| ---: | ---: | ---: | ---: |
+| 4 | 319.88 ms | 339.78 ms | 388.15 ms |
+| 8 | 211.29 ms | 178.69 ms | 219.85 ms |
+| 12 | 202.94 ms | 129.38 ms | 170.31 ms |
+| 16 | 221.63 ms | 426.47 ms | 547.60 ms |
+
+The encoder columns are diagnostic, not identical stage boundaries:
+whisper.cpp charges some cross-attention key/value preparation to its encoder,
+while Go charges that work to `BeginDecode`. The full PCM-to-text result is the
+appropriate end-to-end comparison. The 16-thread C slowdown also illustrates
+why one worker count cannot represent either runtime.
+
+The retained scalar and SIMD changes have isolated before/after records in
+[scalar-ab.txt](benchmarks/whisper/scalar-ab.txt),
+[simd-gemm-ab.txt](benchmarks/whisper/simd-gemm-ab.txt), and
+[gelu-ab.txt](benchmarks/whisper/gelu-ab.txt). These are paired kernel or
+encoder experiments, not an additive estimate of end-to-end speedup. An
+end-to-end C win is not yet established; repeat both runtimes in a quiet,
+matched window and compare complete warm inference before claiming one.
 
 ## TinyMelNet on Apple M4 Max
 

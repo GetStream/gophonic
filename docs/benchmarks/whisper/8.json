@@ -1,0 +1,72 @@
+{
+  "whisper_cpp_commit": "a664346ea5c6dddff3e61a2b7b32dd4514613f50",
+  "cmake_flags": {
+    "GGML_METAL": "OFF",
+    "GGML_ACCELERATE": "OFF",
+    "GGML_BLAS": "OFF",
+    "WHISPER_COREML": "OFF"
+  },
+  "model_sha256": "b08bc9ce5ce0d513572a2abc94a8099866a411503328a0a8e713a34fe4a12c2a",
+  "wav_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "command": [
+    "/private/tmp/gophonic-whisper.cpp/build-cpu/bin/whisper-cli",
+    "-m",
+    "/private/tmp/gophonic-ggml/ggml-model-f32.bin",
+    "-f",
+    "/private/tmp/gophonic-whisper.cpp/samples/jfk.wav",
+    "-l",
+    "en",
+    "-t",
+    "8",
+    "-bs",
+    "1",
+    "-bo",
+    "1",
+    "-nf",
+    "-nt",
+    "-ng"
+  ],
+  "transcript": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+  "runs_ms": [
+    {
+      "load": 69.0,
+      "mel": 3.35,
+      "sample": 8.13,
+      "encode": 178.69,
+      "decode": 25.84,
+      "batchd": 2.01,
+      "prompt": 0.0,
+      "total": 289.75
+    },
+    {
+      "load": 70.43,
+      "mel": 2.63,
+      "sample": 8.25,
+      "encode": 178.88,
+      "decode": 25.58,
+      "batchd": 1.93,
+      "prompt": 0.0,
+      "total": 290.28
+    },
+    {
+      "load": 73.78,
+      "mel": 2.72,
+      "sample": 8.22,
+      "encode": 178.01,
+      "decode": 25.34,
+      "batchd": 1.86,
+      "prompt": 0.0,
+      "total": 292.53
+    }
+  ],
+  "median_ms": {
+    "load": 70.43,
+    "mel": 2.72,
+    "sample": 8.22,
+    "encode": 178.69,
+    "decode": 25.58,
+    "batchd": 1.93,
+    "prompt": 0.0,
+    "total": 290.28
+  }
+}
