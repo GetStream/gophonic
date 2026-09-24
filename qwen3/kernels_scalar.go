@@ -93,3 +93,11 @@ func softmaxScaled(row []float32, scale float32) {
 	}
 	scaleVector(row, 1/sum)
 }
+
+// butterflies replaces (a, b) with (a+b, a-b) elementwise.
+func butterflies(a, b []float32) {
+	b = b[:len(a)]
+	for i := range a {
+		a[i], b[i] = a[i]+b[i], a[i]-b[i]
+	}
+}

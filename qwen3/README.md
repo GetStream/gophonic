@@ -80,8 +80,18 @@ scale, 12.9 GiB); activations entering each projection are rounded to FP16
 after an exact per-row power-of-two scale, and products accumulate in FP32.
 Against the official BF16 PyTorch hidden state for `hello` this reaches
 cosine 0.99991 (llama.cpp Q8_0: 0.99929), and the pinned CLM ranking matches
-the official probabilities within 7.1e-5. `Options{Weights: "int8"}`
-(6.5 GiB) reaches 0.99737.
+the official probabilities within 7.1e-5.
+
+`Options{Weights: "int8"}` is a fast mode on the int8 matrix units. Each
+projection's input space is rotated with a fixed randomized Hadamard
+transform (applied to weight rows at load and to activation rows at run
+time, so W·x is unchanged before rounding); weights are stored as per-row
+int8 (6.5 GiB) and activations are quantized to int8 per row. Integer
+products are exact, and SME and portable kernels give identical results.
+Against official BF16 it reaches cosine 0.99866 on `hello` and the pinned
+CLM probabilities within 2.2e-4, and the 31 `Choose` probes give the same
+answers as the exact mode. It runs a 12-token text in 49 ms, one token in
+37 ms, and 16 short texts in 530 ms.
 
 ## Performance
 

@@ -13,6 +13,7 @@ type opKind uint8
 
 const (
 	opAddNorm opKind = iota
+	opRotate
 	opRowScale
 	opPack
 	opProject
@@ -42,9 +43,10 @@ type layerOp struct {
 
 	residual, normWeight []float32 // opAddNorm
 
-	src      []float32 // opPack
+	src      []float32 // opRotate, opRowScale, opPack
 	cols     int
-	panels   int // opProject
+	rot      *rotation // input rotation for int8 projections, else nil
+	panels   int       // opProject
 	proj     [3]projection
 	panelEnd [3]int
 }
@@ -54,6 +56,8 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 	switch o.kind {
 	case opAddNorm:
 		o.addNorm(start, end)
+	case opRotate:
+		o.rotate(start, end)
 	case opRowScale:
 		o.rowScale(start, end)
 	case opPack:
@@ -83,10 +87,24 @@ func (o *layerOp) addNorm(start, end int) {
 	}
 }
 
+// rotate writes each input row, rotated for int8 projections, to ws.rotated.
+// o.src still points at the unrotated input while this stage runs.
+func (o *layerOp) rotate(start, end int) {
+	for r := start; r < end; r++ {
+		dst := o.ws.rotated[r*o.cols : (r+1)*o.cols]
+		copy(dst, o.src[r*o.cols:(r+1)*o.cols])
+		o.rot.apply(dst)
+	}
+}
+
 func (o *layerOp) rowScale(start, end int) {
 	for r := start; r < end; r++ {
-		tile := o.ws.tiles[r/q8gemm.ActivationRows]
-		tile.SetRowScale(r%q8gemm.ActivationRows, q8gemm.MaxAbs(o.src[r*o.cols:(r+1)*o.cols]))
+		m := q8gemm.MaxAbs(o.src[r*o.cols : (r+1)*o.cols])
+		if o.rot != nil {
+			o.ws.tilesI8[r/q8gemm.ActivationRows].SetRowScale(r%q8gemm.ActivationRows, m)
+		} else {
+			o.ws.tiles[r/q8gemm.ActivationRows].SetRowScale(r%q8gemm.ActivationRows, m)
+		}
 	}
 }
 
@@ -96,7 +114,13 @@ func (o *layerOp) pack(start, end int) {
 		tile, chunk := item/chunks, item%chunks
 		src := o.src[tile*q8gemm.ActivationRows*o.cols:]
 		k0 := chunk * packChunkCols
-		if err := o.ws.tiles[tile].PackRange(src, o.cols, k0, min(o.cols, k0+packChunkCols)); err != nil {
+		var err error
+		if o.rot != nil {
+			err = o.ws.tilesI8[tile].PackRange(src, o.cols, k0, min(o.cols, k0+packChunkCols))
+		} else {
+			err = o.ws.tiles[tile].PackRange(src, o.cols, k0, min(o.cols, k0+packChunkCols))
+		}
+		if err != nil {
 			panic("qwen3: activation pack: " + err.Error())
 		}
 	}
@@ -119,10 +143,16 @@ func (o *layerOp) project(worker, start, end int) {
 		// Stop at the end of this projection or of the range.
 		stop := min(o.panelEnd[m], end)
 		p := o.proj[m]
-		_, n := p.w.Dims()
+		_, n := p.l.dims()
 		for tile := range tiles {
 			dst := p.dst[tile*q8gemm.ActivationRows*n:]
-			if err := q8gemm.MulPanels(dst, n, o.ws.tiles[tile], p.w, panel-first, stop-first, o.ws.scratch[worker]); err != nil {
+			var err error
+			if p.l.i8 != nil {
+				err = q8gemm.MulPanelsI8(dst, n, o.ws.tilesI8[tile], p.l.i8, panel-first, stop-first)
+			} else {
+				err = q8gemm.MulPanels(dst, n, o.ws.tiles[tile], p.l.f16, panel-first, stop-first, o.ws.scratch[worker])
+			}
+			if err != nil {
 				panic("qwen3: packed projection: " + err.Error())
 			}
 		}

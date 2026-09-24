@@ -183,3 +183,17 @@ func softmaxScaled(row []float32, scale float32) {
 	}
 	scaleVector(row, 1/sum)
 }
+
+// butterflies replaces (a, b) with (a+b, a-b) elementwise.
+func butterflies(a, b []float32) {
+	b = b[:len(a)]
+	i := 0
+	for ; i+4 <= len(a); i += 4 {
+		x, y := load4(a, i), load4(b, i)
+		store4(x.Add(y), a, i)
+		store4(x.Sub(y), b, i)
+	}
+	for ; i < len(a); i++ {
+		a[i], b[i] = a[i]+b[i], a[i]-b[i]
+	}
+}

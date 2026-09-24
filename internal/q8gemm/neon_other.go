@@ -8,3 +8,5 @@ package q8gemm
 func packRowPairs([]uint16, []float32, int, float32) int { return 0 }
 
 func maxAbsPrefix([]float32) (float32, int) { return 0, 0 }
+
+func packRowQuads([]int8, []float32, int, float32) int { return 0 }

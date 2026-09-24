@@ -142,7 +142,9 @@ type Workspace struct {
 	capacity                        int
 	owner                           *Evaluator
 	tiles                           []*q8gemm.Workspace
-	scratch                         []*q8gemm.Scratch // per participant; nil entries with SME
+	tilesI8                         []*q8gemm.WorkspaceI8 // int8 weights only
+	rotated                         []float32             // rotated inputs, int8 weights only
+	scratch                         []*q8gemm.Scratch     // per participant; nil entries with SME
 	pool                            *workerPool
 	op                              layerOp
 	oneSeq                          [1][]int
@@ -283,7 +285,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 			residual = nil
 		}
 		ws.addNorm(residual, l.attnNorm)
-		ws.project(ws.norm, c.hidden, projection{l.q, ws.q}, projection{l.k, ws.keys}, projection{l.v, ws.values})
+		ws.project(ws.norm, c.hidden, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
 		if kv := ws.prefix; kv != nil {
 			// Store this layer's new keys and values after the kept prefix;
@@ -301,11 +303,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 			// output projection and MLP run on those rows alone.
 			ws.keepLastRows(seqs, c)
 		}
-		ws.project(ws.ctx, c.heads*c.headDim, projection{l.o, ws.attn})
+		ws.project(ws.ctx, c.heads*c.headDim, projection{&l.o, ws.attn})
 		ws.addNorm(ws.attn, l.mlpNorm)
-		ws.project(ws.norm, c.hidden, projection{l.gate, ws.gate}, projection{l.up, ws.up})
+		ws.project(ws.norm, c.hidden, projection{&l.gate, ws.gate}, projection{&l.up, ws.up})
 		ws.run(opSwiGLU, op.rows*swigluChunks(c.intermediate), 4)
-		ws.project(ws.gate, c.intermediate, projection{l.down, ws.attn})
+		ws.project(ws.gate, c.intermediate, projection{&l.down, ws.attn})
 	}
 	op.layer = nil
 	for s := range seqs {
@@ -382,12 +384,24 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 		ws.rowPos = make([]int32, capN)
 		ws.rowLen = make([]int32, capN)
 		tiles := (capN + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
-		for len(ws.tiles) < tiles {
-			tile, err := q8gemm.NewWorkspace(max(c.hidden, qdim, c.intermediate))
-			if err != nil {
-				return fmt.Errorf("qwen3: activation tile: %w", err)
+		widest := max(c.hidden, qdim, c.intermediate)
+		if ws.owner.m.format == WeightsInt8 {
+			ws.rotated = make([]float32, capN*widest)
+			for len(ws.tilesI8) < tiles {
+				tile, err := q8gemm.NewWorkspaceI8(widest)
+				if err != nil {
+					return fmt.Errorf("qwen3: activation tile: %w", err)
+				}
+				ws.tilesI8 = append(ws.tilesI8, tile)
 			}
-			ws.tiles = append(ws.tiles, tile)
+		} else {
+			for len(ws.tiles) < tiles {
+				tile, err := q8gemm.NewWorkspace(widest)
+				if err != nil {
+					return fmt.Errorf("qwen3: activation tile: %w", err)
+				}
+				ws.tiles = append(ws.tiles, tile)
+			}
 		}
 		ws.capacity = capN
 	}
@@ -457,7 +471,7 @@ func (ws *Workspace) addNorm(residual, weight []float32) {
 }
 
 type projection struct {
-	w   *q8gemm.Weights
+	l   *linear
 	dst []float32
 }
 
@@ -471,20 +485,34 @@ func (ws *Workspace) project(src []float32, cols int, projs ...projection) {
 	op.panels = 0
 	for i, p := range projs {
 		op.proj[i] = p
-		op.panelEnd[i] = op.panels + p.w.Panels()
+		op.panelEnd[i] = op.panels + p.l.panels()
 		op.panels = op.panelEnd[i]
 	}
+	// Projections sharing an input share a format and rotation.
+	op.rot = projs[0].l.rot
 	tiles := (rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
 	for t := range tiles {
-		if err := ws.tiles[t].Prepare(min(q8gemm.ActivationRows, rows-t*q8gemm.ActivationRows), cols); err != nil {
+		n := min(q8gemm.ActivationRows, rows-t*q8gemm.ActivationRows)
+		var err error
+		if op.rot != nil {
+			err = ws.tilesI8[t].Prepare(n, cols)
+		} else {
+			err = ws.tiles[t].Prepare(n, cols)
+		}
+		if err != nil {
 			panic("qwen3: activation tile: " + err.Error())
 		}
 	}
 	op.src, op.cols = src, cols
+	if op.rot != nil {
+		// Rotate each input row into ws.rotated; the tiles quantize that.
+		ws.run(opRotate, rows, 2)
+		op.src = ws.rotated
+	}
 	ws.run(opRowScale, rows, 2)
 	ws.run(opPack, tiles*packChunks(cols), 1)
 	ws.run(opProject, op.panels, 1)
-	op.src = nil
+	op.src, op.rot = nil, nil
 	for i := range op.proj {
 		op.proj[i] = projection{}
 	}
