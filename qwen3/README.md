@@ -60,7 +60,7 @@ agrees with `Question` on classification probes but not on turn detection;
 
 `ChooseBatch` answers many inputs in shared forward passes. On an M4 Max, a
 new input costs about 140 ms alone, 94 ms per input in a batch of 16, and
-58 ms per input in a batch with `Weights: "int8"`.
+47 ms per input in a batch with `Weights: "int8"`.
 
 The programs in [`../examples/qwen3`](../examples/qwen3) are each one short
 `main.go`: `turn` (has a voice-agent user finished speaking?), `sentiment`,
@@ -109,8 +109,8 @@ int8 (6.5 GiB) and activations are quantized to int8 per row. Integer
 products are exact, and SME and portable kernels give identical results.
 Against official BF16 it reaches cosine 0.99866 on `hello` and the pinned
 CLM probabilities within 2.2e-4, and the 31 `Choose` probes give the same
-answers as the exact mode. It runs a 12-token text in 49 ms, one token in
-37 ms, and 16 short texts in 530 ms.
+answers as the exact mode. It runs a 12-token text in 43 ms, one token in
+28 ms, and 16 short texts in 415 ms.
 
 ## Performance
 

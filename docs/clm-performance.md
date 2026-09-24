@@ -10,14 +10,14 @@ none` and its best thread count (8).
 
 | Workload | gophonic before | llama.cpp Q8_0, CPU | exact (default) | int8 fast mode |
 | --- | ---: | ---: | ---: | ---: |
-| 1 token | 338 ms | 31.8 ms | 68 ms | **37 ms** |
-| 12 tokens (one text) | 413 ms | 90 ms | 69–73 ms | **49 ms** |
-| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | 317 ms (70) | **200 ms (70)** |
-| 2048 tokens (one text) | minutes | — | 8.19 s | — |
-| New 30-token turn on an 1800-token state | minutes | — | **203 ms** | — |
-| 16 texts × ~12 tokens | ≈6.6 s | — | 850 ms | **530 ms** |
-| `Question.Choose`, one new input | — | — | 140 ms | — |
-| `Question.ChooseBatch`, per input (16) | — | — | 94 ms | **58 ms** |
+| 1 token | 338 ms | 31.8 ms | 51 ms | **28 ms** |
+| 12 tokens (one text) | 413 ms | 90 ms | 66 ms | **43 ms** |
+| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | 304 ms (70) | **150 ms (70)** |
+| 2048 tokens (one text) | minutes | — | 8.19 s | **4.89 s** |
+| New 30-token turn on an 1800-token state | minutes | — | **155 ms** | — |
+| 16 texts × ~12 tokens | ≈6.6 s | — | 841 ms | **415 ms** |
+| `Question.Choose`, one new input | — | — | 128 ms | — |
+| `Question.ChooseBatch`, per input (16) | — | — | 94 ms | **47 ms** |
 | Rank 16 candidates, cached | 6.6 s | — | **1.7 ms** | — |
 | Cosine vs official BF16 (`hello`) | 0.99738 | 0.99929 | **0.99991** | 0.99866 |
 | CLM probability error vs official | 1.0e-3 | — | **7.1e-5** | 2.2e-4 |
@@ -25,7 +25,11 @@ none` and its best thread count (8).
 
 The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
 with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
-int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms for FP16). Its
+int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms for FP16). With
+four or more tiles, four SME workers and the remaining performance cores
+split each projection from opposite ends: SME claims 64-column panels, NEON
+claims 16-column strips with `SDOT`, and both produce bit-identical results.
+Its
 answers on the 31 `Question` probes match the exact mode. GPTQ-rounded
 weights raise its fidelity further in an offline study (cosine 0.99961);
 that conversion is not yet part of the loader.

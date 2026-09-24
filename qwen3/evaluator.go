@@ -538,8 +538,26 @@ func (ws *Workspace) run(kind opKind, items, grain int) {
 		ws.op.ApplyRows(0, 0, items)
 		return
 	}
-	ws.pool.run(&ws.op, items, grain)
+	// Ordinary stages use at most maxSMEWorkers participants: waiting on
+	// more costs more at each barrier than their extra throughput gains.
+	ws.pool.runN(&ws.op, items, grain, maxSMEWorkers)
 }
+
+// runEach runs the current op kind once on every participant.
+func (ws *Workspace) runEach(kind opKind, n int) {
+	ws.op.kind = kind
+	if ws.pool == nil {
+		ws.op.ApplyRows(0, 0, 1)
+		return
+	}
+	ws.pool.runEach(&ws.op, n)
+}
+
+const (
+	maxSMEWorkers = 8 // streaming SME saturates both P-cluster units near here
+	coexecSME     = 4 // SME workers when NEON strips co-execute
+	coexecTiles   = 4 // minimum 16-row tiles for co-execution to pay
+)
 
 // addNorm computes h += residual (when residual is non-nil) and
 // norm = RMSNorm(h) * weight for every row. With next set, the same row pass
@@ -610,7 +628,21 @@ func (ws *Workspace) project(src []float32, cols int, prepared bool, projs ...pr
 		}
 	}
 	ws.run(opPack, tiles*packChunks(cols), 1)
-	ws.run(opProject, op.panels, 1)
+	// SME saturates near eight streaming threads. With int8 weights and at
+	// least four tiles, four SME workers plus NEON strips on the remaining
+	// cores are faster; with fewer tiles NEON only adds contention.
+	size := ws.pool.size()
+	op.coexec = op.rot != nil && tiles >= coexecTiles && size > coexecSME
+	op.smeWorkers = min(size, maxSMEWorkers)
+	if op.coexec {
+		op.smeWorkers = coexecSME
+	}
+	op.claims.Store(uint64(op.panels*stripsPerPanel)<<32 | 0)
+	participants := op.smeWorkers
+	if op.coexec {
+		participants = size
+	}
+	ws.runEach(opProject, participants)
 	op.src, op.rot = nil, nil
 	for i := range op.proj {
 		op.proj[i] = projection{}

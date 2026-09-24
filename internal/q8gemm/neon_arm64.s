@@ -60,6 +60,129 @@ TEXT ·packQuadsNEON(SB), NOSPLIT, $0-28
 	WORD	$0x17ffffea	// b 0x8
 	RET
 
+// func stripI8NEON(w *int8, quads int, act *int8, dst *float32, strideBytes, rows int, colScales, rowScales *float32)
+TEXT ·stripI8NEON(SB), NOSPLIT, $0-64
+	MOVD	w+0(FP), R0
+	MOVD	quads+8(FP), R1
+	MOVD	act+16(FP), R2
+	MOVD	dst+24(FP), R3
+	MOVD	strideBytes+32(FP), R4
+	MOVD	rows+40(FP), R5
+	MOVD	colScales+48(FP), R6
+	MOVD	rowScales+56(FP), R7
+	WORD	$0x4f000410	// movi.4s v16, #0x0
+	WORD	$0x4f000411	// movi.4s v17, #0x0
+	WORD	$0x4f000412	// movi.4s v18, #0x0
+	WORD	$0x4f000413	// movi.4s v19, #0x0
+	WORD	$0x4f000414	// movi.4s v20, #0x0
+	WORD	$0x4f000415	// movi.4s v21, #0x0
+	WORD	$0x4f000416	// movi.4s v22, #0x0
+	WORD	$0x4f000417	// movi.4s v23, #0x0
+	WORD	$0x4f000418	// movi.4s v24, #0x0
+	WORD	$0x4f000419	// movi.4s v25, #0x0
+	WORD	$0x4f00041a	// movi.4s v26, #0x0
+	WORD	$0x4f00041b	// movi.4s v27, #0x0
+	WORD	$0x4f00041c	// movi.4s v28, #0x0
+	WORD	$0x4f00041d	// movi.4s v29, #0x0
+	WORD	$0x4f00041e	// movi.4s v30, #0x0
+	WORD	$0x4f00041f	// movi.4s v31, #0x0
+	WORD	$0xd2802008	// mov x8, #0x100 ; =256
+	WORD	$0xd2800809	// mov x9, #0x40 ; =64
+	WORD	$0xb40002a1	// cbz x1, 0x9c
+	WORD	$0x4cc8a000	// ld1.16b { v0, v1 }, [x0], x8
+	WORD	$0x4cc9a042	// ld1.16b { v2, v3 }, [x2], x9
+	WORD	$0x4f82e010	// sdot v16, v0, v2[0]
+	WORD	$0x4f82e031	// sdot v17, v1, v2[0]
+	WORD	$0x4fa2e012	// sdot v18, v0, v2[1]
+	WORD	$0x4fa2e033	// sdot v19, v1, v2[1]
+	WORD	$0x4f82e814	// sdot v20, v0, v2[2]
+	WORD	$0x4f82e835	// sdot v21, v1, v2[2]
+	WORD	$0x4fa2e816	// sdot v22, v0, v2[3]
+	WORD	$0x4fa2e837	// sdot v23, v1, v2[3]
+	WORD	$0x4f83e018	// sdot v24, v0, v3[0]
+	WORD	$0x4f83e039	// sdot v25, v1, v3[0]
+	WORD	$0x4fa3e01a	// sdot v26, v0, v3[1]
+	WORD	$0x4fa3e03b	// sdot v27, v1, v3[1]
+	WORD	$0x4f83e81c	// sdot v28, v0, v3[2]
+	WORD	$0x4f83e83d	// sdot v29, v1, v3[2]
+	WORD	$0x4fa3e81e	// sdot v30, v0, v3[3]
+	WORD	$0x4fa3e83f	// sdot v31, v1, v3[3]
+	WORD	$0xd1000421	// sub x1, x1, #0x1
+	WORD	$0x17ffffec	// b 0x48
+	WORD	$0x4c40a8c4	// ld1.4s { v4, v5 }, [x6]
+	WORD	$0x4c40a8e6	// ld1.4s { v6, v7 }, [x7]
+	WORD	$0x4e21da10	// scvtf.4s v16, v16
+	WORD	$0x4e21da31	// scvtf.4s v17, v17
+	WORD	$0x6e24de10	// fmul.4s v16, v16, v4
+	WORD	$0x6e25de31	// fmul.4s v17, v17, v5
+	WORD	$0x4f869210	// fmul.4s v16, v16, v6[0]
+	WORD	$0x4f869231	// fmul.4s v17, v17, v6[0]
+	WORD	$0x4c84a870	// st1.4s { v16, v17 }, [x3], x4
+	WORD	$0xf10004bf	// cmp x5, #0x1
+	WORD	$0x540007cd	// b.le 0x1bc
+	WORD	$0x4e21da52	// scvtf.4s v18, v18
+	WORD	$0x4e21da73	// scvtf.4s v19, v19
+	WORD	$0x6e24de52	// fmul.4s v18, v18, v4
+	WORD	$0x6e25de73	// fmul.4s v19, v19, v5
+	WORD	$0x4fa69252	// fmul.4s v18, v18, v6[1]
+	WORD	$0x4fa69273	// fmul.4s v19, v19, v6[1]
+	WORD	$0x4c84a872	// st1.4s { v18, v19 }, [x3], x4
+	WORD	$0xf10008bf	// cmp x5, #0x2
+	WORD	$0x540006ad	// b.le 0x1bc
+	WORD	$0x4e21da94	// scvtf.4s v20, v20
+	WORD	$0x4e21dab5	// scvtf.4s v21, v21
+	WORD	$0x6e24de94	// fmul.4s v20, v20, v4
+	WORD	$0x6e25deb5	// fmul.4s v21, v21, v5
+	WORD	$0x4f869a94	// fmul.4s v20, v20, v6[2]
+	WORD	$0x4f869ab5	// fmul.4s v21, v21, v6[2]
+	WORD	$0x4c84a874	// st1.4s { v20, v21 }, [x3], x4
+	WORD	$0xf1000cbf	// cmp x5, #0x3
+	WORD	$0x5400058d	// b.le 0x1bc
+	WORD	$0x4e21dad6	// scvtf.4s v22, v22
+	WORD	$0x4e21daf7	// scvtf.4s v23, v23
+	WORD	$0x6e24ded6	// fmul.4s v22, v22, v4
+	WORD	$0x6e25def7	// fmul.4s v23, v23, v5
+	WORD	$0x4fa69ad6	// fmul.4s v22, v22, v6[3]
+	WORD	$0x4fa69af7	// fmul.4s v23, v23, v6[3]
+	WORD	$0x4c84a876	// st1.4s { v22, v23 }, [x3], x4
+	WORD	$0xf10010bf	// cmp x5, #0x4
+	WORD	$0x5400046d	// b.le 0x1bc
+	WORD	$0x4e21db18	// scvtf.4s v24, v24
+	WORD	$0x4e21db39	// scvtf.4s v25, v25
+	WORD	$0x6e24df18	// fmul.4s v24, v24, v4
+	WORD	$0x6e25df39	// fmul.4s v25, v25, v5
+	WORD	$0x4f879318	// fmul.4s v24, v24, v7[0]
+	WORD	$0x4f879339	// fmul.4s v25, v25, v7[0]
+	WORD	$0x4c84a878	// st1.4s { v24, v25 }, [x3], x4
+	WORD	$0xf10014bf	// cmp x5, #0x5
+	WORD	$0x5400034d	// b.le 0x1bc
+	WORD	$0x4e21db5a	// scvtf.4s v26, v26
+	WORD	$0x4e21db7b	// scvtf.4s v27, v27
+	WORD	$0x6e24df5a	// fmul.4s v26, v26, v4
+	WORD	$0x6e25df7b	// fmul.4s v27, v27, v5
+	WORD	$0x4fa7935a	// fmul.4s v26, v26, v7[1]
+	WORD	$0x4fa7937b	// fmul.4s v27, v27, v7[1]
+	WORD	$0x4c84a87a	// st1.4s { v26, v27 }, [x3], x4
+	WORD	$0xf10018bf	// cmp x5, #0x6
+	WORD	$0x5400022d	// b.le 0x1bc
+	WORD	$0x4e21db9c	// scvtf.4s v28, v28
+	WORD	$0x4e21dbbd	// scvtf.4s v29, v29
+	WORD	$0x6e24df9c	// fmul.4s v28, v28, v4
+	WORD	$0x6e25dfbd	// fmul.4s v29, v29, v5
+	WORD	$0x4f879b9c	// fmul.4s v28, v28, v7[2]
+	WORD	$0x4f879bbd	// fmul.4s v29, v29, v7[2]
+	WORD	$0x4c84a87c	// st1.4s { v28, v29 }, [x3], x4
+	WORD	$0xf1001cbf	// cmp x5, #0x7
+	WORD	$0x5400010d	// b.le 0x1bc
+	WORD	$0x4e21dbde	// scvtf.4s v30, v30
+	WORD	$0x4e21dbff	// scvtf.4s v31, v31
+	WORD	$0x6e24dfde	// fmul.4s v30, v30, v4
+	WORD	$0x6e25dfff	// fmul.4s v31, v31, v5
+	WORD	$0x4fa79bde	// fmul.4s v30, v30, v7[3]
+	WORD	$0x4fa79bff	// fmul.4s v31, v31, v7[3]
+	WORD	$0x4c84a87e	// st1.4s { v30, v31 }, [x3], x4
+	RET
+
 // func maxAbsNEON(src *float32, n int) float32
 TEXT ·maxAbsNEON(SB), NOSPLIT, $0-20
 	MOVD	src+0(FP), R0
