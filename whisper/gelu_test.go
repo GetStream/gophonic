@@ -27,6 +27,10 @@ func TestGELUAccuracy(t *testing.T) {
 	for range 65536 {
 		inputs = append(inputs, math.Float32frombits(rng.Uint32()))
 	}
+	// Signaling NaNs can make an unchecked SIMD table index escape the table.
+	for _, bits := range []uint32{0x7f800001, 0xff800001, 0x7f9fffff, 0xff9fffff} {
+		inputs = append(inputs, math.Float32frombits(bits))
+	}
 	for _, kernel := range []struct {
 		name string
 		fn   func([]float32)

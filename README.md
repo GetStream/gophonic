@@ -15,6 +15,8 @@ transcripts.
   a speaker has finished talking.
 - **Built for servers:** a loaded model is shared and immutable. Each
   concurrent lane reuses its own scratch, and warm calls allocate nothing.
+- **CLM action ranking:** pure-Go CPU projection heads score state/action
+  embeddings; an optional local Qwen3-8B adapter is in `examples/clm-qwen`.
 - **Pure Go toolchain:** builds with `CGO_ENABLED=0`. Hand-written ARM64
   kernels are plain Go assembly, and every accelerated path has a portable
   fallback.
