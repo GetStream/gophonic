@@ -20,7 +20,8 @@ const (
 	attentionBlock = 128
 )
 
-// attentionItem is one KV-head group and one query block of one sequence.
+// attentionItem is one query block of one sequence, for one KV-head group
+// (no prefix) or one query head (prefix modes, where group holds the head).
 // Rows start at batch row start; past earlier keys come from a PrefixKV.
 type attentionItem struct {
 	start, q0, q1, group, past int32
@@ -37,7 +38,21 @@ type PrefixKV struct {
 	tokens       []int
 	keys, values [][]float32 // per layer, [capacity][kvDim]
 	capacity     int
+	packs        []prefixPack // per layer: the same keys and values packed for attention
 }
+
+// prefixPack keeps one layer's stored keys and values packed per KV group,
+// so attention over a long prefix packs only tokens added since the last
+// call. Keys are packed transposed (positions are output columns, which can
+// be appended); values are packed in chunks of prefixChunk positions.
+type prefixPack struct {
+	keysT  []*whispergemm.PackedB   // per group: K=headDim, N=packed positions
+	values [][]*whispergemm.PackedB // per group, per chunk: K≤prefixChunk positions, N=headDim
+	n      []int                    // per group: positions packed
+}
+
+// prefixChunk is the number of positions per packed value chunk.
+const prefixChunk = 256
 
 // NewPrefixKV allocates storage for up to capacity tokens:
 // 8 bytes × layers × KV width per token (288 KiB for Qwen3-8B).
@@ -106,7 +121,7 @@ type attentionScratch struct {
 	keysT, values *whispergemm.PackedB
 	scores        []float32
 	gemm          []float32 // whispergemm.MulScratch scratch
-	keys, vals    []float32 // gathered shared-prefix and own rows, [positions][headDim]
+	tmp           []float32 // one P·V chunk product, [attentionBlock][headDim]
 }
 
 // Evaluator computes Qwen3 last-token hidden states a layer at a time. All
@@ -155,6 +170,7 @@ type Workspace struct {
 	attnScratch                     []attentionScratch // per participant
 	prefix                          *PrefixKV          // set by HiddenLastExtendInto and HiddenLastSharedInto
 	shared                          bool               // prefix is read-only and shared by every sequence
+	attnPerHead                     bool               // prefix attention items are per query head, not per group
 	past                            int
 	ropeCos, ropeSin                []float32
 	ropePositions                   int // positions whose RoPE values are filled
@@ -266,6 +282,8 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
 		return err
 	}
+	ws.pool.hold()
+	defer ws.pool.release()
 	row := 0
 	ws.attnItems = ws.attnItems[:0]
 	for _, ids := range seqs {
@@ -292,6 +310,24 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		}
 	}
 	ws.prepareRoPE(c, ws.past+longest)
+	// With a prefix and few items (one long prefix, few new rows), split
+	// items per query head so every worker gets work; with many items the
+	// per-group form shares each group's packed rows across its heads.
+	ws.attnPerHead = false
+	if ws.prefix != nil && len(ws.attnItems) < 4*ws.pool.size() {
+		ws.attnPerHead = true
+		group := c.heads / c.kvHeads
+		n := len(ws.attnItems)
+		for i := range n {
+			it := ws.attnItems[i]
+			for h := 1; h < group; h++ {
+				it2 := it
+				it2.group = it.group*int32(group) + int32(h)
+				ws.attnItems = append(ws.attnItems, it2)
+			}
+			ws.attnItems[i].group = it.group * int32(group)
+		}
+	}
 
 	op := &ws.op
 	op.rows = rows
@@ -316,7 +352,15 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		}
 		ws.run(opAttention, rows*c.kvHeads, 4)
 		if len(ws.attnItems) > 0 {
-			ws.run(opAttentionGEMM, len(ws.attnItems), 1)
+			if ws.prefix != nil {
+				// Pack any stored prefix tokens not yet packed for this
+				// layer, then attend to the packed prefix plus own rows.
+				ws.preparePrefixPack(layer)
+				ws.run(opPackPrefix, c.kvHeads, 1)
+				ws.run(opAttentionPrefix, len(ws.attnItems), 1)
+			} else {
+				ws.run(opAttentionGEMM, len(ws.attnItems), 1)
+			}
 		}
 		if layer == len(m.layers)-1 {
 			// Only each sequence's last row reaches the output, so the final
@@ -357,6 +401,20 @@ func (ws *Workspace) keepLastRows(seqs [][]int, c *modelConfig) {
 		}
 	}
 	ws.op.rows = len(seqs)
+}
+
+// preparePrefixPack allocates the per-group slices of the prefix's packed
+// copy for layer before the parallel pack stage fills them.
+func (ws *Workspace) preparePrefixPack(layer int) {
+	kv, c := ws.prefix, &ws.owner.m.cfg
+	if kv.packs == nil {
+		kv.packs = make([]prefixPack, c.layers)
+	}
+	if pk := &kv.packs[layer]; pk.keysT == nil {
+		pk.keysT = make([]*whispergemm.PackedB, c.kvHeads)
+		pk.values = make([][]*whispergemm.PackedB, c.kvHeads)
+		pk.n = make([]int, c.kvHeads)
+	}
 }
 
 // Reserve allocates storage for batches of up to rows tokens and sequences
@@ -449,8 +507,7 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 			}
 			sc.scores = make([]float32, attentionBlock*capP)
 			sc.gemm = make([]float32, whispergemm.ScratchLen(max(capP, c.headDim)))
-			sc.keys = make([]float32, capP*c.headDim)
-			sc.vals = make([]float32, capP*c.headDim)
+			sc.tmp = make([]float32, attentionBlock*c.headDim)
 		}
 		ws.positions = capP
 	}

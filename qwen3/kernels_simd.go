@@ -23,37 +23,56 @@ func sum4(v archsimd.Float32x4) float32 {
 	return (v.GetElem(0) + v.GetElem(1)) + (v.GetElem(2) + v.GetElem(3))
 }
 
+// expConsts holds exp4's broadcast constants. The compiler does not hoist
+// BroadcastFloat32x4 out of loops, so callers build one set per row.
+type expConsts struct {
+	lo, log2e, nln2Hi, nln2Lo       archsimd.Float32x4
+	c8, c7, c6, c5, c4, c3, c2, one archsimd.Float32x4
+	bias                            archsimd.Int32x4
+}
+
+func newExpConsts() expConsts {
+	return expConsts{
+		lo: archsimd.BroadcastFloat32x4(-87), log2e: archsimd.BroadcastFloat32x4(1.4426950408889634),
+		nln2Hi: archsimd.BroadcastFloat32x4(-ln2Hi), nln2Lo: archsimd.BroadcastFloat32x4(-ln2Lo),
+		c8: archsimd.BroadcastFloat32x4(1.0 / 40320.0), c7: archsimd.BroadcastFloat32x4(1.0 / 5040.0),
+		c6: archsimd.BroadcastFloat32x4(1.0 / 720.0), c5: archsimd.BroadcastFloat32x4(1.0 / 120.0),
+		c4: archsimd.BroadcastFloat32x4(1.0 / 24.0), c3: archsimd.BroadcastFloat32x4(1.0 / 6.0),
+		c2: archsimd.BroadcastFloat32x4(0.5), one: archsimd.BroadcastFloat32x4(1),
+		bias: archsimd.BroadcastInt32x4(127),
+	}
+}
+
 // exp4 is the vector form of expNonPositive32 for x <= 0.
-func exp4(x archsimd.Float32x4) archsimd.Float32x4 {
-	x = x.Max(archsimd.BroadcastFloat32x4(-87))
-	n := x.Mul(archsimd.BroadcastFloat32x4(1.4426950408889634)).Trunc()
-	r := n.MulAdd(archsimd.BroadcastFloat32x4(-ln2Hi), x)
-	r = n.MulAdd(archsimd.BroadcastFloat32x4(-ln2Lo), r)
-	p := archsimd.BroadcastFloat32x4(1.0 / 40320.0)
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/5040.0))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/720.0))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/120.0))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/24.0))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/6.0))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(0.5))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1))
-	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1))
+func exp4(x archsimd.Float32x4, k *expConsts) archsimd.Float32x4 {
+	x = x.Max(k.lo)
+	n := x.Mul(k.log2e).Trunc()
+	r := n.MulAdd(k.nln2Hi, x)
+	r = n.MulAdd(k.nln2Lo, r)
+	p := k.c8.MulAdd(r, k.c7)
+	p = p.MulAdd(r, k.c6)
+	p = p.MulAdd(r, k.c5)
+	p = p.MulAdd(r, k.c4)
+	p = p.MulAdd(r, k.c3)
+	p = p.MulAdd(r, k.c2)
+	p = p.MulAdd(r, k.one)
+	p = p.MulAdd(r, k.one)
 	// arm64 archsimd has no integer-to-float bit reinterpretation; route the
 	// exponent bits through a non-escaping stack buffer instead.
 	var bits [4]int32
-	n.ConvertToInt32().Add(archsimd.BroadcastInt32x4(127)).ShiftAllLeft(23).StoreArray(&bits)
-	scale := archsimd.LoadFloat32x4Array((*[4]float32)(unsafe.Pointer(&bits)))
-	return scale.Mul(p)
+	n.ConvertToInt32().Add(k.bias).ShiftAllLeft(23).StoreArray(&bits)
+	return archsimd.LoadFloat32x4Array((*[4]float32)(unsafe.Pointer(&bits))).Mul(p)
 }
 
 // swigluInto writes silu(gate)*up into gate.
 func swigluInto(gate, up []float32) {
 	up = up[:len(gate)]
 	zero, one := archsimd.BroadcastFloat32x4(0), archsimd.BroadcastFloat32x4(1)
+	k := newExpConsts()
 	i := 0
 	for ; i+4 <= len(gate); i += 4 {
 		x := load4(gate, i)
-		e := exp4(x.Abs().Neg())
+		e := exp4(x.Abs().Neg(), &k)
 		// x >= 0: x/(1+e^-x); x < 0: x*e^x/(1+e^x). Both use e = exp(-|x|).
 		num := x.Mul(e).IfElse(x.Less(zero), x)
 		store4(num.Div(one.Add(e)).Mul(load4(up, i)), gate, i)
@@ -164,15 +183,28 @@ func rotateHalves(x1, x2, cos, sin []float32) {
 // softmaxScaled replaces row with softmax(row*scale).
 func softmaxScaled(row []float32, scale float32) {
 	m := float32(math.Inf(-1))
-	for _, v := range row {
-		m = max(m, v)
+	i := 0
+	if len(row) >= 16 {
+		m0, m1 := load4(row, 0), load4(row, 4)
+		m2, m3 := load4(row, 8), load4(row, 12)
+		for i = 16; i+16 <= len(row); i += 16 {
+			m0 = m0.Max(load4(row, i))
+			m1 = m1.Max(load4(row, i+4))
+			m2 = m2.Max(load4(row, i+8))
+			m3 = m3.Max(load4(row, i+12))
+		}
+		mv := m0.Max(m1).Max(m2.Max(m3))
+		m = max(max(mv.GetElem(0), mv.GetElem(1)), max(mv.GetElem(2), mv.GetElem(3)))
+	}
+	for ; i < len(row); i++ {
+		m = max(m, row[i])
 	}
 	m *= scale
 	s, mv := archsimd.BroadcastFloat32x4(scale), archsimd.BroadcastFloat32x4(m)
+	k := newExpConsts()
 	var acc archsimd.Float32x4
-	i := 0
-	for ; i+4 <= len(row); i += 4 {
-		e := exp4(load4(row, i).Mul(s).Sub(mv))
+	for i = 0; i+4 <= len(row); i += 4 {
+		e := exp4(load4(row, i).Mul(s).Sub(mv), &k)
 		store4(e, row, i)
 		acc = acc.Add(e)
 	}

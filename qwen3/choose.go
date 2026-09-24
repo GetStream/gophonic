@@ -292,12 +292,14 @@ func (q *Question) letterProbs(hidden, probs []float32) {
 // whose earlier words differ) re-evaluate from the first changed token.
 // A Stream is not safe for concurrent use.
 type Stream struct {
-	q      *Question
-	kv     *PrefixKV // question prefix, then the current input, then scratch
-	input  []int     // token IDs of the current input
-	ids    []int     // tokenized update
-	seq    []int     // new input tokens followed by the suffix
-	hidden []float32
+	q        *Question
+	kv       *PrefixKV // question prefix, then the current input, then scratch
+	input    []int     // token IDs of the current input
+	ids      []int     // tokenized update
+	seq      []int     // new input tokens followed by the suffix
+	hidden   []float32
+	last     []float32 // probabilities for input, valid when answered is set
+	answered bool
 }
 
 // NewStream starts a stream for inputs of up to maxInputTokens tokens. It
@@ -327,6 +329,7 @@ func (q *Question) NewStream(maxInputTokens int) (*Stream, error) {
 		ids:    make([]int, 0, 4*maxInputTokens),
 		seq:    make([]int, 0, maxInputTokens+len(q.suffix)),
 		hidden: make([]float32, q.m.model.cfg.hidden),
+		last:   make([]float32, q.options),
 	}, nil
 }
 
@@ -366,6 +369,11 @@ func (s *Stream) UpdateTokens(ctx context.Context, input []int, probs []float32)
 	for same < len(input) && same < len(s.input) && input[same] == s.input[same] {
 		same++
 	}
+	if s.answered && same == len(input) && same == len(s.input) {
+		// Speech recognizers often repeat a partial unchanged.
+		copy(probs, s.last)
+		return nil
+	}
 	// Evaluate the changed input tokens and the suffix after the kept part.
 	s.seq = append(append(s.seq[:0], input[same:]...), q.suffix...)
 	e := q.m
@@ -382,5 +390,7 @@ func (s *Stream) UpdateTokens(ctx context.Context, input []int, probs []float32)
 	}
 	s.input = append(s.input[:0], input...)
 	q.letterProbs(s.hidden, probs)
+	copy(s.last, probs)
+	s.answered = true
 	return nil
 }

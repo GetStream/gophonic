@@ -27,7 +27,8 @@ type rangeOp interface {
 type workerPool struct {
 	mu      sync.Mutex // serializes run and close
 	workers []poolWorker
-	yield   atomic.Bool // spinning must yield: more participants than GOMAXPROCS
+	yield   atomic.Bool  // spinning must yield: more participants than GOMAXPROCS
+	active  atomic.Int32 // holds from forward passes; workers never park while positive
 	stop    atomic.Bool
 	stopped sync.WaitGroup
 
@@ -78,7 +79,9 @@ func (p *workerPool) loop(w *poolWorker, index int) {
 				return
 			}
 			if spins&1023 == 1023 {
-				if time.Since(spinStart) < poolSpin {
+				// Inside a forward pass the next dispatch is always near, so
+				// only an idle pool (no hold) parks after poolSpin.
+				if p.active.Load() > 0 || time.Since(spinStart) < poolSpin {
 					if p.yield.Load() {
 						runtime.Gosched()
 					}
@@ -153,6 +156,20 @@ func (p *workerPool) run(op rangeOp, items, grain int) {
 		}
 	}
 	p.op = nil
+}
+
+// hold keeps workers spinning until the matching release, so the many short
+// dispatches of one forward pass never pay a parked worker's wake-up.
+func (p *workerPool) hold() {
+	if p != nil {
+		p.active.Add(1)
+	}
+}
+
+func (p *workerPool) release() {
+	if p != nil {
+		p.active.Add(-1)
+	}
 }
 
 func (p *workerPool) close() {

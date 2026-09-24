@@ -359,3 +359,35 @@ func TestMulScratchMatchesMulWithoutAllocating(t *testing.T) {
 		}
 	}
 }
+
+func TestPackColumnsAppends(t *testing.T) {
+	const k, capN = 24, 70
+	b, err := NewPackedB(k, capN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := make([]float32, capN*k)
+	for i := range src {
+		src[i] = float32(i%97) - 40
+	}
+	// Grow 0 -> 5 -> 17 -> 50 -> 70 columns, packing only the new ones.
+	n := 0
+	for _, next := range []int{5, 17, 50, 70} {
+		if err := b.Reshape(k, next); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.PackColumns(src[n*k:], k, n); err != nil {
+			t.Fatal(err)
+		}
+		n = next
+		want, _ := NewPackedB(k, n)
+		if err := want.Pack(src, k, true); err != nil {
+			t.Fatal(err)
+		}
+		for i := range want.data {
+			if b.data[i] != want.data[i] {
+				t.Fatalf("n=%d: packed value %d = %g, want %g", n, i, b.data[i], want.data[i])
+			}
+		}
+	}
+}
