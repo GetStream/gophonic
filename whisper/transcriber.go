@@ -21,21 +21,33 @@ var (
 // Transcriber. Construction allocates scratch and tokenizer tables. Warm calls
 // write into caller-owned text buffers without heap allocations.
 type Transcriber struct {
-	model        *Model
-	frontend     *FeatureWorkspace
-	fullFrontend *FullFeatureWorkspace
-	encoder      *EncoderWorkspace
-	decoder      *DecoderScratch
-	tokenizer    *Tokenizer
-	policy       *GreedyPolicy
-	mel          []float32
-	audio        []float32
-	logits       []float32
-	tokens       []int
-	history      []int
-	fullMel      []float32
-	segmentText  []byte
-	closed       bool
+	model               *Model
+	frontend            *FeatureWorkspace
+	fullFrontend        *FullFeatureWorkspace
+	encoder             *EncoderWorkspace
+	decoder             *DecoderScratch
+	tokenizer           *Tokenizer
+	policy              *GreedyPolicy
+	mel                 []float32
+	audio               []float32
+	logits              []float32
+	tokens              []int
+	history             []int
+	fullMel             []float32
+	segmentText         []byte
+	alignTokens         []int
+	alignOffsets        []int
+	alignProbabilities  []float64
+	alignCapture        alignmentCapture
+	alignMatrix         []float32
+	alignTrace          []byte
+	alignCostPrevious   []float64
+	alignCostCurrent    []float64
+	alignJumps          []int
+	alignDurations      []float64
+	lastSpeechTimestamp float64
+	recordWords         bool
+	closed              bool
 }
 
 // NewTranscriber prepares one reusable tiny.en worker with at most eight
@@ -105,6 +117,17 @@ func (t *Transcriber) Close() {
 	t.history = nil
 	t.fullMel = nil
 	t.segmentText = nil
+	t.alignTokens = nil
+	t.alignOffsets = nil
+	t.alignProbabilities = nil
+	t.alignCapture.probabilities = nil
+	t.alignCapture.heads = nil
+	t.alignMatrix = nil
+	t.alignTrace = nil
+	t.alignCostPrevious = nil
+	t.alignCostCurrent = nil
+	t.alignJumps = nil
+	t.alignDurations = nil
 }
 
 // TranscribeWindowInto appends the transcript of at most 30 seconds of mono

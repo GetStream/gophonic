@@ -28,8 +28,15 @@ Whisper's full-file log-mel transform, runs successive 30-second encoder and
 decoder windows, carries prior text tokens, applies the no-speech rule, and
 returns text in caller storage. It uses deterministic greedy decoding at
 temperature zero with `without_timestamps=true`; timestamp tokens can still
-control seeking. The API does not return timed segments or implement
-temperature fallback, beam search, multilingual models, or word timestamps.
+control seeking. `TranscribeSegmentsInto` returns the same text plus segment
+start/end times. `TranscribeWordsInto` also aligns words from selected
+cross-attention heads with
+a second decoder pass. The optional attention buffer is packed to the actual
+token and audio-frame counts. Both APIs use caller-owned text and result slices
+and allocate zero heap objects after their workspaces are prepared. Word timing is
+supported for official tiny.en, base.en, small.en, and medium.en checkpoints.
+The medium.en alignment mask has not been exercised with local weights. Temperature
+fallback, beam search, and multilingual models remain outside this API.
 `TranscribeWindowInto` handles one right-padded PCM window, so its result can
 differ from the full-file path for short audio. `TranscribeFixedWindowsInto`
 is a simpler independent-window mode.

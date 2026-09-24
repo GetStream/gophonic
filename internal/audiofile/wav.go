@@ -1,21 +1,22 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package main
+package audiofile
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
-	"os"
 )
 
-func readWAV(path string) ([]float32, int, int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, 0, 0, err
-	}
+func decodeWAV(data []byte, maxSeconds int) ([]float32, int, int, error) {
+	return DecodeWAVInto(data, nil, maxSeconds)
+}
+
+// DecodeWAVInto decodes into caller-owned storage. When dst has enough
+// capacity, decoding itself performs no heap allocation.
+func DecodeWAVInto(data []byte, dst []float32, maxSeconds int) ([]float32, int, int, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return nil, 0, 0, errors.New("invalid RIFF/WAVE header")
 	}
@@ -67,7 +68,15 @@ func readWAV(path string) ([]float32, int, int, error) {
 		return nil, 0, 0, errors.New("invalid WAV block alignment")
 	}
 	frames := len(audioData) / blockAlign
-	samples := make([]float32, frames*channels)
+	if maxSeconds > 0 && frames > sampleRate*maxSeconds {
+		return nil, 0, 0, fmt.Errorf("audio exceeds %d seconds", maxSeconds)
+	}
+	if cap(dst) < frames*channels {
+		dst = make([]float32, frames*channels)
+	} else {
+		dst = dst[:frames*channels]
+	}
+	samples := dst
 	for i := range samples {
 		at := i * bytesPerSample
 		switch {

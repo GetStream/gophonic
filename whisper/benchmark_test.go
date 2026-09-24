@@ -119,3 +119,54 @@ func BenchmarkOfficialTinyENWindow(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkOfficialTinyENTimestamps isolates the optional segment and word
+// timing paths on the same pinned JFK workload as the plain-text benchmark.
+func BenchmarkOfficialTinyENTimestamps(b *testing.B) {
+	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
+	if path == "" {
+		b.Skip("set GOPHONIC_WHISPER_MODEL")
+	}
+	model, err := Load(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	pcm := make([]float32, len(data)/4)
+	for i := range pcm {
+		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
+	}
+	for _, mode := range []string{"segments", "words"} {
+		b.Run(mode, func(b *testing.B) {
+			worker, err := NewTranscriber(model)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer worker.Close()
+			text := make([]byte, 0, 4096)
+			segments := make([]Segment, 0, 64)
+			words := make([]Word, 0, 128)
+			run := func() error {
+				if mode == "words" {
+					_, _, _, err := worker.TranscribeWordsInto(pcm, text[:0], segments[:0], words[:0])
+					return err
+				}
+				_, _, err := worker.TranscribeSegmentsInto(pcm, text[:0], segments[:0])
+				return err
+			}
+			if err := run(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := run(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

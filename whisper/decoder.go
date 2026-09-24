@@ -160,6 +160,7 @@ type DecoderScratch struct {
 	vocabulary    decoderVocabularyProjection
 	attention     decoderAttentionOperation
 	audioFrames   int
+	alignment     *alignmentCapture
 	nextPos       int
 	ready         bool
 }
@@ -469,6 +470,9 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 			s.layerValues = s.crossValueVec[layer*textHeads : (layer+1)*textHeads]
 		}
 		err := s.attend(s.crossKeys[crossBase:crossEnd], s.crossValues[crossBase:crossBase+AudioFrames*audioState], s.audioFrames, AudioFrames)
+		if err == nil && s.alignment != nil {
+			s.alignment.capture(layer, position, s.scores)
+		}
 		s.layerKeys, s.layerValues = nil, nil
 		if err != nil {
 			return err
