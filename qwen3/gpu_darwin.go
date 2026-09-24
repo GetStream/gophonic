@@ -323,10 +323,15 @@ func abs32(x float32) float32 { return math.Float32frombits(math.Float32bits(x) 
 
 // gpuWorkspace holds one forward pass's GPU buffers and encoder.
 type gpuWorkspace struct {
-	g                                       *gpuModel
-	h, qkv, ctx, act, kc                    *metal.Buffer
-	vc, embedParts, info                    *metal.Buffer // info: per row (position, sequence start row)
-	scratch                                 *metal.Buffer // split-K partial sums
+	g                    *gpuModel
+	h, qkv, ctx, act, kc *metal.Buffer
+	vc, embedParts, info *metal.Buffer // info: per row (position, sequence start row)
+	scratch              *metal.Buffer // split-K partial sums
+	// The current pass's caches: new keys and values go to curK/curV at row
+	// attn.base+m (layer stride curStride bytes); preK/preV hold a read-only
+	// prefix of attn.prefixLen rows (layer stride preStride).
+	curK, curV, preK, preV                  *metal.Buffer
+	curStride, preStride                    int
 	attnParts, mlpParts                     *metal.Buffer // residual sums of squares for the next RMSNorm
 	enc                                     metal.Encoder
 	qkv0Args, qkvArgs, oArgs, guArgs, dArgs gemvArgs
@@ -334,6 +339,8 @@ type gpuWorkspace struct {
 	mm                                      mmArgs
 	perRow                                  uint32
 	rows                                    int
+	past                                    int
+	shared                                  bool
 }
 
 // gpuTokenByToken forces the single-token kernels; tests compare the paths.
@@ -364,8 +371,46 @@ type gemvArgs struct {
 }
 
 type attnArgs struct {
-	pos, ropeSin uint32
-	eps, scale   float32
+	pos, ropeSin    uint32
+	eps, scale      float32
+	base, prefixLen uint32
+}
+
+// gpuPrefix is a PrefixKV's per-layer keys and values in GPU memory,
+// [layers][capacity][kvDim] FP32 each.
+type gpuPrefix struct {
+	kc, vc   *metal.Buffer
+	capacity int
+}
+
+func (g *gpuModel) newPrefix(capacity int) (*gpuPrefix, error) {
+	n := 4 * g.cfg.layers * capacity * g.cfg.kvDim
+	kc, err := g.dev.Buffer(n)
+	if err != nil {
+		return nil, err
+	}
+	vc, err := g.dev.Buffer(n)
+	if err != nil {
+		kc.Release()
+		return nil, err
+	}
+	return &gpuPrefix{kc: kc, vc: vc, capacity: capacity}, nil
+}
+
+// copyFrom copies the first n values of each layer's keys and values.
+func (p *gpuPrefix) copyFrom(src *gpuPrefix, layers, n int) {
+	dk, dv := floats(p.kc.Bytes()), floats(p.vc.Bytes())
+	sk, sv := floats(src.kc.Bytes()), floats(src.vc.Bytes())
+	dStride, sStride := len(dk)/layers, len(sk)/layers
+	for l := range layers {
+		copy(dk[l*dStride:l*dStride+n], sk[l*sStride:l*sStride+n])
+		copy(dv[l*dStride:l*dStride+n], sv[l*sStride:l*sStride+n])
+	}
+}
+
+func (p *gpuPrefix) release() {
+	p.kc.Release()
+	p.vc.Release()
 }
 
 func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
@@ -424,7 +469,26 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 // batch evaluates independent sequences and writes each one's last-token
 // post-final-norm state to dst. Sequences are packed into shared forward
 // passes of up to maxTokens rows; a lone single token takes the GEMV path.
-func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32) error {
+// With a prefix pre of past tokens, sequences continue it: shared prefixes
+// are only read, and an unshared one (a single sequence) receives the new
+// keys and values after its first past rows.
+func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool) error {
+	c := &m.cfg
+	own := 4 * maxTokens * c.kvDim
+	w.curK, w.curV, w.curStride = w.kc, w.vc, own
+	w.preK, w.preV, w.preStride = w.kc, w.vc, own
+	w.attn.base, w.attn.prefixLen = 0, 0
+	if pre != nil {
+		stride := 4 * pre.capacity * c.kvDim
+		if shared {
+			w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+			w.attn.prefixLen = uint32(past)
+		} else {
+			w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
+			w.attn.base = uint32(past)
+		}
+	}
+	w.past, w.shared = past, shared
 	for start := 0; start < len(seqs); {
 		end, rows := start, 0
 		for end < len(seqs) && rows+len(seqs[end]) <= w.rows {
@@ -455,13 +519,13 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 			m.embedRow(id, row)
 			g.hidden.apply(row)
 			embedParts[r] = sumSquares(row)
-			info[2*r], info[2*r+1] = uint32(pos), uint32(start)
+			info[2*r], info[2*r+1] = uint32(w.past+pos), uint32(start)
 			r++
 		}
 	}
 	e := &w.enc
 	g.dev.Begin(e, false)
-	if gpuTokenByToken || rows == 1 {
+	if (gpuTokenByToken || rows == 1) && !w.shared {
 		if len(seqs) != 1 {
 			panic("qwen3: token-by-token GPU path takes one sequence")
 		}
@@ -528,7 +592,6 @@ func (w *gpuWorkspace) mmDispatch(kind int, buf *metal.Buffer, wOff, sOff int, x
 func (w *gpuWorkspace) encodeBatch(rows int) {
 	g, c, e := w.g, w.g.cfg, &w.enc
 	qdim := c.heads * c.headDim
-	kvBytes := 4 * maxTokens * c.kvDim
 	parts := c.hidden / mmColumns
 	w.attn.pos = 0
 	w.perRow = uint32(c.intermediate / maxRotationBlock)
@@ -541,17 +604,19 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		}
 		e.SetPipeline(g.qkRope)
 		e.SetBuffer(w.qkv, 0, 0)
-		e.SetBuffer(w.kc, i*kvBytes, 1)
-		e.SetBuffer(w.vc, i*kvBytes, 2)
+		e.SetBuffer(w.curK, i*w.curStride, 1)
+		e.SetBuffer(w.curV, i*w.curStride, 2)
 		e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
 		e.SetBuffer(g.norms, 4*(2*i+1)*c.headDim, 4)
 		e.SetBuffer(g.rope, 0, 5)
 		e.SetBuffer(w.info, 0, 6)
-		e.SetBytes(unsafe.Pointer(&w.attn), 16, 7)
+		e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
 		e.Dispatch(metal.Size{X: c.heads + 2*c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32, Y: 1, Z: 1})
 
 		e.SetPipeline(g.attendM)
 		e.SetBuffer(w.info, 0, 3)
+		e.SetBuffer(w.preK, i*w.preStride, 4)
+		e.SetBuffer(w.preV, i*w.preStride, 5)
 		e.SetBuffer(w.ctx, 0, 6)
 		e.Dispatch(metal.Size{X: c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
 
@@ -572,11 +637,10 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 // kernels, which stream weights fastest for a single token.
 func (w *gpuWorkspace) encodeTokens(n int) {
 	g, c, e := w.g, w.g.cfg, &w.enc
-	kvBytes := 4 * maxTokens * c.kvDim
 	w.perRow = uint32(c.intermediate / maxRotationBlock)
 	for t := range n {
 		hOff := 4 * t * c.hidden
-		w.attn.pos = uint32(t)
+		w.attn.pos = uint32(w.past + t)
 		for i := range g.layers {
 			gl := &g.layers[i]
 			if i == 0 {
@@ -587,13 +651,13 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 
 			e.SetPipeline(g.attend)
 			e.SetBuffer(w.qkv, 0, 0)
-			e.SetBuffer(w.kc, i*kvBytes, 1)
-			e.SetBuffer(w.vc, i*kvBytes, 2)
+			e.SetBuffer(w.curK, i*w.curStride, 1)
+			e.SetBuffer(w.curV, i*w.curStride, 2)
 			e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
 			e.SetBuffer(g.norms, 4*(2*i+1)*c.headDim, 4)
 			e.SetBuffer(g.rope, 0, 5)
 			e.SetBuffer(w.ctx, 0, 6)
-			e.SetBytes(unsafe.Pointer(&w.attn), 16, 7)
+			e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
 			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
 
 			w.gemv(g.o, gl.buf, gl.o, gl.oScale, w.ctx, 0, w.h, hOff, w.mlpParts, w.mlpParts, 0, &w.oArgs)

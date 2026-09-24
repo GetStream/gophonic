@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/whispergemm"
@@ -39,6 +40,7 @@ type PrefixKV struct {
 	keys, values [][]float32 // per layer, [capacity][kvDim]
 	capacity     int
 	packs        []prefixPack // per layer: the same keys and values packed for attention
+	gpu          *gpuPrefix   // GPU models keep keys and values in GPU memory instead
 }
 
 // prefixPack keeps one layer's stored keys and values packed per KV group,
@@ -64,6 +66,15 @@ func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 	if capacity < 1 || capacity > c.maxPositions {
 		return nil, fmt.Errorf("qwen3: prefix capacity %d outside [1,%d]", capacity, c.maxPositions)
 	}
+	if e.m.gpu != nil {
+		pre, err := e.m.gpu.newPrefix(capacity)
+		if err != nil {
+			return nil, err
+		}
+		kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity, gpu: pre}
+		runtime.AddCleanup(kv, func(p *gpuPrefix) { p.release() }, pre)
+		return kv, nil
+	}
 	kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity,
 		keys: make([][]float32, c.layers), values: make([][]float32, c.layers)}
 	for l := range c.layers {
@@ -71,6 +82,20 @@ func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 		kv.values[l] = make([]float32, capacity*c.kvDim)
 	}
 	return kv, nil
+}
+
+// copyPrefix makes kv hold the first p tokens of src.
+func (kv *PrefixKV) copyPrefix(src *PrefixKV, p int) {
+	c := &kv.owner.m.cfg
+	n := p * c.kvDim
+	if kv.gpu != nil {
+		kv.gpu.copyFrom(src.gpu, c.layers, n)
+	}
+	for l := range kv.keys {
+		copy(kv.keys[l][:n], src.keys[l][:n])
+		copy(kv.values[l][:n], src.values[l][:n])
+	}
+	kv.tokens = append(kv.tokens[:0], src.tokens[:p]...)
 }
 
 // Tokens returns the token sequence whose keys and values kv holds. The slice
@@ -288,14 +313,15 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		rows += len(ids)
 		longest = max(longest, len(ids))
 	}
-	if ws.gpu != nil {
-		if ws.prefix != nil {
-			return errors.New("qwen3: prefix stores are not yet supported on the GPU")
-		}
-		return ws.gpu.batch(m, seqs, dst)
-	}
 	if ws.prefix != nil && !ws.shared && len(seqs) != 1 {
 		return errors.New("qwen3: a prefix extension evaluates exactly one sequence")
+	}
+	if ws.gpu != nil {
+		var pre *gpuPrefix
+		if ws.prefix != nil {
+			pre = ws.prefix.gpu
+		}
+		return ws.gpu.batch(m, seqs, dst, pre, ws.past, ws.shared)
 	}
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
 		return err

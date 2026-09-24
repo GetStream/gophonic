@@ -142,8 +142,13 @@ kernels that read each weight once per 16 or 32 tokens, splitting K across
 threadgroups when a projection alone would leave GPU cores idle.
 
 `gpu-q4` stores blocks of 32 weights as 4-bit codes with one FP16 scale,
-chosen per block to minimize rounding error. Prefix stores (`Question`,
-`Context`, `Stream`) are not yet supported on the GPU.
+chosen per block to minimize rounding error. `Question`, `Stream`, and
+`Context` run on the GPU as well: prefix keys and values live in GPU memory,
+a shared question prefix is read by every input of a batch, and an extended
+prefix receives the new keys in place. On the GPU a `Choose` for a new input
+takes 45 ms, a `Stream` update 33 ms, and a 30-token turn on an 1800-token
+state 79 ms; attention over long prefixes is not yet tiled, so `Context`
+and `ChooseBatch` remain faster on the CPU.
 
 ## Performance
 

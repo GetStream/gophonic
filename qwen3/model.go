@@ -42,24 +42,25 @@ const (
 // Model owns one Qwen3-8B model and one inference workspace, so calls are
 // serialized; use one Model per concurrent inference lane.
 type Model struct {
-	mu        sync.Mutex
-	model     *Weights
-	tokens    *Tokenizer
-	tokenWS   TokenizerWorkspace
-	tokenBufs [][]int // per-text token IDs for a batched Embed call
-	batchIDs  [][]int
-	missIDs   [][]int // inputs not served by the cache
-	missDst   [][]float32
-	shortIDs  [][]int // inputs batched together (below prefixMinTokens)
-	shortDst  [][]float32
-	letters   *letterHead // answer-letter head rows for Question, or nil
-	cache     *embeddingCache
-	prefix    *PrefixKV // last long input's keys and values, or nil
-	reused    uint64    // tokens served from prefix
-	computed  uint64    // tokens evaluated for long inputs
-	eval      *Evaluator
-	ws        *Workspace
-	closed    bool
+	mu          sync.Mutex
+	model       *Weights
+	tokens      *Tokenizer
+	tokenWS     TokenizerWorkspace
+	tokenBufs   [][]int // per-text token IDs for a batched Embed call
+	batchIDs    [][]int
+	missIDs     [][]int // inputs not served by the cache
+	missDst     [][]float32
+	shortIDs    [][]int // inputs batched together (below prefixMinTokens)
+	shortDst    [][]float32
+	letters     *letterHead // answer-letter head rows for Question, or nil
+	cache       *embeddingCache
+	prefix      *PrefixKV // last long input's keys and values, or nil
+	reused      uint64    // tokens served from prefix
+	computed    uint64    // tokens evaluated for long inputs
+	eval        *Evaluator
+	ws          *Workspace
+	closed      bool
+	ownsWeights bool // loaded by Open, so Close frees their GPU memory
 }
 
 // Options controls the local Qwen3-8B CPU backend. Weights selects WeightsF16
@@ -128,6 +129,7 @@ func Open(path string, opts Options) (*Model, error) {
 		return nil, err
 	}
 	e.letters = letters
+	e.ownsWeights = true
 	return e, nil
 }
 
@@ -149,7 +151,7 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 		return nil, err
 	}
 	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.cfg.hidden)}
-	if prefixTokens > 0 && model.gpu == nil {
+	if prefixTokens > 0 {
 		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
 			_ = ws.Close()
 			return nil, err
@@ -354,7 +356,9 @@ func (e *Model) Close() error {
 	}
 	e.closed = true
 	err := e.ws.Close()
-	e.model.releaseGPU()
+	if e.ownsWeights {
+		e.model.releaseGPU()
+	}
 	e.ws, e.eval, e.model, e.tokens = nil, nil, nil, nil
 	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache, e.prefix = nil, nil, nil, nil, nil, nil
 	e.shortIDs, e.shortDst = nil, nil

@@ -175,9 +175,11 @@ kernel void rotate4096(device float *x [[buffer(0)]], device const float *signs 
 }
 
 struct AttnArgs {
-	uint pos;      // this token's position; keys 0..pos are attended
-	uint ropeSin;  // offset of the sine table in rope
+	uint pos;       // attend1: this token's position and cache row
+	uint ropeSin;   // offset of the sine table in rope
 	float eps, scale;
+	uint base;      // batched: cache row of batch row 0
+	uint prefixLen; // batched: rows of a separate read-only prefix cache
 };
 
 // normRopeAt applies the head RMSNorm and RoPE to one 128-value head held as
@@ -472,15 +474,15 @@ MM_KERNELS(_q4_16, 4, 16)
 
 // qkRope prepares M new token rows of possibly several sequences; row m
 // has position info[m].x. Query heads are normalized, rotated, and scaled in
-// place; key heads are normalized, rotated, and stored in cache row m; value
-// heads are copied to cache row m. Threadgroup (h, m) is one simdgroup for
+// place; key heads are normalized, rotated, and stored in cache row base+m;
+// value heads are copied to cache row base+m. Threadgroup (h, m) is one simdgroup for
 // head h of row m.
 kernel void qkRope(device float *qkv [[buffer(0)]], device float *kc [[buffer(1)]],
 		device float *vc [[buffer(2)]], device const float *qn [[buffer(3)]],
 		device const float *kn [[buffer(4)]], device const float *rope [[buffer(5)]],
 		device const uint2 *info [[buffer(6)]], constant AttnArgs &a0 [[buffer(7)]],
 		uint2 hm [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
-	uint h = hm.x, m = hm.y;
+	uint h = hm.x, m = hm.y, slot = a0.base + m;
 	AttnArgs a = a0;
 	a.pos = info[m].x;
 	device float *row = qkv + m * 6144;
@@ -489,23 +491,26 @@ kernel void qkRope(device float *qkv [[buffer(0)]], device float *kc [[buffer(1)
 		device float *src = row + h * 128;
 		float4 v = float4(src[lane], src[lane + 32], src[lane + 64], src[lane + 96]);
 		v = normRopeAt(v, isQ ? qn : kn, rope, a, lane);
-		device float *d = isQ ? src : kc + m * 1024 + (h - 32) * 128;
+		device float *d = isQ ? src : kc + slot * 1024 + (h - 32) * 128;
 		if (isQ)
 			v *= a.scale;
 		d[lane] = v.x, d[lane + 32] = v.y, d[lane + 64] = v.z, d[lane + 96] = v.w;
 		return;
 	}
 	device const float *src = row + 5120 + (h - 40) * 128;
-	device float *d = vc + m * 1024 + (h - 40) * 128;
+	device float *d = vc + slot * 1024 + (h - 40) * 128;
 	d[lane] = src[lane], d[lane + 32] = src[lane + 32], d[lane + 64] = src[lane + 64], d[lane + 96] = src[lane + 96];
 }
 
-// attendM attends row m to cache rows info[m].y..m, its own sequence's
-// earlier tokens. Threadgroup (g, m) holds the four query heads of KV head g
-// as simdgroups; queries were prepared by qkRope.
+// attendM attends row m first to rows 0..prefixLen of a read-only prefix
+// cache (pkc, pvc), then to cache rows info[m].y..base+m, its own
+// sequence's earlier tokens (and, for an extended prefix stored in the same
+// cache, the prefix). Threadgroup (g, m) holds the four query heads of KV
+// head g as simdgroups; queries were prepared by qkRope.
 kernel void attendM(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
 		device const float *vc [[buffer(2)]], device const uint2 *info [[buffer(3)]],
-		device float *ctx [[buffer(6)]],
+		device const float *pkc [[buffer(4)]], device const float *pvc [[buffer(5)]],
+		device float *ctx [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
 		uint2 gm [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
 		uint lane [[thread_index_in_simdgroup]]) {
 	uint g = gm.x, m = gm.y;
@@ -514,15 +519,20 @@ kernel void attendM(device const float *qkv [[buffer(0)]], device const float *k
 	float4 qv = float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]);
 	float mx = -INFINITY, l = 0;
 	float4 acc = 0;
-	for (uint j = info[m].y; j <= m; j++) {
-		device const float *k = kc + j * 1024 + g * 128;
-		float s = simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96])));
-		float mn = max(mx, s);
-		float c = exp(mx - mn), p = exp(s - mn);
-		device const float *v = vc + j * 1024 + g * 128;
-		acc = acc * c + p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
-		l = l * c + p;
-		mx = mn;
+	for (uint pass = 0; pass < 2; pass++) {
+		device const float *ks = pass == 0 ? pkc : kc;
+		device const float *vs = pass == 0 ? pvc : vc;
+		uint j0 = pass == 0 ? 0 : info[m].y, j1 = pass == 0 ? a.prefixLen : a.base + m + 1;
+		for (uint j = j0; j < j1; j++) {
+			device const float *k = ks + j * 1024 + g * 128;
+			float s = simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96])));
+			float mn = max(mx, s);
+			float c = exp(mx - mn), p = exp(s - mn);
+			device const float *v = vs + j * 1024 + g * 128;
+			acc = acc * c + p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
+			l = l * c + p;
+			mx = mn;
+		}
 	}
 	acc /= l;
 	device float *o = ctx + m * 4096 + head * 128;
