@@ -318,3 +318,44 @@ func TestPackedBReshapeReusesStorage(t *testing.T) {
 		t.Fatalf("dims %d %d", k, n)
 	}
 }
+
+func TestMulScratchMatchesMulWithoutAllocating(t *testing.T) {
+	const m, k, n = 37, 70, 45
+	b, err := NewPackedB(k, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := make([]float32, k*n)
+	a := make([]float32, m*k)
+	for i := range src {
+		src[i] = float32(i%11) - 5
+	}
+	for i := range a {
+		a[i] = float32(i%7) - 3
+	}
+	if err := b.Pack(src, n, false); err != nil {
+		t.Fatal(err)
+	}
+	want, got := make([]float32, m*n), make([]float32, m*n)
+	if err := b.Mul(want, n, a, k, m); err != nil {
+		t.Fatal(err)
+	}
+	scratch := make([]float32, ScratchLen(k))
+	if allocs := testing.AllocsPerRun(5, func() {
+		if err := b.MulScratch(got, n, a, k, m, scratch); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("MulScratch allocated %.1f times", allocs)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("element %d: %g != %g", i, got[i], want[i])
+		}
+	}
+	if ScratchLen(k) > 0 {
+		if err := b.MulScratch(got, n, a, k, m, scratch[:ScratchLen(k)-1]); err == nil {
+			t.Fatal("accepted short scratch")
+		}
+	}
+}

@@ -1,2 +1,6 @@
 github.com/thesyncim/gopus v0.1.2 h1:owP6CIQ+RvoFDVwKkedHIGb77gnnCbH50d9oBOTxs7M=
 github.com/thesyncim/gopus v0.1.2/go.mod h1:orRqwrGs5gqYRRnhqwI0Y3liqQTeDkreUpra+Kv9bQc=
+github.com/thesyncim/vibejson v0.1.0 h1:Hk6Zp2RyiNuTBk7UiJ1I67ZJEpqIIiIE6J5gCUsAVc8=
+github.com/thesyncim/vibejson v0.1.0/go.mod h1:G4TBr+6QraiYUM7Uk/yGu+G37rCM3lvqemndeNWQO6o=
+golang.org/x/text v0.40.0 h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
+golang.org/x/text v0.40.0/go.mod h1:hpnzDAfGV753zIKo+wk3u1bVKCGPbrnF7+7LBF/UHVY=

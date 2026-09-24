@@ -37,6 +37,31 @@ var smeScratch = make(chan *[]float32, 64)
 
 // mulSME reports false when SME is unavailable and the caller must use the
 // NEON or scalar kernels.
+// scratchLen is the SME transpose scratch needed for K-wide rows.
+func scratchLen(k int) int {
+	if !smeEnabled {
+		return 0
+	}
+	return (k + 15) / 16 * 16 * smeBlockRows
+}
+
+// mulSMEScratch is mulSME with caller-owned scratch of at least scratchLen(k).
+func mulSMEScratch(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int, scratch []float32) bool {
+	if !smeEnabled {
+		return false
+	}
+	scratch = scratch[:scratchLen(k)]
+	retries := 0
+	for r := 0; r < m; r += smeBlockRows {
+		rows := min(smeBlockRows, m-r)
+		retries += smeMulBlock(&a[r*aStride], aStride*4, rows, k, &packed[0], n, &dst[r*dstStride], dstStride*4, &scratch[0])
+	}
+	if retries != 0 {
+		smeRetries.Add(int64(retries))
+	}
+	return true
+}
+
 func mulSME(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int) bool {
 	if !smeEnabled {
 		return false
