@@ -39,6 +39,31 @@ func NewPackedB(k, n int) (*PackedB, error) {
 	return &PackedB{k: k, n: n, data: make([]float32, k*columns)}, nil
 }
 
+// Reshape changes the logical K and N dimensions for the next Pack. It reuses
+// the existing storage when it is large enough and reallocates otherwise, so
+// callers that reshape within a warmed maximum allocate nothing. The values
+// are undefined until the next Pack.
+func (b *PackedB) Reshape(k, n int) error {
+	if b == nil {
+		return ErrNilMatrix
+	}
+	const maxInt = int(^uint(0) >> 1)
+	if k < 0 || n < 0 || n > maxInt-(panelColumns-1) {
+		return ErrShape
+	}
+	columns := (n + panelColumns - 1) / panelColumns * panelColumns
+	if columns != 0 && k > (maxInt/4)/columns {
+		return ErrShape
+	}
+	if need := k * columns; need > cap(b.data) {
+		b.data = make([]float32, need)
+	} else {
+		b.data = b.data[:need]
+	}
+	b.k, b.n = k, n
+	return nil
+}
+
 // Dims returns the logical K and N dimensions, excluding padding.
 func (b *PackedB) Dims() (k, n int) {
 	if b == nil {

@@ -45,8 +45,8 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Encoder, time.Duration)
 	v, _ := officialEncoders.LoadOrStore(format, &officialEncoder{})
 	o := v.(*officialEncoder)
 	o.once.Do(func() {
-		// Benchmarks repeat inputs; keep the cache out of compute timings.
-		opts := Options{Weights: format, CacheEntries: -1}
+		// Benchmarks repeat inputs; keep both caches out of compute timings.
+		opts := Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1}
 		if n, err := strconv.Atoi(os.Getenv("GOPHONIC_QWEN_THREADS")); err == nil && n > 0 {
 			opts.Threads = n
 		}
@@ -190,7 +190,7 @@ func BenchmarkOfficialRankCached(b *testing.B) {
 		b.Fatal(err)
 	}
 	base, _ := loadOfficialEncoder(b, WeightsF16)
-	enc, err := newEncoder(base.model, base.tokens, Options{}.threads(), defaultCacheEntries)
+	enc, err := newEncoder(base.model, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -237,6 +237,7 @@ func BenchmarkOfficialEmbed(b *testing.B) {
 		{"1text-12tok", []string{"The Moon causes tides by pulling on Earth's oceans."}},
 		{"1text-64tok", benchmarkTexts(1, 64)},
 		{"16texts-12tok", benchmarkTexts(16, 12)},
+		{"1text-2048tok", benchmarkTexts(1, 1900)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dst := make([][]float32, len(tc.texts))
@@ -268,3 +269,52 @@ func BenchmarkOfficialEmbed(b *testing.B) {
 	}
 }
 
+// BenchmarkOfficialConversationTurn measures a new ~30-token turn appended to
+// a ~1800-token conversation state: the stored prefix covers the history, so
+// only the turn is evaluated. Each iteration uses a different turn, so the
+// embedding cache never hits. The fresh-state sub-benchmark disables the
+// prefix store for comparison.
+func BenchmarkOfficialConversationTurn(b *testing.B) {
+	base, _ := loadOfficialEncoder(b, WeightsF16)
+	history := make([]int, 1800)
+	for i := range history {
+		history[i] = 1000 + (i*7919)%50000
+	}
+	for _, tc := range []struct {
+		name   string
+		prefix int
+	}{{"prefix", maxTokens}, {"fresh", -1}} {
+		b.Run(tc.name, func(b *testing.B) {
+			enc, err := newEncoder(base.model, base.tokens, Options{}.threads(), -1, max(tc.prefix, 0))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer enc.Close()
+			ids := [][]int{make([]int, 0, 1830)}
+			dst := [][]float32{make([]float32, hiddenSize)}
+			turn := 0
+			next := func() {
+				turn++
+				ids[0] = append(ids[0][:0], history...)
+				for j := range 30 {
+					ids[0] = append(ids[0], 2000+(turn*31+j*17)%40000)
+				}
+			}
+			next()
+			if err := enc.EmbedTokensInto(context.Background(), clm.StateRole, ids, dst); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				next()
+				if err := enc.EmbedTokensInto(context.Background(), clm.StateRole, ids, dst); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			reused, computed := enc.PrefixStats()
+			b.ReportMetric(float64(reused)/float64(max(1, reused+computed)), "reused-frac")
+		})
+	}
+}

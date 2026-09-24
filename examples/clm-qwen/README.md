@@ -43,11 +43,12 @@ probabilities within 1.0e-3.
 
 ## Performance
 
-On an Apple M4 Max CPU, one 12-token text embeds in 69 ms, a 70-token text in
-342 ms, and 16 short texts in 1.08 s, all with zero warmed allocations; the
-model loads in about 3 s. llama.cpp's best CPU run takes 90 ms for 12 tokens
-and 487 ms for 64. Repeated texts are served from an exact embedding cache:
-re-ranking 16 cached candidates takes 1.65 ms. See
+On an Apple M4 Max CPU, one 12-token text embeds in about 70 ms, a 70-token
+text in 317 ms, 16 short texts in 850 ms, and a full 2048-token text in
+8.2 s, all with zero warmed allocations; the model loads in about 3 s.
+llama.cpp's best CPU run takes 90 ms for 12 tokens and 487 ms for 64. A new
+30-token turn on an 1800-token conversation takes 203 ms because the stored
+prefix is reused, and re-ranking 16 cached candidates takes 1.7 ms. See
 [the performance report](../../docs/clm-performance.md).
 
 - **Kernels.** On CPUs with 512-bit SME (Apple M4), projections run a
@@ -61,6 +62,13 @@ re-ranking 16 cached candidates takes 1.65 ms. See
   separate calls.
 - **Cache.** `Options.CacheEntries` sizes the exact embedding cache (default
   4096 entries, 16 KiB each; negative disables). `CacheStats` reports hits.
+- **Prefix store.** Inputs of 64 tokens or more run through a store of the
+  last long input's keys and values (`Options.PrefixCacheTokens`, default
+  2048 tokens ≈ 576 MiB; negative disables). A later input sharing its token
+  prefix evaluates only the new tokens; `PrefixStats` reports reuse.
+  `Evaluator.NewPrefixKV` and `HiddenLastExtendInto` expose it directly.
+- **Long inputs.** From 64 tokens, attention runs as blocked SME matrix
+  products, so cost per token stays flat up to the 2048-token limit.
 
 Calls on one `Encoder` are serialized; use one encoder per concurrent lane.
 For lower-level use, `LoadModel`, `NewEvaluator`, and

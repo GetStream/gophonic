@@ -21,7 +21,7 @@ import (
 // attention, partial output panels, and odd tile counts.
 var tinyShape = struct {
 	hidden, layers, heads, kvHeads, headDim, inter, vocab, maxPos int
-}{hidden: 96, layers: 2, heads: 4, kvHeads: 2, headDim: 24, inter: 136, vocab: 23, maxPos: 64}
+}{hidden: 96, layers: 2, heads: 4, kvHeads: 2, headDim: 24, inter: 136, vocab: 23, maxPos: 320}
 
 type tinyCheckpoint struct {
 	dir     string
@@ -311,7 +311,16 @@ func TestEvaluatorPortableMatchesReference(t *testing.T) {
 
 func testEvaluatorMatchesReference(t *testing.T) {
 	ck := writeTinyCheckpoint(t, 3)
-	seqs := [][]int{{1}, {2, 3, 0, 1, 2}, {3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 2, 1, 3, 2, 22, 7, 9}, {0, 2}, {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}}
+	long := func(n, seed int) []int {
+		ids := make([]int, n)
+		for i := range ids {
+			ids[i] = (i*7 + seed) % tinyShape.vocab
+		}
+		return ids
+	}
+	// 70 and 290 tokens take the blocked GEMM attention path (three blocks,
+	// the last partial); the rest use the streaming path in the same batch.
+	seqs := [][]int{{1}, {2, 3, 0, 1, 2}, long(70, 3), {3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 2, 1, 3, 2, 22, 7, 9}, {0, 2}, long(290, 5), {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}}
 	want := make([][]float32, len(seqs))
 	for i, ids := range seqs {
 		want[i] = ck.referenceHidden(ids)
@@ -392,5 +401,93 @@ func TestEvaluatorRejectsInvalidInput(t *testing.T) {
 	other, _ := NewEvaluator(m)
 	if err := other.HiddenLastInto([]int{1}, dst, ws); err == nil {
 		t.Error("accepted another evaluator's workspace")
+	}
+}
+
+// TestPrefixExtensionMatchesFullEvaluation grows, branches, and restarts a
+// stored prefix and checks every result against a fresh full evaluation.
+func TestPrefixExtensionMatchesFullEvaluation(t *testing.T) {
+	ck := writeTinyCheckpoint(t, 6)
+	for _, format := range []string{WeightsF16, WeightsInt8} {
+		m, err := LoadModel(ck.dir, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, _ := NewEvaluator(m)
+		ws, _ := e.NewWorkspace(3)
+		kv, err := e.NewPrefixKV(tinyShape.maxPos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq := func(n, seed int) []int {
+			ids := make([]int, n)
+			for i := range ids {
+				ids[i] = (i*5 + seed + i/7) % tinyShape.vocab
+			}
+			return ids
+		}
+		a := seq(230, 1)
+		b := append(append([]int(nil), a[:90]...), seq(40, 9)...) // branches after 90 tokens
+		got, fresh := make([]float32, tinyShape.hidden), make([]float32, tinyShape.hidden)
+		check := func(name string, full []int) {
+			t.Helper()
+			if err := e.HiddenLastInto(full, fresh, ws); err != nil {
+				t.Fatal(err)
+			}
+			// Extensions always use blocked attention while short fresh
+			// sequences stream, so summation order (and an occasional FP16
+			// activation rounding) differs.
+			if cos, maxAbs := vectorParity(got, fresh); cos < 0.9999999 || maxAbs > 2e-3 {
+				t.Fatalf("%s %s: extension vs fresh cosine=%.9f max_abs=%g", format, name, cos, maxAbs)
+			}
+			refGate := 0.99999
+			if format == WeightsInt8 {
+				refGate = 0.999 // per-row int8 weights are lossy by design
+			}
+			if cos, _ := vectorParity(got, ck.referenceHidden(full)); cos < refGate {
+				t.Fatalf("%s %s: extension vs float64 reference cosine=%.9f", format, name, cos)
+			}
+		}
+		steps := []struct {
+			name string
+			keep int
+			full []int
+		}{
+			{"cold 150", 0, a[:150]},
+			{"append 80", 150, a},
+			{"branch at 90", 90, b},
+			{"one token", len(b), append(b[:len(b):len(b)], 3)},
+			{"restart", 0, a[:20]},
+		}
+		for _, st := range steps {
+			if n := kv.CommonPrefix(st.full); n < st.keep {
+				t.Fatalf("%s: stored prefix shares %d tokens, want at least %d", st.name, n, st.keep)
+			}
+			if err := e.HiddenLastExtendInto(kv, st.keep, st.full[st.keep:], got, ws); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(kv.Tokens(), st.full) {
+				t.Fatalf("%s: stored tokens not updated", st.name)
+			}
+			check(st.name, st.full)
+		}
+		tail := a[200:]
+		if err := e.HiddenLastExtendInto(kv, 0, a[:200], got, ws); err != nil {
+			t.Fatal(err)
+		}
+		if allocs := testing.AllocsPerRun(5, func() {
+			if err := e.HiddenLastExtendInto(kv, 200, tail, got, ws); err != nil {
+				panic(err)
+			}
+		}); allocs != 0 {
+			t.Fatalf("%s: warmed extension allocated %.2f times", format, allocs)
+		}
+		if err := e.HiddenLastExtendInto(kv, len(kv.Tokens())+1, a[:1], got, ws); err == nil {
+			t.Fatal("accepted keep beyond stored tokens")
+		}
+		if err := e.HiddenLastExtendInto(kv, 0, seq(tinyShape.maxPos+1, 0), got, ws); err == nil {
+			t.Fatal("accepted more tokens than the prefix capacity")
+		}
+		_ = ws.Close()
 	}
 }

@@ -12,10 +12,10 @@ import (
 )
 
 type projOnly struct {
-	w    *q8gemm.Weights
-	ws   *q8gemm.Workspace
-	dst  []float32
-	n    int
+	w   *q8gemm.Weights
+	ws  *q8gemm.Workspace
+	dst []float32
+	n   int
 }
 
 func (o *projOnly) ApplyRows(_, start, end int) {

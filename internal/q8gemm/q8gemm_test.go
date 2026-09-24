@@ -115,7 +115,6 @@ func fixture(t *testing.T, rows, k, n int, seed int64) (*Weights, *Workspace, []
 	return w, ws, x, make([]float32, rows*n)
 }
 
-
 func assertClose(t *testing.T, got, want []float32, relativeTolerance float64) {
 	t.Helper()
 	if len(got) != len(want) {

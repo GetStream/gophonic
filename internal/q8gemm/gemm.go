@@ -17,8 +17,8 @@ import "math"
 // goroutines may call MulPanels concurrently for disjoint panel ranges.
 type Workspace struct {
 	activation []uint16
-	act32      []float32 // [K][16] FP32 copy of activation, only without SME
-	scratch    *Scratch  // MulInto's own scratch, only without SME
+	act32      []float32               // [K][16] FP32 copy of activation, only without SME
+	scratch    *Scratch                // MulInto's own scratch, only without SME
 	rowScale   [ActivationRows]float32 // multiplies inputs before FP16 rounding
 	rowInverse [ActivationRows]float32 // multiplies outputs
 	k, rows    int

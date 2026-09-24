@@ -17,8 +17,9 @@ transcripts.
   concurrent lane reuses its own scratch, and warm calls allocate nothing.
 - **CLM action ranking:** pure-Go CPU projection heads score state/action
   embeddings; `examples/clm-qwen` adds a local Qwen3-8B encoder with exact
-  BF16 weights (69 ms for a 12-token text on an M4 Max CPU, faster than
-  llama.cpp Q8_0 at higher fidelity, cached re-ranks in under 2 ms).
+  BF16 weights (about 70 ms for a 12-token text on an M4 Max CPU, faster
+  than llama.cpp Q8_0 at higher fidelity; a new turn on an 1800-token
+  conversation in 203 ms; cached re-ranks in under 2 ms).
 - **Pure Go toolchain:** builds with `CGO_ENABLED=0`. Hand-written ARM64
   kernels are plain Go assembly, and every accelerated path has a portable
   fallback.
