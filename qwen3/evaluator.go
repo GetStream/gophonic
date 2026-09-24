@@ -304,8 +304,8 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if layer == 0 {
 			residual = nil
 		}
-		ws.addNorm(residual, l.attnNorm)
-		ws.project(ws.norm, c.hidden, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
+		ws.addNorm(residual, l.attnNorm, &l.q)
+		ws.project(ws.norm, c.hidden, true, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
 		if kv := ws.prefix; kv != nil && !ws.shared {
 			// Store this layer's new keys and values after the kept prefix;
@@ -323,11 +323,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 			// output projection and MLP run on those rows alone.
 			ws.keepLastRows(seqs, c)
 		}
-		ws.project(ws.ctx, c.heads*c.headDim, projection{&l.o, ws.attn})
-		ws.addNorm(ws.attn, l.mlpNorm)
-		ws.project(ws.norm, c.hidden, projection{&l.gate, ws.gate}, projection{&l.up, ws.up})
+		ws.project(ws.ctx, c.heads*c.headDim, false, projection{&l.o, ws.attn})
+		ws.addNorm(ws.attn, l.mlpNorm, &l.gate)
+		ws.project(ws.norm, c.hidden, true, projection{&l.gate, ws.gate}, projection{&l.up, ws.up})
 		ws.run(opSwiGLU, op.rows*swigluChunks(c.intermediate), 4)
-		ws.project(ws.gate, c.intermediate, projection{&l.down, ws.attn})
+		ws.project(ws.gate, c.intermediate, false, projection{&l.down, ws.attn})
 	}
 	op.layer = nil
 	for s := range seqs {
@@ -485,11 +485,38 @@ func (ws *Workspace) run(kind opKind, items, grain int) {
 }
 
 // addNorm computes h += residual (when residual is non-nil) and
-// norm = RMSNorm(h) * weight for every row.
-func (ws *Workspace) addNorm(residual, weight []float32) {
-	ws.op.residual, ws.op.normWeight = residual, weight
-	ws.run(opAddNorm, ws.op.rows, 2)
-	ws.op.residual, ws.op.normWeight = nil, nil
+// norm = RMSNorm(h) * weight for every row. With next set, the same row pass
+// also prepares next's activation tiles: it rotates each normalized row for
+// int8 weights and sets the row's quantization scale, so the following
+// project call skips its own rotate and row-scale stages.
+func (ws *Workspace) addNorm(residual, weight []float32, next *linear) {
+	op := &ws.op
+	op.residual, op.normWeight, op.scaleRows = residual, weight, next != nil
+	if next != nil {
+		op.rot = next.rot
+		ws.prepareTiles(ws.owner.m.cfg.hidden)
+	}
+	ws.run(opAddNorm, op.rows, 2)
+	op.residual, op.normWeight, op.scaleRows, op.rot = nil, nil, false, nil
+}
+
+// prepareTiles records the next projection's tile shapes; op.rot selects the
+// int8 tiles.
+func (ws *Workspace) prepareTiles(cols int) {
+	rows := ws.op.rows
+	tiles := (rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
+	for t := range tiles {
+		n := min(q8gemm.ActivationRows, rows-t*q8gemm.ActivationRows)
+		var err error
+		if ws.op.rot != nil {
+			err = ws.tilesI8[t].Prepare(n, cols)
+		} else {
+			err = ws.tiles[t].Prepare(n, cols)
+		}
+		if err != nil {
+			panic("qwen3: activation tile: " + err.Error())
+		}
+	}
 }
 
 type projection struct {
@@ -501,7 +528,7 @@ type projection struct {
 // that share that input. Each 16-row tile is scaled and converted once, then
 // every panel of every projection runs in one parallel dispatch. Shapes are
 // validated when the model loads.
-func (ws *Workspace) project(src []float32, cols int, projs ...projection) {
+func (ws *Workspace) project(src []float32, cols int, prepared bool, projs ...projection) {
 	op := &ws.op
 	rows := op.rows
 	op.panels = 0
@@ -513,25 +540,18 @@ func (ws *Workspace) project(src []float32, cols int, projs ...projection) {
 	// Projections sharing an input share a format and rotation.
 	op.rot = projs[0].l.rot
 	tiles := (rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
-	for t := range tiles {
-		n := min(q8gemm.ActivationRows, rows-t*q8gemm.ActivationRows)
-		var err error
-		if op.rot != nil {
-			err = ws.tilesI8[t].Prepare(n, cols)
-		} else {
-			err = ws.tiles[t].Prepare(n, cols)
-		}
-		if err != nil {
-			panic("qwen3: activation tile: " + err.Error())
-		}
-	}
 	op.src, op.cols = src, cols
 	if op.rot != nil {
-		// Rotate each input row into ws.rotated; the tiles quantize that.
-		ws.run(opRotate, rows, 2)
 		op.src = ws.rotated
 	}
-	ws.run(opRowScale, rows, 2)
+	if !prepared {
+		ws.prepareTiles(cols)
+		op.src = src
+		ws.run(opRowScale, rows, 2)
+		if op.rot != nil {
+			op.src = ws.rotated
+		}
+	}
 	ws.run(opPack, tiles*packChunks(cols), 1)
 	ws.run(opProject, op.panels, 1)
 	op.src, op.rot = nil, nil
