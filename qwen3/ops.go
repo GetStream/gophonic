@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
 type opKind uint8
@@ -19,6 +20,8 @@ const (
 	opQKRope
 	opAttention
 	opAttentionGEMM
+	opPackPrefix
+	opAttentionPrefix
 	opSwiGLU
 )
 
@@ -68,6 +71,10 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 		o.attention(start, end)
 	case opAttentionGEMM:
 		o.attentionGEMM(worker, start, end)
+	case opPackPrefix:
+		o.packPrefix(start, end)
+	case opAttentionPrefix:
+		o.attentionPrefix(worker, start, end)
 	case opSwiGLU:
 		o.swiglu(start, end)
 	}
@@ -228,10 +235,11 @@ func (o *layerOp) attention(start, end int) {
 	}
 }
 
-// attentionGEMM handles blocked causal attention for long sequences. Each item
-// packs its KV group's keys and values up to the block's last query once, then
-// for every query head in the group computes scores = Q·Kᵀ and ctx = P·V as
-// matrix products, never touching keys beyond the causal limit.
+// attentionGEMM handles blocked causal attention for long sequences without
+// a stored prefix. Each item packs its KV group's keys and values up to the
+// block's last query once, then for every query head in the group computes
+// scores = Q·Kᵀ and ctx = P·V as matrix products, never touching keys beyond
+// the causal limit.
 func (o *layerOp) attentionGEMM(worker, start, end int) {
 	ws, c := o.ws, &o.ws.owner.m.cfg
 	hd, group, qdim := c.headDim, c.heads/c.kvHeads, c.heads*c.headDim
@@ -242,24 +250,6 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 		base, q0, q1, g, past := int(it.start), int(it.q0), int(it.q1), int(it.group), int(it.past)
 		nk, qb := past+q1, q1-q0
 		keys, values, stride := ws.keys[base*c.kvDim+g*hd:], ws.values[base*c.kvDim+g*hd:], c.kvDim
-		if kv := ws.prefix; kv != nil {
-			if ws.shared {
-				// Gather the read-only prefix and this sequence's own rows
-				// into one contiguous range for packing.
-				pk, pv := kv.keys[o.layerIndex], kv.values[o.layerIndex]
-				for j := range past {
-					copy(sc.keys[j*hd:(j+1)*hd], pk[j*c.kvDim+g*hd:])
-					copy(sc.vals[j*hd:(j+1)*hd], pv[j*c.kvDim+g*hd:])
-				}
-				for j := range q1 {
-					copy(sc.keys[(past+j)*hd:(past+j+1)*hd], ws.keys[(base+j)*c.kvDim+g*hd:])
-					copy(sc.vals[(past+j)*hd:(past+j+1)*hd], ws.values[(base+j)*c.kvDim+g*hd:])
-				}
-				keys, values, stride = sc.keys, sc.vals, hd
-			} else {
-				keys, values = kv.keys[o.layerIndex][g*hd:], kv.values[o.layerIndex][g*hd:]
-			}
-		}
 		must(sc.keysT.Reshape(hd, nk))
 		must(sc.keysT.Pack(keys, stride, true))
 		must(sc.values.Reshape(nk, hd))
@@ -275,6 +265,103 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 				clear(row[valid:])
 			}
 			must(sc.values.MulScratch(ws.ctx[off:], qdim, scores, nk, qb, sc.gemm))
+		}
+	}
+}
+
+// packPrefix brings one KV group's packed copy of the stored prefix up to
+// ws.past positions for the current layer: it appends newly stored tokens,
+// truncates after a branch, and grows storage by doubling (repacking from the
+// raw store).
+func (o *layerOp) packPrefix(start, end int) {
+	ws, c := o.ws, &o.ws.owner.m.cfg
+	kv, hd, past := ws.prefix, c.headDim, ws.past
+	pk := &kv.packs[o.layerIndex] // prepared by Workspace.preparePrefixPack
+	keys, values := kv.keys[o.layerIndex], kv.values[o.layerIndex]
+	for g := start; g < end; g++ {
+		n := pk.n[g]
+		kt := pk.keysT[g]
+		if kt == nil || kt.ColumnCapacity() < past {
+			capN := max(64, 2*past)
+			var err error
+			kt, err = whispergemm.NewPackedB(hd, min(capN, kv.capacity))
+			must(err)
+			pk.keysT[g], n = kt, 0
+		}
+		n = min(n, past)
+		must(kt.Reshape(hd, past))
+		var src []float32 // no new columns: PackColumns only re-pads
+		if n < past {
+			src = keys[n*c.kvDim+g*hd:]
+		}
+		must(kt.PackColumns(src, c.kvDim, n))
+		// Repack value chunks from the first one that changed.
+		chunks := (past + prefixChunk - 1) / prefixChunk
+		for len(pk.values[g]) < chunks {
+			v, err := whispergemm.NewPackedB(prefixChunk, hd)
+			must(err)
+			pk.values[g] = append(pk.values[g], v)
+		}
+		for ch := n / prefixChunk; ch < chunks; ch++ {
+			rows := min(prefixChunk, past-ch*prefixChunk)
+			v := pk.values[g][ch]
+			must(v.Reshape(rows, hd))
+			must(v.Pack(values[ch*prefixChunk*c.kvDim+g*hd:], c.kvDim, false))
+		}
+		pk.n[g] = past
+	}
+}
+
+// attentionPrefix handles one query block and one query head attending to a
+// stored prefix (packed once by packPrefix) plus the sequence's own rows. The
+// prefix and own scores share one row buffer and one softmax; P·V sums the
+// packed value chunks and the own rows.
+func (o *layerOp) attentionPrefix(worker, start, end int) {
+	ws, c := o.ws, &o.ws.owner.m.cfg
+	hd, group, qdim := c.headDim, c.heads/c.kvHeads, c.heads*c.headDim
+	sc := &ws.attnScratch[worker]
+	pk := &ws.prefix.packs[o.layerIndex]
+	scale := float32(c.attnScale)
+	for i := start; i < end; i++ {
+		it := ws.attnItems[i]
+		base, q0, q1, past := int(it.start), int(it.q0), int(it.q1), int(it.past)
+		// Per-group items cover every head of the group and pack the group's
+		// own rows once; per-head items (see Workspace.attnPerHead) one head.
+		h0, h1 := int(it.group)*group, int(it.group+1)*group
+		if ws.attnPerHead {
+			h0, h1 = int(it.group), int(it.group)+1
+		}
+		g := h0 / group
+		nk, qb := past+q1, q1-q0
+		own := base*c.kvDim + g*hd
+		must(sc.keysT.Reshape(hd, q1))
+		must(sc.keysT.Pack(ws.keys[own:], c.kvDim, true))
+		must(sc.values.Reshape(q1, hd))
+		must(sc.values.Pack(ws.values[own:], c.kvDim, false))
+		scores := sc.scores[:qb*nk]
+		for qh := h0; qh < h1; qh++ {
+			off := (base+q0)*qdim + qh*hd
+			q := ws.q[off:]
+			if past > 0 {
+				must(pk.keysT[g].MulScratch(scores, nk, q, qdim, qb, sc.gemm))
+			}
+			must(sc.keysT.MulScratch(scores[past:], nk, q, qdim, qb, sc.gemm))
+			for r := range qb {
+				row := scores[r*nk : (r+1)*nk]
+				valid := past + q0 + r + 1
+				softmaxScaled(row[:valid], scale)
+				clear(row[valid:])
+			}
+			// ctx = Σ chunks P[:, chunk]·Vchunk + P[:, past:]·Vown.
+			ctx := ws.ctx[off:]
+			must(sc.values.MulScratch(ctx, qdim, scores[past:], nk, qb, sc.gemm))
+			tmp := sc.tmp[:qb*hd]
+			for ch, v := range pk.values[g][:(past+prefixChunk-1)/prefixChunk] {
+				must(v.MulScratch(tmp, hd, scores[ch*prefixChunk:], nk, qb, sc.gemm))
+				for r := range qb {
+					addInto(ctx[r*qdim:r*qdim+hd], tmp[r*hd:(r+1)*hd])
+				}
+			}
 		}
 	}
 }

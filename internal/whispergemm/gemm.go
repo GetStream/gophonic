@@ -64,6 +64,44 @@ func (b *PackedB) Reshape(k, n int) error {
 	return nil
 }
 
+// PackColumns writes logical columns [c0, N) from an N-by-K source (rows of
+// src are columns of the matrix, like Pack with transposed set), leaving
+// columns before c0 untouched, and zeroes the padding after column N. With
+// Reshape growing N within the allocated capacity, it appends columns to a
+// packed matrix without repacking the existing ones.
+func (b *PackedB) PackColumns(src []float32, stride, c0 int) error {
+	if b == nil {
+		return ErrNilMatrix
+	}
+	if c0 < 0 || c0 > b.n || stride < b.k || (b.n > c0 && len(src) < (b.n-1-c0)*stride+b.k) {
+		return ErrShape
+	}
+	for col := c0; col < b.n; col++ {
+		panel := b.data[(col/panelColumns)*panelColumns*b.k:]
+		row := src[(col-c0)*stride:]
+		j := col % panelColumns
+		for k := 0; k < b.k; k++ {
+			panel[k*panelColumns+j] = row[k]
+		}
+	}
+	if pad := b.n % panelColumns; pad != 0 {
+		panel := b.data[(b.n/panelColumns)*panelColumns*b.k:]
+		for k := 0; k < b.k; k++ {
+			clear(panel[k*panelColumns+pad : (k+1)*panelColumns])
+		}
+	}
+	return nil
+}
+
+// ColumnCapacity reports how many columns Reshape(k, n) can hold for this K
+// without reallocating (and so without discarding packed values).
+func (b *PackedB) ColumnCapacity() int {
+	if b == nil || b.k == 0 {
+		return 0
+	}
+	return cap(b.data) / b.k / panelColumns * panelColumns
+}
+
 // Dims returns the logical K and N dimensions, excluding padding.
 func (b *PackedB) Dims() (k, n int) {
 	if b == nil {
