@@ -138,7 +138,7 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 	if b == nil {
 		return ErrNilMatrix
 	}
-	if !validMatrix(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
+	if !validInput(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
 		return ErrShape
 	}
 	parts := e.partitions(m, b.k, b.n)

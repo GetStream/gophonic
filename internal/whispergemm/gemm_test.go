@@ -165,6 +165,40 @@ func TestMulSpecialValues(t *testing.T) {
 	}
 }
 
+// Overlapping input rows read a sliding window without copying it.
+func TestMulOverlappingRows(t *testing.T) {
+	const m, k, n, hop = 37, 40, 33, 7
+	signal := make([]float32, (m-1)*hop+k)
+	state := uint32(5)
+	for i := range signal {
+		signal[i] = nextValue(&state)
+	}
+	weights := make([]float32, k*n)
+	for i := range weights {
+		weights[i] = nextValue(&state)
+	}
+	b, _ := NewPackedB(k, n)
+	if err := b.Pack(weights, n, false); err != nil {
+		t.Fatal(err)
+	}
+	frames := make([]float32, m*k)
+	for r := 0; r < m; r++ {
+		copy(frames[r*k:], signal[r*hop:r*hop+k])
+	}
+	want, got := make([]float32, m*n), make([]float32, m*n)
+	if err := b.Mul(want, n, frames, k, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Mul(got, n, signal, hop, m); err != nil {
+		t.Fatal(err)
+	}
+	for i := range got {
+		if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+			t.Fatalf("index %d: %v != %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestValidationAndZeroAllocations(t *testing.T) {
 	const maxInt = int(^uint(0) >> 1)
 	for _, dims := range [][2]int{{-1, 4}, {4, -1}, {maxInt, 16}, {1, maxInt}} {
@@ -184,7 +218,7 @@ func TestValidationAndZeroAllocations(t *testing.T) {
 	if b.Pack(weights[:len(weights)-1], 17, true) != ErrShape || b.Pack(weights, 16, true) != ErrShape {
 		t.Fatal("invalid packing shape accepted")
 	}
-	if b.Mul(dst, 19, a, 16, 7) != ErrShape || b.Mul(dst[:len(dst)-1], 19, a, 17, 7) != ErrShape || b.Mul(dst, maxInt, a, maxInt, 7) != ErrShape {
+	if b.Mul(dst, 19, a[:6*17+16], 17, 7) != ErrShape || b.Mul(dst[:len(dst)-1], 19, a, 17, 7) != ErrShape || b.Mul(dst, maxInt, a, maxInt, 7) != ErrShape {
 		t.Fatal("invalid multiplication shape accepted")
 	}
 	if allocations := testing.AllocsPerRun(20, func() {

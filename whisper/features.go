@@ -28,11 +28,12 @@ var (
 // FeatureWorkspace owns reusable scratch for one concurrent audio frontend.
 // It must not be used by more than one call at a time.
 type FeatureWorkspace struct {
-	padded []float32
-	power  []float32
-	lanes  []featureLane
-	op     featureOperation
-	closed bool
+	padded   []float32
+	power    []float32
+	lanes    []featureLane
+	spectrum []float32 // SME path: [frame, re/im bin], then [frame, mel]
+	op       featureOperation
+	closed   bool
 }
 
 // NewFeatureWorkspace allocates scratch for allocation-free FeaturesInto calls.
@@ -90,10 +91,42 @@ type featureOperation struct {
 	maxes         [maxFeatureShards]float32
 }
 
+// Phases 0-2 are the FFT path; the SME path uses power, log, then floor.
+const (
+	featurePhaseFloor = 2
+	featurePhasePower = 3
+	featurePhaseLog   = 4
+)
+
 func (op *featureOperation) ApplyRows(first, last int) {
 	w, dst := op.w, op.dst
 	for shard := first; shard < last; shard++ {
 		switch op.phase {
+		case featurePhasePower:
+			for frame := shard * MelFrames / op.shards; frame < (shard+1)*MelFrames/op.shards; frame++ {
+				spectrum := w.spectrum[frame*featureSpectrumWidth : (frame+1)*featureSpectrumWidth]
+				power := w.power[frame*featureFFTBins : (frame+1)*featureFFTBins]
+				for bin := range power {
+					re, im := spectrum[2*bin], spectrum[2*bin+1]
+					power[bin] = re*re + im*im
+				}
+			}
+		case featurePhaseLog:
+			mel := w.spectrum[:MelFrames*MelBins]
+			maxLog := float32(math.Inf(-1))
+			for m := shard * MelBins / op.shards; m < (shard+1)*MelBins/op.shards; m++ {
+				row := dst[m*MelFrames : (m+1)*MelFrames]
+				for frame := range row {
+					value := mel[frame*MelBins+m]
+					if value < 1e-10 {
+						value = 1e-10
+					}
+					logMel := float32(math.Log10(float64(value)))
+					row[frame] = logMel
+					maxLog = max(maxLog, logMel)
+				}
+			}
+			op.maxes[shard] = maxLog
 		case 0:
 			lane := &w.lanes[shard]
 			for frame := shard * MelFrames / op.shards; frame < (shard+1)*MelFrames/op.shards; frame++ {
@@ -181,6 +214,9 @@ func featuresInto(pcm []float32, dst []float32, w *FeatureWorkspace, executor *w
 		w.padded[featurePad+featureSamples+i] = center[featureSamples-2-i]
 	}
 
+	if whispergemm.PackedVectorAccelerated() {
+		return featuresGEMM(dst, w, executor)
+	}
 	shards := 1
 	if executor != nil {
 		shards = min(executor.Workers(), maxFeatureShards)
