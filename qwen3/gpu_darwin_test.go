@@ -6,6 +6,7 @@
 package qwen3
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -310,5 +311,67 @@ func TestOfficialGPUScaling(t *testing.T) {
 			best = min(best, time.Since(start))
 		}
 		t.Logf("%4d tokens: %v", n, best.Round(100*time.Microsecond))
+	}
+}
+
+// TestOfficialGPUFlashAttention compares the tiled attention kernel with the
+// per-key loop on packed sequences, a long input, and a shared prefix.
+func TestOfficialGPUFlashAttention(t *testing.T) {
+	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
+	if path == "" {
+		t.Skip("set GOPHONIC_QWEN3_MODEL")
+	}
+	m, err := Open(path, Options{Weights: WeightsGPU, CacheEntries: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	long := make([]int, 150)
+	for i := range long {
+		long[i] = 1000 + (i*7919)%50000
+	}
+	seqs := [][]int{long[:5], long, long[20:31]}
+	run := func(scalar bool) [][]float32 {
+		gpuScalarAttention = scalar
+		defer func() { gpuScalarAttention = false }()
+		out := [][]float32{make([]float32, hiddenSize), make([]float32, hiddenSize), make([]float32, hiddenSize)}
+		if err := m.eval.HiddenLastBatchInto(seqs, out, m.ws); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	flash, scalar := run(false), run(true)
+	for s := range seqs {
+		cos, maxAbs := vectorParity(flash[s], scalar[s])
+		t.Logf("sequence %d (%d tokens): cosine %.7f max_abs %.3g", s, len(seqs[s]), cos, maxAbs)
+		if cos < 0.99999 {
+			t.Errorf("sequence %d: flash attention diverges", s)
+		}
+	}
+	q, err := m.Question("Which support team should handle this customer message?",
+		[]string{"payments", "cancellations", "technical support", "shipping", "account login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := benchmarkTexts(4, 14)
+	probs := func(scalar bool) [][]float32 {
+		gpuScalarAttention = scalar
+		defer func() { gpuScalarAttention = false }()
+		rows := make([][]float32, len(texts))
+		for i := range rows {
+			rows[i] = make([]float32, 5)
+		}
+		if err := q.ChooseBatch(context.Background(), texts, rows); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	pf, ps := probs(false), probs(true)
+	for i := range pf {
+		for j := range pf[i] {
+			if d := math.Abs(float64(pf[i][j] - ps[i][j])); d > 5e-3 { // reassociation, amplified by the letter head
+				t.Errorf("input %d option %d: flash %.6f scalar %.6f", i, j, pf[i][j], ps[i][j])
+			}
+		}
 	}
 }

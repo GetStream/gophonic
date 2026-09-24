@@ -113,12 +113,17 @@ type hfConfig struct {
 }
 
 // LoadWeights reads an official Qwen3 safetensors snapshot directory
-// (config.json plus model.safetensors or a sharded index). format is
-// WeightsF16 (or empty) or WeightsInt8. Tensors are read and packed in
-// parallel; peak memory is the packed model plus one tensor per loader.
+// (config.json plus model.safetensors or a sharded index). format is one of
+// the Weights constants, or empty to choose the fastest backend available:
+// WeightsGPU for the Qwen3-8B geometry on a Metal GPU, WeightsF16 otherwise.
+// Tensors are read and packed in parallel; peak memory is the packed model
+// plus one tensor per loader.
 func LoadWeights(dir, format string) (*Weights, error) {
 	if format == "" {
 		format = WeightsF16
+		if cfg, err := readConfig(filepath.Join(dir, "config.json")); err == nil && gpuSupports(&cfg) {
+			format = WeightsGPU
+		}
 	}
 	if format != WeightsF16 && format != WeightsInt8 && format != WeightsGPU && format != WeightsGPUQ4 {
 		return nil, fmt.Errorf("qwen3: unsupported weight format %q", format)

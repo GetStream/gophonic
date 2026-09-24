@@ -16,11 +16,11 @@ transcripts.
 - **Built for servers:** a loaded model is shared and immutable. Each
   concurrent lane reuses its own scratch, and warm calls allocate nothing.
 - **Qwen3-8B and CLM action ranking:** [`qwen3`](qwen3) runs Qwen3-8B on
-  the CPU (SME) or the Apple GPU (a pure-Go Metal binding). On an M4 Max a
-  12-token text takes 25 ms on the GPU (llama.cpp: 57 ms on Metal, 90 ms on
-  the CPU) and one token 15.8 ms, at llama.cpp Q8_0 fidelity; the CPU's exact
-  BF16 mode takes 66 ms. A new turn on an 1800-token conversation takes
-  155 ms, and cached CLM re-ranks under 2 ms.
+  the Apple GPU (a pure-Go Metal binding, chosen automatically) or the CPU
+  (SME). On an M4 Max a 12-token text takes 25 ms (llama.cpp: 57 ms on
+  Metal, 90 ms on the CPU) and one token 15.8 ms, at llama.cpp Q8_0
+  fidelity; a zero-shot `Choose` takes 45 ms, a new turn on an 1800-token
+  conversation 82 ms, and cached CLM re-ranks under 2 ms.
 - **Pure Go toolchain:** builds with `CGO_ENABLED=0`. Hand-written ARM64
   kernels are plain Go assembly, and every accelerated path has a portable
   fallback.

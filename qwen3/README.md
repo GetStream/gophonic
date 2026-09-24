@@ -8,10 +8,10 @@ CPUs use portable kernels (NEON on arm64).
 
 | M4 Max, one text | 1 token | 12 tokens | ~70 tokens | 16 × 12 tokens | cosine vs BF16 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `gpu` | **15.8 ms** | **25 ms** | **179 ms** | **356 ms** | 0.99933 |
+| `gpu` (default on Apple silicon) | **15.8 ms** | **25 ms** | **130 ms** | **325 ms** | 0.99933 |
 | `gpu-q4` | **11.0 ms** | 25 ms | 159 ms | 331 ms | 0.953 |
 | CPU `int8` | 28 ms | 43 ms | 150 ms | 415 ms | 0.99866 |
-| CPU exact (default) | 51 ms | 66 ms | 304 ms | 841 ms | **0.99991** |
+| CPU exact (default elsewhere) | 51 ms | 66 ms | 304 ms | 841 ms | **0.99991** |
 | llama.cpp Metal Q8_0 | 19.5 ms | 57 ms | 92 ms (64) | — | 0.99933 |
 | llama.cpp CPU Q8_0 | 31.8 ms | 90 ms | 487 ms (64) | — | 0.99929 |
 
@@ -122,10 +122,24 @@ CLM probabilities within 2.2e-4, and the 31 `Choose` probes give the same
 answers as the exact mode. It runs a 12-token text in 43 ms, one token in
 28 ms, and 16 short texts in 415 ms.
 
-## GPU
+## Backends
 
-`Options{Weights: "gpu"}` runs the model on the Apple GPU (darwin/arm64)
-through a pure-Go Metal binding (`internal/metal`, no cgo); the kernels are
+`Options{}` picks the fastest backend with no configuration: the Apple GPU
+when Metal is available, otherwise the exact CPU path. `Options.Weights`
+names one explicitly (`"f16"`, `"int8"`, `"gpu"`, `"gpu-q4"`).
+
+| M4 Max | GPU | CPU exact | CPU int8 |
+| --- | ---: | ---: | ---: |
+| `Choose`, new input | **45 ms** | 130 ms | 88 ms |
+| `ChooseBatch`, per input (16) | **42 ms** | 104 ms | 78 ms |
+| `Stream` update | **31 ms** | 85 ms | 64 ms |
+| 30-token turn on an 1800-token state | **82 ms** | 164 ms | 133 ms |
+| 1800 tokens, fresh | **3.5 s** | 7.6 s | 6.0 s |
+| `Context.Ask`, three questions | **188 ms** | 509 ms | 451 ms |
+| New turn, then `Ask` | **220 ms** | 618 ms | 456 ms |
+
+The GPU backend (darwin/arm64) runs
+a pure-Go Metal binding (`internal/metal`, no cgo); the kernels are
 Metal shading language source embedded in the package. The residual stream
 is kept in a Hadamard-rotated basis, RMSNorm weights and a per-head value
 rotation are folded into the weights at load, and each projection is stored
@@ -142,13 +156,11 @@ kernels that read each weight once per 16 or 32 tokens, splitting K across
 threadgroups when a projection alone would leave GPU cores idle.
 
 `gpu-q4` stores blocks of 32 weights as 4-bit codes with one FP16 scale,
-chosen per block to minimize rounding error. `Question`, `Stream`, and
-`Context` run on the GPU as well: prefix keys and values live in GPU memory,
-a shared question prefix is read by every input of a batch, and an extended
-prefix receives the new keys in place. On the GPU a `Choose` for a new input
-takes 45 ms, a `Stream` update 33 ms, and a 30-token turn on an 1800-token
-state 79 ms; attention over long prefixes is not yet tiled, so `Context`
-and `ChooseBatch` remain faster on the CPU.
+chosen per block to minimize rounding error. Prefix keys and values live in
+GPU memory: a shared question prefix is read by every input of a batch, and
+an extended prefix receives the new keys in place. Attention is tiled on
+simdgroup matrices, with the four query heads of a KV head sharing each key
+and value tile.
 
 ## Performance
 

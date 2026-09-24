@@ -36,3 +36,5 @@ func (m *Weights) releaseGPU() {}
 func (p *gpuPrefix) copyFrom(*gpuPrefix, int, int) {}
 
 func (p *gpuPrefix) release() {}
+
+func gpuSupports(*modelConfig) bool { return false }

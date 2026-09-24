@@ -538,3 +538,144 @@ kernel void attendM(device const float *qkv [[buffer(0)]], device const float *k
 	device float *o = ctx + m * 4096 + head * 128;
 	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
 }
+
+// attendFlash is attendM tiled for simdgroup matrices. Threadgroup (g, b)
+// serves KV head g for batch rows 8b..8b+8; simdgroup s is query head 4g+s
+// for those rows. Keys and values stream through threadgroup memory 16 rows
+// at a time, shared by the four query heads: S = Q·Kᵀ, an online softmax
+// per row with the causal and sequence masks, then O = diag(c)·O + P·V.
+constant constexpr uint FA_KB = 16; // keys per tile
+
+kernel void attendFlash(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
+		device const float *vc [[buffer(2)]], device const uint2 *info [[buffer(3)]],
+		device const float *pkc [[buffer(4)]], device const float *pvc [[buffer(5)]],
+		device float *ctx [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
+		constant uint &rows [[buffer(8)]],
+		uint2 gb [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float Kt[FA_KB * 128], Vt[FA_KB * 128];
+	threadgroup float St[4][8 * FA_KB];
+	threadgroup float Dt[4][64];
+	uint g = gb.x, m0 = gb.y * 8, head = g * 4 + sg;
+	// Query rows as 16 8×8 blocks over the head dimension; rows past the
+	// batch read row m0 (their results are never used).
+	simdgroup_float8x8 Q[16], O[16];
+	{
+		threadgroup float *qs = St[sg]; // stage 8×8 blocks through St
+		for (uint b = 0; b < 16; b++) {
+			for (uint e = lane; e < 64; e += 32) {
+				uint r = e / 8, m = min(m0 + r, rows - 1);
+				qs[e] = qkv[m * 6144 + head * 128 + b * 8 + e % 8];
+			}
+			simdgroup_barrier(mem_flags::mem_threadgroup);
+			simdgroup_load(Q[b], qs, 8);
+			simdgroup_barrier(mem_flags::mem_threadgroup);
+			O[b] = make_filled_simdgroup_matrix<float, 8, 8>(0);
+		}
+	}
+	// This lane's softmax row and columns within the 8×16 score tile.
+	uint sr = lane / 4, sc = (lane % 4) * 4;
+	uint myRow = min(m0 + sr, rows - 1);
+	uint myStart = info[myRow].y, myLast = a.base + myRow;
+	float mx = -INFINITY, l = 0;
+	// Own-key range covering every row of this block.
+	uint own0 = 0xFFFFFFFFu, own1 = 0;
+	for (uint r = 0; r < 8 && m0 + r < rows; r++) {
+		own0 = min(own0, info[m0 + r].y);
+		own1 = max(own1, a.base + m0 + r + 1);
+	}
+	for (uint pass = 0; pass < 2; pass++) {
+		device const float *ks = pass == 0 ? pkc : kc;
+		device const float *vs = pass == 0 ? pvc : vc;
+		uint j0 = pass == 0 ? 0 : own0, j1 = pass == 0 ? a.prefixLen : own1;
+		for (uint jb = j0; jb < j1; jb += FA_KB) {
+			threadgroup_barrier(mem_flags::mem_threadgroup);
+			for (uint e = tid * 4; e < FA_KB * 128; e += 128 * 4) {
+				uint j = jb + e / 128, d = e % 128;
+				float4 kv = 0, vv = 0;
+				if (j < j1) {
+					kv = *(device const float4 *)(ks + j * 1024 + g * 128 + d);
+					vv = *(device const float4 *)(vs + j * 1024 + g * 128 + d);
+				}
+				*(threadgroup float4 *)(Kt + e) = kv;
+				*(threadgroup float4 *)(Vt + e) = vv;
+			}
+			threadgroup_barrier(mem_flags::mem_threadgroup);
+			// S = Q·Kᵀ for two 8-key halves.
+			simdgroup_float8x8 S0 = make_filled_simdgroup_matrix<float, 8, 8>(0), S1 = S0;
+			for (uint b = 0; b < 16; b++) {
+				simdgroup_float8x8 K0, K1;
+				simdgroup_load(K0, Kt + b * 8, 128, ulong2(0, 0), true);
+				simdgroup_load(K1, Kt + 8 * 128 + b * 8, 128, ulong2(0, 0), true);
+				simdgroup_multiply_accumulate(S0, Q[b], K0, S0);
+				simdgroup_multiply_accumulate(S1, Q[b], K1, S1);
+			}
+			threadgroup float *st = St[sg];
+			simdgroup_store(S0, st, FA_KB);
+			simdgroup_store(S1, st + 8, FA_KB);
+			simdgroup_barrier(mem_flags::mem_threadgroup);
+			// Online softmax: four lanes share a row.
+			float s[4], rmax = -INFINITY;
+			for (uint i = 0; i < 4; i++) {
+				uint j = jb + sc + i;
+				bool ok = j < j1 && (pass == 0 || (j >= myStart && j <= myLast));
+				s[i] = ok ? st[sr * FA_KB + sc + i] : -INFINITY;
+				rmax = max(rmax, s[i]);
+			}
+			rmax = max(rmax, simd_shuffle_xor(rmax, 1));
+			rmax = max(rmax, simd_shuffle_xor(rmax, 2));
+			float mn = max(mx, rmax);
+			float corr = mn == -INFINITY ? 1 : exp(mx - mn), rsum = 0;
+			for (uint i = 0; i < 4; i++) {
+				float p = s[i] == -INFINITY ? 0 : exp(s[i] - mn);
+				st[sr * FA_KB + sc + i] = p;
+				rsum += p;
+			}
+			rsum += simd_shuffle_xor(rsum, 1);
+			rsum += simd_shuffle_xor(rsum, 2);
+			l = l * corr + rsum;
+			mx = mn;
+			threadgroup float *dt = Dt[sg];
+			for (uint e = lane; e < 64; e += 32)
+				dt[e] = 0;
+			simdgroup_barrier(mem_flags::mem_threadgroup);
+			if (lane % 4 == 0)
+				dt[sr * 9] = corr;
+			simdgroup_barrier(mem_flags::mem_threadgroup);
+			simdgroup_float8x8 D, P0, P1;
+			simdgroup_load(D, dt, 8);
+			simdgroup_load(P0, st, FA_KB);
+			simdgroup_load(P1, st + 8, FA_KB);
+			for (uint b = 0; b < 16; b++) {
+				simdgroup_float8x8 V0, V1;
+				simdgroup_load(V0, Vt + b * 8, 128);
+				simdgroup_load(V1, Vt + 8 * 128 + b * 8, 128);
+				simdgroup_multiply(O[b], D, O[b]);
+				simdgroup_multiply_accumulate(O[b], P0, V0, O[b]);
+				simdgroup_multiply_accumulate(O[b], P1, V1, O[b]);
+			}
+		}
+	}
+	// Normalize rows and store the valid ones.
+	threadgroup float *dt = Dt[sg];
+	for (uint e = lane; e < 64; e += 32)
+		dt[e] = 0;
+	simdgroup_barrier(mem_flags::mem_threadgroup);
+	if (lane % 4 == 0)
+		dt[sr * 9] = l > 0 ? 1 / l : 0;
+	simdgroup_barrier(mem_flags::mem_threadgroup);
+	simdgroup_float8x8 D;
+	simdgroup_load(D, dt, 8);
+	threadgroup float *os = St[sg];
+	for (uint b = 0; b < 16; b++) {
+		simdgroup_multiply(O[b], D, O[b]);
+		simdgroup_store(O[b], os, 8);
+		simdgroup_barrier(mem_flags::mem_threadgroup);
+		for (uint e = lane; e < 64; e += 32) {
+			uint r = e / 8;
+			if (m0 + r < rows)
+				ctx[(m0 + r) * 4096 + head * 128 + b * 8 + e % 8] = os[e];
+		}
+		simdgroup_barrier(mem_flags::mem_threadgroup);
+	}
+}
