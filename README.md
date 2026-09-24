@@ -15,6 +15,8 @@ transcripts.
   a speaker has finished talking.
 - **Built for servers:** a loaded model is shared and immutable. Each
   concurrent lane reuses its own scratch, and warm calls allocate nothing.
+- **CLM action ranking:** pure-Go CPU projection heads score state/action
+  embeddings; an optional local Qwen3-8B adapter is in `examples/clm-qwen`.
 - **Pure Go toolchain:** builds with `CGO_ENABLED=0`. Hand-written ARM64
   kernels are plain Go assembly, and every accelerated path has a portable
   fallback.
@@ -141,6 +143,21 @@ takes **3.6 ms** from PCM to prediction on an M4 Max, with no allocations
 ([details](docs/benchmarks.md)).
 
 ## Testing
+
+To check a converted `tiny.en` bundle against the pinned JFK transcript and
+full-file oracle, run:
+
+```sh
+GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic" \
+  CGO_ENABLED=0 GOEXPERIMENT=simd \
+  go test ./whisper -run '^TestTranscriberOfficialJFK$' -count=1 -v
+```
+
+For your own recording, run the CLI with `-whisper-model tiny.en.gophonic`
+and `recording.wav`; it also accepts Ogg Opus and prints `{"text":"..."}`.
+The test above requires the official `tiny.en` checkpoint; other sizes can be
+tried through the CLI but do not match that pinned oracle. CLM/Qwen ranking has
+[a separate runnable example](examples/clm-qwen/README.md).
 
 ```sh
 CGO_ENABLED=0 go test ./...

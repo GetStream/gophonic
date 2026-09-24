@@ -19,8 +19,10 @@ TEXT ·geluNEON(SB), NOSPLIT, $0-32
 	WORD	$0x72955569	// movk w9, #0xaaab
 	WORD	$0x4e040d35	// dup.4s v21, w9
 	WORD	$0x4f03f616	// fmov.4s v22, #1.00000000
+	WORD	$0x52808009	// mov w9, #0x400 ; =1024
+	WORD	$0x4e040d37	// dup.4s v23, w9
 	WORD	$0x3dc00000	// ldr q0, [x0]
-	WORD	$0xb4000061	// cbz x1, 0x34
+	WORD	$0xb4000061	// cbz x1, 0x3c
 	WORD	$0x3cc10421	// ldr q1, [x1], #0x10
 	WORD	$0x4e21d400	// fadd.4s v0, v0, v1
 	WORD	$0x4ea0f802	// fabs.4s v2, v0
@@ -28,6 +30,7 @@ TEXT ·geluNEON(SB), NOSPLIT, $0-32
 	WORD	$0x4eb3c444	// fminnm.4s v4, v2, v19
 	WORD	$0x4e30d485	// fadd.4s v5, v4, v16
 	WORD	$0x6eb184a6	// sub.4s v6, v5, v17
+	WORD	$0x6eb76cc6	// umin.4s v6, v6, v23
 	WORD	$0x4eb0d4a7	// fsub.4s v7, v5, v16
 	WORD	$0x4ea7d488	// fsub.4s v8, v4, v7
 	WORD	$0x0e043cc9	// mov.s w9, v6[0]
@@ -71,5 +74,5 @@ TEXT ·geluNEON(SB), NOSPLIT, $0-32
 	WORD	$0x6e23dc00	// fmul.4s v0, v0, v3
 	WORD	$0x3c810400	// str q0, [x0], #0x10
 	WORD	$0xf1001042	// subs x2, x2, #0x4
-	WORD	$0x54fff98c	// b.gt 0x24
+	WORD	$0x54fff96c	// b.gt 0x2c
 	RET
