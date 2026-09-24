@@ -8,25 +8,27 @@ none` and its best thread count (8).
 
 ## Results
 
-| Workload | gophonic before | llama.cpp Q8_0, CPU | gophonic now |
-| --- | ---: | ---: | ---: |
-| 1 token | 338 ms | 31.8 ms | 68 ms |
-| 12 tokens (one text) | 413 ms | 90 ms | **69–73 ms** |
-| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | **317 ms (70)** |
-| 2048 tokens (one text) | minutes | — | 8.19 s |
-| New 30-token turn on an 1800-token state | minutes | — | **203 ms** |
-| 16 texts × ~12 tokens | ≈6.6 s | — | 850 ms |
-| Rank 16 candidates, cached | 6.6 s | — | **1.7 ms** |
-| Cosine vs official BF16 (`hello`) | 0.99738 | 0.99929 | **0.99991** |
-| Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s |
+| Workload | gophonic before | llama.cpp Q8_0, CPU | exact (default) | int8 fast mode |
+| --- | ---: | ---: | ---: | ---: |
+| 1 token | 338 ms | 31.8 ms | 68 ms | **37 ms** |
+| 12 tokens (one text) | 413 ms | 90 ms | 69–73 ms | **49 ms** |
+| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | 317 ms (70) | **200 ms (70)** |
+| 2048 tokens (one text) | minutes | — | 8.19 s | — |
+| New 30-token turn on an 1800-token state | minutes | — | **203 ms** | — |
+| 16 texts × ~12 tokens | ≈6.6 s | — | 850 ms | **530 ms** |
+| `Question.Choose`, one new input | — | — | 140 ms | — |
+| `Question.ChooseBatch`, per input (16) | — | — | 94 ms | **58 ms** |
+| Rank 16 candidates, cached | 6.6 s | — | **1.7 ms** | — |
+| Cosine vs official BF16 (`hello`) | 0.99738 | 0.99929 | **0.99991** | 0.99866 |
+| CLM probability error vs official | 1.0e-3 | — | **7.1e-5** | 2.2e-4 |
+| Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s | 4.3 s |
 
-**int8 fast mode** (`Options{Weights: "int8"}`): 1 token 37 ms, 12 tokens
-49 ms, 70 tokens 200 ms, 16 texts × ~12 tokens 530 ms; cosine 0.99866 on
-`hello`, CLM probabilities within 2.2e-4 of official BF16. It rotates each
-projection's input with a randomized Hadamard transform and runs int8×int8
-`SMOPA` with exact int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms
-for FP16). GPTQ-rounded weights raise the fidelity further in an offline
-study (cosine 0.99961); that conversion is not yet part of the loader.
+The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
+with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
+int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms for FP16). Its
+answers on the 31 `Question` probes match the exact mode. GPTQ-rounded
+weights raise its fidelity further in an offline study (cosine 0.99961);
+that conversion is not yet part of the loader.
 
 All warmed paths report 0 allocs/op. “Before” is the previous single-thread
 per-row int8 path. Probabilities for the pinned CLM ranking now differ from the
