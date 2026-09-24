@@ -26,7 +26,8 @@ CGO_ENABLED=0 GOEXPERIMENT=simd go run ./cmd/rank \
 The command prints candidates in descending probability order. `-quant int8`
 is an opt-in lower-memory mode. On the current 64 GB development machine, the
 full FP32 Qwen load is refused by the decoder's memory-fit guard; int8 loads
-and embeds correctly, but its ranking accuracy still needs a corpus gate.
+through gophonic's direct int8 CPU evaluator, but its ranking accuracy still
+needs a corpus gate.
 
 This adapter is built against a pinned commit of
 [`townsendmerino/goinfer`](https://github.com/townsendmerino/goinfer), whose
@@ -36,18 +37,35 @@ The adapter checks Qwen3-8B's hidden size and layer/head geometry at load.
 Supply the exact [`Qwen/Qwen3-8B`](https://huggingface.co/Qwen/Qwen3-8B)
 checkpoint for the published CLM head. `Open` uses full FP32 weights.
 `OpenWithOptions(path, Options{Quant: "int8"})` reduces the safetensors weight
-footprint at the cost of altered embeddings. Quantized weights and GGUF
-checkpoints need a separate ranking-accuracy gate against the reference.
+footprint at the cost of altered embeddings. Int8 uses gophonic's reusable
+Qwen3 workspace and direct weight-only Q8 matvec; FP32 continues to use
+GoInfer's reference forward path. Quantized weights and GGUF checkpoints need
+a separate ranking-accuracy gate against the reference.
 
 CLM's upstream reference uses vLLM pooling. Token IDs, 4096-value embeddings,
 and final rankings must be compared with that reference before claiming parity.
-The included reference gate covers one short input; a corpus-level accuracy
-evaluation is still needed. The Qwen decoder currently
-allocates a fresh hidden vector and KV state per call, so the full text path is
-not zero allocation even when the CLM head's workspace is reused. A single
-`Encoder` serializes calls; use separate instances for concurrent lanes.
+The int8 fast-path gate compares one-token and 12-token outputs to GoInfer on the
+official checkpoint. The FP32 CLM-ranking gate covers one short input; a
+corpus-level ranking evaluation is still needed.
 
-## Reference gate
+`Encoder.EmbedTokensInto` accepts pretokenized IDs and caller-owned output. In
+int8 mode it performs zero heap allocations after the per-encoder workspace has
+warmed to the longest sequence. `Encoder.Embed` still allocates in the tokenizer.
+Calls on one encoder are serialized; use a separate encoder per concurrent lane.
+On an Apple M4 Max with `GOMAXPROCS=1`, the pretokenized int8 evaluator ran the
+one-token `hello` input in 435 ms with 0 allocations; GoInfer's `HiddenLast` on
+the same checkpoint and IDs took 959 ms with 2,418 allocations. This is a
+measured improvement over the bundled GoInfer path, not yet a claim of beating
+optimized C++ runtimes.
+
+## Reference gates
+
+Run the int8 fast evaluator's official-checkpoint parity and allocation gates with:
+
+```sh
+GOPHONIC_QWEN3_FAST_MODEL=/path/to/Qwen3-8B \
+CGO_ENABLED=0 GOEXPERIMENT=simd go test -run '^TestFastQwenOfficialParity$' -v
+```
 
 The opt-in `TestOfficialCLMRanking` runs the full Go FP32 Qwen decoder and
 converted head against the official BF16 Qwen + PyTorch head output. Regenerate

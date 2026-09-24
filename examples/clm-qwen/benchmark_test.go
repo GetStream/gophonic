@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/GetStream/gophonic/clm"
+	"github.com/townsendmerino/goinfer/tokenizer"
 )
 
 // BenchmarkOfficialQwenEmbedding measures fresh one-token text inference on the
@@ -27,6 +28,9 @@ func BenchmarkOfficialQwenEmbedding(b *testing.B) {
 	defer encoder.Close()
 	text := []string{"hello"}
 	out := [][]float32{make([]float32, hiddenSize)}
+	if err := encoder.Embed(context.Background(), clm.StateRole, text, out); err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
@@ -39,3 +43,27 @@ func BenchmarkOfficialQwenEmbedding(b *testing.B) {
 }
 
 var benchmarkHiddenSink float32
+
+func BenchmarkOfficialQwenTokenizer(b *testing.B) {
+	path := os.Getenv("GOPHONIC_QWEN3_TOKENIZER")
+	if path == "" {
+		b.Skip("set GOPHONIC_QWEN3_TOKENIZER to the official Qwen3-8B directory")
+	}
+	tok, err := tokenizer.Load(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var ids []int
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		ids, err = tok.Encode("hello", false)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	benchmarkTokenSink = len(ids)
+}
+
+var benchmarkTokenSink int
