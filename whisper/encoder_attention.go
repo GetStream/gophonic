@@ -81,6 +81,7 @@ func (a *audioAttention) run(q, k, v, dst []float32, executor *whispergemm.Execu
 // private worker scratch; query tiles are interleaved to balance the tail.
 func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
 	tilesPerHead := (a.rows + attentionTileRows - 1) / attentionTileRows
+	headSize := a.state / a.heads
 	for worker := firstWorker; worker < lastWorker; worker++ {
 		scores := a.scores[worker*attentionTileRows*a.rows : (worker+1)*attentionTileRows*a.rows]
 		for tile := worker; tile < a.heads*tilesPerHead; tile += a.workers {
@@ -92,10 +93,20 @@ func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
 				a.errors[worker] = err
 				return
 			}
-			softmaxRows(scores, rows, a.rows)
+			var inverse [attentionTileRows]float32
+			for r := 0; r < rows; r++ {
+				inverse[r] = softmaxExpRow(scores[r*a.rows : (r+1)*a.rows])
+			}
 			if err := a.values[head].Mul(a.dst[offset:], a.state, scores, a.rows, rows); err != nil {
 				a.errors[worker] = err
 				return
+			}
+			// Normalize the headSize-wide product instead of every score.
+			for r := 0; r < rows; r++ {
+				out := a.dst[offset+r*a.state : offset+r*a.state+headSize]
+				for i := range out {
+					out[i] *= inverse[r]
+				}
 			}
 		}
 	}

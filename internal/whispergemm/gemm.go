@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 // Package whispergemm provides reusable FP32 right-matrix packing and GEMM for
-// Whisper projections and attention. It has no cgo or assembly dependency.
+// Whisper projections and attention. It has no cgo dependency; on Apple
+// silicon with SME it uses a streaming-mode outer-product kernel written in
+// Go assembly.
 package whispergemm
 
 import "errors"
@@ -110,6 +112,9 @@ func (b *PackedB) mul(dst []float32, dstStride int, a []float32, aStride int, m 
 		for r := 0; r < m; r++ {
 			clear(dst[r*dstStride : r*dstStride+b.n])
 		}
+		return
+	}
+	if mulSME(dst, dstStride, a, aStride, b.data, m, b.k, b.n) {
 		return
 	}
 	mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)

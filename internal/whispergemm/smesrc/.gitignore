@@ -1,0 +1,3 @@
+gemv_f32.S
+gemv_f16.S
+*.o

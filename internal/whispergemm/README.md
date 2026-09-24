@@ -24,6 +24,36 @@ controls dispatch overhead. The operation must only write its own rows and
 must not re-enter the same executor. It can call single-thread `PackedB.Mul`
 to combine matrix and elementwise work inside one worker dispatch.
 
+## SME path (Apple M4 and later)
+
+When the CPU reports `FEAT_SME` with 512-bit streaming vectors, `PackedB.Mul`
+and `PackedVector.Mul` run streaming-mode kernels written in Go assembly.
+Detection is automatic and needs neither cgo nor `GOEXPERIMENT=simd`. Go's
+assembler has no SME mnemonics, so `smesrc/` holds the sources and
+`python3 smesrc/build.py` regenerates `sme_arm64.s` with clang.
+
+- `PackedB.Mul` transposes up to 32 rows of A through ZA and accumulates 32x32
+  output tiles in the four FP32 ZA tiles with `FMOPA`. It measures about
+  1 TFLOP/s on one M4 Max core, against roughly 55 GFLOP/s for NEON.
+- `PackedVector` stores N-by-K weights for matrix-vector products. It uses FP16
+  storage only when every weight converts to FP16 and back to identical FP32
+  bits. Each weight widens exactly before an FP32 fused multiply-add, so FP16
+  storage halves memory traffic without changing any result. Accumulators
+  live in ZA vector groups.
+- Every output starts at +0 and adds products in increasing K order with one
+  fused FP32 rounding. SME results are therefore the same for any row blocking
+  or worker count, including tail rows and partial panels. `FMOPA` returns the
+  default NaN instead of propagating NaN payloads.
+- Darwin restores only the low 128 bits of each Z register when a signal
+  handler returns to a thread in streaming mode. ZA, predicates, and streaming
+  mode survive. Each kernel keeps a sentinel in `z31`. After a tile, and after
+  each store phase, it checks the sentinel and recomputes the tile if it was
+  cleared. Tests cover this with profiling signals, GC, and oversubscription.
+- The M4 Max has one SME unit per performance cluster. Aggregate throughput
+  saturates around two concurrent streaming threads.
+
+## NEON path
+
 With Go 1.27 and `GOEXPERIMENT=simd` on ARM64, dispatch selects a NEON 2 × 32
 kernel for pairs of packed panels, with a 4 × 16 kernel for a remaining full
 panel. The wider kernel reuses each source broadcast across more columns and

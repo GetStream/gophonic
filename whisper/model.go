@@ -14,6 +14,9 @@ import (
 	"math"
 	"os"
 	"slices"
+	"sync"
+
+	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
 const (
@@ -33,7 +36,36 @@ const (
 )
 
 // Model owns validated FP32 weights for OpenAI Whisper tiny.en.
-type Model struct{ tensors map[string][]float32 }
+type Model struct {
+	tensors map[string][]float32
+
+	// vectors caches immutable matrix-vector packings shared by every
+	// decoder on this model. It is populated on first use.
+	vectorMu sync.Mutex
+	vectors  map[string]*whispergemm.PackedVector
+}
+
+// packedVector returns the shared packing of an N-by-K tensor, or nil when
+// the platform has no accelerated matrix-vector path.
+func (m *Model) packedVector(name string, rows, k int) (*whispergemm.PackedVector, error) {
+	if !whispergemm.PackedVectorAccelerated() {
+		return nil, nil
+	}
+	m.vectorMu.Lock()
+	defer m.vectorMu.Unlock()
+	if p := m.vectors[name]; p != nil {
+		return p, nil
+	}
+	p, err := whispergemm.NewPackedVector(m.tensor(name), k, rows, k)
+	if err != nil {
+		return nil, err
+	}
+	if m.vectors == nil {
+		m.vectors = make(map[string]*whispergemm.PackedVector)
+	}
+	m.vectors[name] = p
+	return p, nil
+}
 
 func (m *Model) tensor(name string) []float32 { return m.tensors[name] }
 

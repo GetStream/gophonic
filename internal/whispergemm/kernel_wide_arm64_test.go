@@ -11,6 +11,7 @@ import (
 )
 
 func TestWideGEMMPreservesFourRowOrder(t *testing.T) {
+	disableSME(t)
 	for _, shape := range [][3]int{
 		{4, 0, 32}, {4, 1, 32}, {5, 3, 33}, {6, 4, 63}, {7, 5, 64},
 		{8, 17, 65}, {9, 65, 96}, {17, 240, 384}, {16, 384, 64},
@@ -58,6 +59,7 @@ func TestWideGEMMPreservesFourRowOrder(t *testing.T) {
 }
 
 func TestWideGEMMSpecialValues(t *testing.T) {
+	disableSME(t)
 	const m, k, n = 7, 65, 64
 	a, weights := make([]float32, m*k), make([]float32, n*k)
 	values := []float32{0, math.Float32frombits(0x80000000), 1, -1, 1e20, -1e20, 1e-20, -1e-20, math.SmallestNonzeroFloat32}

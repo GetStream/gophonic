@@ -88,8 +88,9 @@ func makeDecoderTensorNames() decoderTensorNames {
 }
 
 type decoderLinear struct {
-	weight []float32 // [out,in], PyTorch row-major
-	bias   []float32 // [out], nil only for attention key projections
+	weight []float32                 // [out,in], PyTorch row-major
+	bias   []float32                 // [out], nil only for attention key projections
+	packed *whispergemm.PackedVector // shared model packing; nil without SME
 }
 
 type decoderNorm struct {
@@ -107,8 +108,9 @@ type decoderLayerWeights struct {
 }
 
 type decoderWeights struct {
-	tokenEmbedding []float32 // [VocabSize,TextState], also the output projection
-	position       []float32 // [TextContext,TextState]
+	tokenEmbedding []float32                 // [VocabSize,TextState], also the output projection
+	vocabulary     *whispergemm.PackedVector // shared packing of tokenEmbedding; nil without SME
+	position       []float32                 // [TextContext,TextState]
 	finalNorm      decoderNorm
 	layers         [TextLayers]decoderLayerWeights
 }
@@ -312,9 +314,9 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 		// Residual self attention: x += attn(attn_ln(x)). Projected K/V are
 		// stored at this position before causal attention reads the cache.
 		layerNorm(s.normalized, s.x, lw.selfNorm.weight, lw.selfNorm.bias)
-		linearInto(s.query, s.normalized, lw.selfQ.weight, lw.selfQ.bias, state, state)
-		linearInto(s.key, s.normalized, lw.selfK.weight, nil, state, state)
-		linearInto(s.value, s.normalized, lw.selfV.weight, lw.selfV.bias, state, state)
+		linearInto(s.query, s.normalized, &lw.selfQ, state, state)
+		linearInto(s.key, s.normalized, &lw.selfK, state, state)
+		linearInto(s.value, s.normalized, &lw.selfV, state, state)
 		cacheBase := (layer*TextContext + position) * state
 		scale := float32(math.Pow(float64(state/TextHeads), -0.25))
 		for d := 0; d < state; d++ {
@@ -327,30 +329,35 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 		if err := s.attend(cachedKeys, cachedValues, position+1, TextContext); err != nil {
 			return err
 		}
-		linearInto(s.projected, s.context, lw.selfOut.weight, lw.selfOut.bias, state, state)
+		linearInto(s.projected, s.context, &lw.selfOut, state, state)
 		addInto(s.x, s.projected)
 
 		// Residual cross attention: x += cross_attn(cross_attn_ln(x), audio).
 		layerNorm(s.normalized, s.x, lw.crossNorm.weight, lw.crossNorm.bias)
-		linearInto(s.query, s.normalized, lw.crossQ.weight, lw.crossQ.bias, state, state)
+		linearInto(s.query, s.normalized, &lw.crossQ, state, state)
 		crossBase := layer * AudioFrames * AudioState
 		crossEnd := crossBase + s.audioFrames*AudioState
 		if err := s.attend(s.crossKeys[crossBase:crossEnd], s.crossValues[crossBase:crossBase+AudioFrames*state], s.audioFrames, AudioFrames); err != nil {
 			return err
 		}
-		linearInto(s.projected, s.context, lw.crossOut.weight, lw.crossOut.bias, state, state)
+		linearInto(s.projected, s.context, &lw.crossOut, state, state)
 		addInto(s.x, s.projected)
 
 		// Residual MLP: x += mlp(mlp_ln(x)); PyTorch nn.GELU uses the exact erf form.
 		layerNorm(s.normalized, s.x, lw.mlpNorm.weight, lw.mlpNorm.bias)
-		linearInto(s.mlp, s.normalized, lw.mlpIn.weight, lw.mlpIn.bias, state, 4*state)
+		linearInto(s.mlp, s.normalized, &lw.mlpIn, state, 4*state)
 		geluExactInto(s.mlp)
-		linearInto(s.projected, s.mlp, lw.mlpOut.weight, lw.mlpOut.bias, 4*state, state)
+		linearInto(s.projected, s.mlp, &lw.mlpOut, 4*state, state)
 		addInto(s.x, s.projected)
 	}
 
 	layerNorm(s.normalized, s.x, weights.finalNorm.weight, weights.finalNorm.bias)
-	if s.gemm == nil {
+	if weights.vocabulary != nil {
+		// One streaming-matrix core saturates memory bandwidth here.
+		if err := weights.vocabulary.Mul(logits, s.normalized); err != nil {
+			return err
+		}
+	} else if s.gemm == nil {
 		if err := whispergemm.MulVector(logits, weights.tokenEmbedding, state, s.normalized, VocabSize); err != nil {
 			return err
 		}
@@ -422,6 +429,9 @@ func loadDecoderWeights(m *Model, dst *decoderWeights) error {
 	if dst.tokenEmbedding, err = checkedTensor(m, decoderNames.tokenEmbedding, VocabSize*TextState); err != nil {
 		return err
 	}
+	if dst.vocabulary, err = m.packedVector(decoderNames.tokenEmbedding, VocabSize, TextState); err != nil {
+		return err
+	}
 	if dst.position, err = checkedTensor(m, decoderNames.positionEmbedding, TextContext*TextState); err != nil {
 		return err
 	}
@@ -479,6 +489,9 @@ func loadLinear(m *Model, names decoderLinearNames, in, out int, dst *decoderLin
 	if dst.weight, err = checkedTensor(m, names.weight, in*out); err != nil {
 		return err
 	}
+	if dst.packed, err = m.packedVector(names.weight, out, in); err != nil {
+		return err
+	}
 	if names.bias == "" {
 		dst.bias = nil
 		return nil
@@ -508,10 +521,17 @@ func checkedTensor(m *Model, name string, size int) ([]float32, error) {
 	return t, nil
 }
 
-func linearInto(dst, x, weight, bias []float32, in, out int) {
-	if err := whispergemm.MulVector(dst, weight, in, x[:in], out); err != nil {
+func linearInto(dst, x []float32, l *decoderLinear, in, out int) {
+	var err error
+	if l.packed != nil {
+		err = l.packed.Mul(dst[:out], x[:in])
+	} else {
+		err = whispergemm.MulVector(dst, l.weight, in, x[:in], out)
+	}
+	if err != nil {
 		panic(err) // Internal callers use validated, fixed model dimensions.
 	}
+	bias := l.bias
 	if bias != nil {
 		for o := 0; o < out; o++ {
 			dst[o] += bias[o]
