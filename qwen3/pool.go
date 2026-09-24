@@ -36,6 +36,7 @@ type workerPool struct {
 	op      rangeOp
 	items   int
 	grain   int
+	each    bool // every participant calls op once with its own index
 	next    atomic.Int64
 	pending atomic.Int32 // workers that have not finished the current job
 }
@@ -48,6 +49,9 @@ type poolWorker struct {
 }
 
 const poolSpin = time.Millisecond
+
+// holdWorkers is how many participants a forward-pass hold keeps spinning.
+const holdWorkers = 8
 
 func newWorkerPool(workers int) *workerPool {
 	p := &workerPool{workers: make([]poolWorker, max(0, workers-1))}
@@ -81,7 +85,9 @@ func (p *workerPool) loop(w *poolWorker, index int) {
 			if spins&1023 == 1023 {
 				// Inside a forward pass the next dispatch is always near, so
 				// only an idle pool (no hold) parks after poolSpin.
-				if p.active.Load() > 0 || time.Since(spinStart) < poolSpin {
+				// Workers beyond the ordinary participant count only take
+				// part in co-executed projections, so they may park anyway.
+				if (p.active.Load() > 0 && index < holdWorkers) || time.Since(spinStart) < poolSpin {
 					if p.yield.Load() {
 						runtime.Gosched()
 					}
@@ -105,7 +111,11 @@ func (p *workerPool) loop(w *poolWorker, index int) {
 		if p.stop.Load() {
 			return
 		}
-		p.claim(index)
+		if p.each {
+			p.op.ApplyRows(index, index, index+1)
+		} else {
+			p.claim(index)
+		}
 		p.pending.Add(-1)
 	}
 }
@@ -129,9 +139,16 @@ func (p *workerPool) claim(worker int) {
 // run applies op to [0,items) in claims of grain items (the last may be
 // shorter).
 func (p *workerPool) run(op rangeOp, items, grain int) {
+	p.runN(op, items, grain, p.size())
+}
+
+// runN is run with at most n participants (the caller and the first n-1
+// workers); the others keep spinning or parked and are not waited for.
+func (p *workerPool) runN(op rangeOp, items, grain, n int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.workers) == 0 || items <= grain || p.stop.Load() {
+	n = max(1, min(n, p.size()))
+	if n == 1 || items <= grain || p.stop.Load() {
 		op.ApplyRows(0, 0, items)
 		return
 	}
@@ -141,8 +158,8 @@ func (p *workerPool) run(op rangeOp, items, grain int) {
 	p.yield.Store(yield)
 	p.op, p.items, p.grain = op, items, grain
 	p.next.Store(0)
-	p.pending.Store(int32(len(p.workers)))
-	for i := range p.workers {
+	p.pending.Store(int32(n - 1))
+	for i := range p.workers[:n-1] {
 		w := &p.workers[i]
 		w.generation.Add(1)
 		if w.parked.CompareAndSwap(true, false) {
@@ -170,6 +187,36 @@ func (p *workerPool) release() {
 	if p != nil {
 		p.active.Add(-1)
 	}
+}
+
+// runEach calls op.ApplyRows(worker, worker, worker+1) once on each of the
+// first n participants, for operations that schedule their own work.
+func (p *workerPool) runEach(op rangeOp, n int) {
+	n = max(1, min(n, p.size()))
+	if n == 1 || p.stop.Load() {
+		op.ApplyRows(0, 0, 1)
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	yield := len(p.workers)+1 > runtime.GOMAXPROCS(0)
+	p.yield.Store(yield)
+	p.op, p.each = op, true
+	p.pending.Store(int32(n - 1))
+	for i := range p.workers[:n-1] {
+		w := &p.workers[i]
+		w.generation.Add(1)
+		if w.parked.CompareAndSwap(true, false) {
+			w.wake <- struct{}{}
+		}
+	}
+	op.ApplyRows(0, 0, 1)
+	for spins := 0; p.pending.Load() != 0; spins++ {
+		if yield && spins&255 == 255 {
+			runtime.Gosched()
+		}
+	}
+	p.op, p.each = nil, false
 }
 
 func (p *workerPool) close() {

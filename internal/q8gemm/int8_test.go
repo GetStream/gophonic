@@ -140,3 +140,64 @@ func BenchmarkInt8VsF16Kernel(b *testing.B) {
 		b.ReportMetric(float64(rows*k*n)*float64(b.N)/b.Elapsed().Seconds()/1e9, "GMAC/s")
 	})
 }
+
+// TestInt8StripsMatchSMEBitForBit checks that NEON strips and SME panels give
+// identical results, so a matrix can be split between them.
+func TestInt8StripsMatchSMEBitForBit(t *testing.T) {
+	for _, shape := range [][3]int{{1, 64, 64}, {8, 128, 128}, {12, 4096, 1024}, {16, 257, 200}, {5, 12288, 64}, {3, 36, 30}} {
+		rows, k, n := shape[0], shape[1], shape[2]
+		t.Run(shapeName(rows, k, n), func(t *testing.T) {
+			w, _, _ := int8Fixture(t, k, n, int64(k+7*n))
+			rng := rand.New(rand.NewSource(int64(rows * k)))
+			x := make([]float32, rows*k)
+			for i := range x {
+				x[i] = float32(rng.NormFloat64()) * float32(1+i%3)
+			}
+			ws, _ := NewWorkspaceI8(k)
+			packI8(t, ws, x, rows, k)
+			want := make([]float32, rows*n)
+			scalarMulPanelsI8(want, n, ws, w, 0, w.Panels())
+			got := make([]float32, rows*n)
+			for i := range got {
+				got[i] = -1
+			}
+			if err := MulStripsI8(got, n, ws, w, 0, w.Strips()); err != nil {
+				t.Fatal(err)
+			}
+			for i := range got {
+				if got[i] != want[i] {
+					t.Fatalf("output %d: strip %g, oracle %g", i, got[i], want[i])
+				}
+			}
+			if allocs := testing.AllocsPerRun(5, func() {
+				_ = MulStripsI8(got, n, ws, w, 0, w.Strips())
+			}); allocs != 0 {
+				t.Fatalf("strips allocated %.1f times", allocs)
+			}
+		})
+	}
+}
+
+func BenchmarkInt8StripVsPanel(b *testing.B) {
+	const rows, k, n = 16, 4096, 1024
+	w, _, _ := int8Fixture(b, k, n, 3)
+	x := make([]float32, rows*k)
+	for i := range x {
+		x[i] = float32(i%13) - 6
+	}
+	ws, _ := NewWorkspaceI8(k)
+	packI8(b, ws, x, rows, k)
+	dst := make([]float32, rows*n)
+	b.Run("neon-strips", func(b *testing.B) {
+		for b.Loop() {
+			_ = MulStripsI8(dst, n, ws, w, 0, w.Strips())
+		}
+		b.ReportMetric(float64(rows*k*n)*float64(b.N)/b.Elapsed().Seconds()/1e9, "GMAC/s")
+	})
+	b.Run("sme-panels", func(b *testing.B) {
+		for b.Loop() {
+			_ = MulPanelsI8(dst, n, ws, w, 0, w.Panels())
+		}
+		b.ReportMetric(float64(rows*k*n)*float64(b.N)/b.Elapsed().Seconds()/1e9, "GMAC/s")
+	})
+}

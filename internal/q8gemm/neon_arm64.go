@@ -29,6 +29,25 @@ func packRowQuads(dst []int8, src []float32, quads int, scale float32) int {
 	return vector
 }
 
+// stripI8NEON computes up to 8 rows by 8 columns of the int8 product with
+// NEON SDOT; see smesrc/strip8x8i8.S.
+//
+//go:noescape
+func stripI8NEON(w *int8, quads int, act *int8, dst *float32, strideBytes, rows int, colScales, rowScales *float32)
+
+// stripI8 computes 16 columns starting at col for every packed row.
+func stripI8(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, col int) bool {
+	panel, within := col/OutputPanel, col%OutputPanel
+	base := panel*w.quads*4*OutputPanel + within*4
+	for half := 0; half < StripColumns; half += 8 {
+		for r0 := 0; r0 < ws.rows; r0 += 8 {
+			stripI8NEON(&w.q[base+half*4], w.quads, &ws.activation[r0*4], &dst[r0*stride+col+half],
+				4*stride, min(8, ws.rows-r0), &w.scales[col+half], &ws.rowScale[r0])
+		}
+	}
+	return true
+}
+
 // maxAbsNEON returns the largest magnitude of n values; n must be a multiple
 // of 16. A NaN input yields NaN.
 //

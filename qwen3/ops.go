@@ -5,6 +5,7 @@ package qwen3
 
 import (
 	"math"
+	"sync/atomic"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/whispergemm"
@@ -52,6 +53,12 @@ type layerOp struct {
 	panels   int       // opProject
 	proj     [3]projection
 	panelEnd [3]int
+	// Projection claims: the low 32 bits hold the next panel SME workers take
+	// from the front, the high 32 bits the end of the strips NEON workers
+	// take from the back (4 strips of 16 columns per panel).
+	claims     atomic.Uint64
+	smeWorkers int  // participants below this index run SME panels
+	coexec     bool // participants from smeWorkers on run NEON strips
 }
 
 // ApplyRows implements rangeOp.
@@ -64,7 +71,7 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 	case opPack:
 		o.pack(start, end)
 	case opProject:
-		o.project(worker, start, end)
+		o.projectClaims(worker)
 	case opQKRope:
 		o.qkRope(start, end)
 	case opAttention:
@@ -137,37 +144,83 @@ func (o *layerOp) pack(start, end int) {
 	}
 }
 
-// project handles whole panels: each item computes one 64-column panel for
-// every 16-row tile, so the panel's weights (at most a few MiB) stay in the
-// core's L2 cache across tiles instead of streaming from DRAM once per tile.
-func (o *layerOp) project(worker, start, end int) {
+const stripsPerPanel = q8gemm.OutputPanel / q8gemm.StripColumns
+
+// projectClaims is one participant's share of a projection. SME workers
+// claim whole 64-column panels from the front; with co-execution, NEON
+// workers claim 16-column strips from the back. One compare-and-swap word
+// holds both ends, so neither side ever takes columns the other has claimed.
+// Each claim covers every 16-row tile, so a panel's weights stay in cache
+// across tiles. int8 results are bit-identical on both sides.
+func (o *layerOp) projectClaims(worker int) {
+	sme := worker < o.smeWorkers
+	if !sme && !o.coexec {
+		return
+	}
+	for {
+		old := o.claims.Load()
+		front, back := uint32(old), uint32(old>>32)
+		if sme {
+			if int(front) >= o.panels || (front+1)*stripsPerPanel > back {
+				return
+			}
+			if o.claims.CompareAndSwap(old, uint64(back)<<32|uint64(front+1)) {
+				o.projectPanel(worker, int(front))
+			}
+			continue
+		}
+		if back == 0 || back-1 < front*stripsPerPanel {
+			return
+		}
+		if o.claims.CompareAndSwap(old, uint64(back-1)<<32|uint64(front)) {
+			o.projectStrip(int(back - 1))
+		}
+	}
+}
+
+// projection returns the projection holding global panel, and its first panel.
+func (o *layerOp) projection(panel int) (projection, int) {
+	m := 0
+	for panel >= o.panelEnd[m] {
+		m++
+	}
+	first := 0
+	if m > 0 {
+		first = o.panelEnd[m-1]
+	}
+	return o.proj[m], first
+}
+
+func (o *layerOp) projectPanel(worker, panel int) {
 	tiles := (o.rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
-	for panel := start; panel < end; {
-		m := 0
-		for panel >= o.panelEnd[m] {
-			m++
+	p, first := o.projection(panel)
+	_, n := p.l.dims()
+	for tile := range tiles {
+		dst := p.dst[tile*q8gemm.ActivationRows*n:]
+		var err error
+		if p.l.i8 != nil {
+			err = q8gemm.MulPanelsI8(dst, n, o.ws.tilesI8[tile], p.l.i8, panel-first, panel-first+1)
+		} else {
+			err = q8gemm.MulPanels(dst, n, o.ws.tiles[tile], p.l.f16, panel-first, panel-first+1, o.ws.scratch[worker])
 		}
-		first := 0
-		if m > 0 {
-			first = o.panelEnd[m-1]
+		if err != nil {
+			panic("qwen3: packed projection: " + err.Error())
 		}
-		// Stop at the end of this projection or of the range.
-		stop := min(o.panelEnd[m], end)
-		p := o.proj[m]
-		_, n := p.l.dims()
-		for tile := range tiles {
-			dst := p.dst[tile*q8gemm.ActivationRows*n:]
-			var err error
-			if p.l.i8 != nil {
-				err = q8gemm.MulPanelsI8(dst, n, o.ws.tilesI8[tile], p.l.i8, panel-first, stop-first)
-			} else {
-				err = q8gemm.MulPanels(dst, n, o.ws.tiles[tile], p.l.f16, panel-first, stop-first, o.ws.scratch[worker])
-			}
-			if err != nil {
-				panic("qwen3: packed projection: " + err.Error())
-			}
+	}
+}
+
+func (o *layerOp) projectStrip(strip int) {
+	tiles := (o.rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
+	p, first := o.projection(strip / stripsPerPanel)
+	local := strip - first*stripsPerPanel
+	if local >= p.l.i8.Strips() {
+		return // beyond the last column of a partial panel
+	}
+	_, n := p.l.dims()
+	for tile := range tiles {
+		if err := q8gemm.MulStripsI8(p.dst[tile*q8gemm.ActivationRows*n:], n, o.ws.tilesI8[tile], p.l.i8, local, local+1); err != nil {
+			panic("qwen3: packed projection: " + err.Error())
 		}
-		panel = stop
 	}
 }
 

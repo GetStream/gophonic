@@ -197,3 +197,45 @@ func scalarMulPanelsI8(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8,
 		}
 	}
 }
+
+// StripColumns is the width of one MulStripsI8 unit.
+const StripColumns = 16
+
+// Strips returns the number of 16-column strips.
+func (w *WeightsI8) Strips() int { return (w.n + StripColumns - 1) / StripColumns }
+
+// MulStripsI8 computes output columns [s0*16, min(s1*16, N)) like
+// MulPanelsI8, on the calling core's NEON units instead of the shared SME
+// unit. Integer sums and the scale order match the SME kernel, so results
+// are bit-identical and a matrix may be split between the two. It does not
+// allocate.
+func MulStripsI8(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, s0, s1 int) error {
+	if w == nil || ws == nil || ws.k != w.k || s0 < 0 || s1 > w.Strips() || s0 > s1 || stride < w.n {
+		return ErrDimensions
+	}
+	if ws.rows == 0 || s0 == s1 {
+		return nil
+	}
+	if len(dst) < (ws.rows-1)*stride+w.n {
+		return ErrDimensions
+	}
+	for s := s0; s < s1; s++ {
+		col := s * StripColumns
+		if col+StripColumns > w.n || w.k == 0 || !stripI8(dst, stride, ws, w, col) {
+			scalarColumnsI8(dst, stride, ws, w, col, min(col+StripColumns, w.n))
+		}
+	}
+	return nil
+}
+
+func scalarColumnsI8(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, c0, c1 int) {
+	for col := c0; col < c1; col++ {
+		for row := range ws.rows {
+			var sum int32
+			for k := range w.k {
+				sum += int32(ws.activation[(k/4)*4*ActivationRows+row*4+k%4]) * int32(w.at(col, k))
+			}
+			dst[row*stride+col] = float32(sum) * w.scales[col] * ws.rowScale[row]
+		}
+	}
+}

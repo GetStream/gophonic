@@ -10,3 +10,5 @@ func packRowPairs([]uint16, []float32, int, float32) int { return 0 }
 func maxAbsPrefix([]float32) (float32, int) { return 0, 0 }
 
 func packRowQuads([]int8, []float32, int, float32) int { return 0 }
+
+func stripI8([]float32, int, *WorkspaceI8, *WeightsI8, int) bool { return false }

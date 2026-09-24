@@ -28,10 +28,10 @@ const (
 	// one Embed call share 16-row matrix tiles up to this budget; a single
 	// longer text runs alone.
 	batchTokens = 512
-	// defaultMaxThreads caps the default worker count. On an M4 Max, the two
-	// performance clusters' SME units saturate near eight streaming threads;
-	// more threads only add contention to every layer's barriers.
-	defaultMaxThreads = 8
+	// defaultMaxThreads caps the default worker count. At most eight workers
+	// run SME at once (more only add contention); the rest take NEON strips
+	// of multi-tile int8 projections and share the elementwise stages.
+	defaultMaxThreads = 16
 	// defaultCacheEntries sizes the exact embedding cache (16 KiB each).
 	defaultCacheEntries = 4096
 	// prefixMinTokens is the text length from which inputs are evaluated
@@ -66,7 +66,7 @@ type Model struct {
 // (the default: every BF16 checkpoint weight exactly) or WeightsInt8 (per-row
 // int8, half the memory, lower fidelity). Threads bounds the worker
 // goroutines, including the caller; zero selects min(performance cores,
-// GOMAXPROCS, 8). CacheEntries sizes an exact cache of finished embeddings
+// GOMAXPROCS). CacheEntries sizes an exact cache of finished embeddings
 // keyed by token IDs (16 KiB per entry): zero selects 4096 entries, and a
 // negative value disables it. A hit returns exactly the vector a fresh
 // evaluation would produce.
