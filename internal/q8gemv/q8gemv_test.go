@@ -129,6 +129,14 @@ func TestMulIntoZeroAllocs(t *testing.T) {
 }
 
 func BenchmarkMulInto(b *testing.B) {
+	benchmarkMulInto(b, false)
+}
+
+func BenchmarkMulIntoScalar(b *testing.B) {
+	benchmarkMulInto(b, true)
+}
+
+func benchmarkMulInto(b *testing.B, scalar bool) {
 	for _, k := range []int{4096, 14336} {
 		b.Run(testShape(k, 4096), func(b *testing.B) {
 			rng := rand.New(rand.NewSource(int64(k)))
@@ -149,7 +157,11 @@ func BenchmarkMulInto(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				MulInto(x, q, scales, dst, k, len(dst))
+				if scalar {
+					scalarMulInto(x, q, scales, dst, k, len(dst))
+				} else {
+					MulInto(x, q, scales, dst, k, len(dst))
+				}
 			}
 		})
 	}

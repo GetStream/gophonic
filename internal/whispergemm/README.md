@@ -59,7 +59,7 @@ kernel for pairs of packed panels, with a 4 × 16 kernel for a remaining full
 panel. The wider kernel reuses each source broadcast across more columns and
 preserves increasing-K FMA order. Final one-to-three-row tails retain their
 existing reduction streams, so executor worker counts keep identical results.
-AMD64 v3 builds with `GOEXPERIMENT=simd` select an AVX2/FMA 2 × 16 kernel,
+AMD64 v3 builds with `GOEXPERIMENT=simd` select an AVX2/FMA 4 × 16 kernel with 2 × 16 row tails,
 with four independent reduction streams for one-row decoder work. AMD64 v1/v2
 and other builds use the scalar 4 × 4 kernel. All paths are pure Go. The
 SIMD kernel uses fused FP32 multiply-add; its single-row path uses four

@@ -22,6 +22,8 @@ jobs:
       - name: CPU
         run: lscpu | grep -E 'Model name|Architecture|Flags'
       - name: Native SIMD and executor tests
-        run: go test ./internal/whispergemm ./whisper -count=5
+        run: go test ./internal/whispergemm ./internal/q8gemm ./internal/q8gemv ./whisper -count=5
       - name: Native packed matrix and vector benchmarks
-        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector)$' -benchtime=100ms -count=3 -benchmem
+        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar)$' -benchtime=100ms -count=3 -benchmem
+      - name: Native int8 vector benchmarks
+        run: go test ./internal/q8gemv -run '^$' -bench '^BenchmarkMulInto' -benchtime=100ms -count=3 -benchmem

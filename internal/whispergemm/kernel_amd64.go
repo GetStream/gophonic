@@ -7,17 +7,27 @@ package whispergemm
 
 import "simd/archsimd"
 
-const kernelName = "amd64-avx-2x16-1x16"
+const kernelName = "amd64-avx-4x16-2x16-1x16"
 
 // The packed panels already put sixteen output columns next to each other.
-// Two rows reuse each weight load while keeping four accumulators, two weight
-// vectors, and two broadcasts within amd64's sixteen vector registers.
+// Four rows reuse each weight load across eight accumulators. Two-row tails
+// use a smaller tile; one-row decoder work has separate reduction streams.
 func mulPacked(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int) {
 	for c := 0; c < n; c += panelColumns {
 		width := min(panelColumns, n-c)
 		weights := packed[c*k : (c+panelColumns)*k]
 		r := 0
 		if width == panelColumns {
+			for ; r+4 <= m; r += 4 {
+				kernel4x16AMD64(
+					a[r*aStride:r*aStride+k], a[(r+1)*aStride:(r+1)*aStride+k],
+					a[(r+2)*aStride:(r+2)*aStride+k], a[(r+3)*aStride:(r+3)*aStride+k], weights,
+					dst[r*dstStride+c:r*dstStride+c+panelColumns],
+					dst[(r+1)*dstStride+c:(r+1)*dstStride+c+panelColumns],
+					dst[(r+2)*dstStride+c:(r+2)*dstStride+c+panelColumns],
+					dst[(r+3)*dstStride+c:(r+3)*dstStride+c+panelColumns],
+				)
+			}
 			for ; r+2 <= m; r += 2 {
 				kernel2x16AMD64(
 					a[r*aStride:r*aStride+k], a[(r+1)*aStride:(r+1)*aStride+k], weights,
@@ -30,6 +40,36 @@ func mulPacked(dst []float32, dstStride int, a []float32, aStride int, packed []
 			kernel1x16AMD64(a[r*aStride:r*aStride+k], weights, dst[r*dstStride+c:r*dstStride+c+width])
 		}
 	}
+}
+
+//go:nosplit
+func kernel4x16AMD64(a0, a1, a2, a3, weights, d0, d1, d2, d3 []float32) {
+	var c00, c01, c10, c11, c20, c21, c30, c31 archsimd.Float32x8
+	for p := range a0 {
+		w := weights[p*panelColumns:]
+		lo := archsimd.LoadFloat32x8(w)
+		hi := archsimd.LoadFloat32x8(w[8:])
+		x := archsimd.BroadcastFloat32x8(a0[p])
+		c00 = lo.MulAdd(x, c00)
+		c01 = hi.MulAdd(x, c01)
+		x = archsimd.BroadcastFloat32x8(a1[p])
+		c10 = lo.MulAdd(x, c10)
+		c11 = hi.MulAdd(x, c11)
+		x = archsimd.BroadcastFloat32x8(a2[p])
+		c20 = lo.MulAdd(x, c20)
+		c21 = hi.MulAdd(x, c21)
+		x = archsimd.BroadcastFloat32x8(a3[p])
+		c30 = lo.MulAdd(x, c30)
+		c31 = hi.MulAdd(x, c31)
+	}
+	c00.StoreArray((*[8]float32)(d0[:8]))
+	c01.StoreArray((*[8]float32)(d0[8:16]))
+	c10.StoreArray((*[8]float32)(d1[:8]))
+	c11.StoreArray((*[8]float32)(d1[8:16]))
+	c20.StoreArray((*[8]float32)(d2[:8]))
+	c21.StoreArray((*[8]float32)(d2[8:16]))
+	c30.StoreArray((*[8]float32)(d3[:8]))
+	c31.StoreArray((*[8]float32)(d3[8:16]))
 }
 
 //go:nosplit
