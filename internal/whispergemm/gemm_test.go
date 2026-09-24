@@ -37,6 +37,8 @@ func TestMulAgainstIndependentOracle(t *testing.T) {
 		{4, 7, 15}, {5, 8, 16}, {7, 9, 17}, {8, 63, 7},
 		{9, 64, 8}, {5, 65, 9}, {7, 384, 17}, {5, 1536, 9},
 		{1500, 3, 8}, {1, 64, 1500},
+		{4, 0, 32}, {4, 1, 32}, {5, 3, 33}, {6, 4, 63},
+		{7, 5, 64}, {8, 17, 65}, {9, 65, 96}, {5, 1500, 32},
 	}
 	for _, shape := range shapes {
 		m, k, n := shape[0], shape[1], shape[2]
@@ -104,7 +106,7 @@ func TestMulAgainstIndependentOracle(t *testing.T) {
 func TestMulExactDyadicTails(t *testing.T) {
 	for m := 1; m <= 9; m++ {
 		for k := 1; k <= 17; k++ {
-			for n := 1; n <= 19; n++ {
+			for n := 1; n <= 35; n++ {
 				a, w := make([]float32, m*k), make([]float32, n*k)
 				for i := range a {
 					a[i] = float32(i%19-9) / 16

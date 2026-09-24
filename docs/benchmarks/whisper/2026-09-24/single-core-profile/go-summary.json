@@ -1,0 +1,30 @@
+{
+  "total_median_ms": 827.6825415,
+  "stage_medians_ms": {
+    "frontend": 10.6050835,
+    "encoder": 668.4728125,
+    "cross_kv": 57.3371455,
+    "tokens": 90.5458335,
+    "encoder_stem": 32.730313,
+    "encoder_final_norm": 1.83275,
+    "encoder_attn_norm": 7.3317295,
+    "encoder_qkv": 83.312229,
+    "encoder_attention": 261.212938,
+    "encoder_out": 29.185646,
+    "encoder_mlp_norm": 7.347604,
+    "encoder_mlp_expand": 107.957563,
+    "encoder_mlp_gelu": 26.1657925,
+    "encoder_mlp_contract": 108.7272495,
+    "encoder_mlp_residual": 1.918125,
+    "attention_pack": 3.409166,
+    "attention_qk": 110.157312,
+    "attention_softmax": 41.429055,
+    "attention_pv": 105.7098795,
+    "decoder_self": 5.6618145,
+    "decoder_cross": 30.737875,
+    "decoder_mlp": 12.8517075,
+    "decoder_vocabulary": 38.0322495,
+    "cross_kv_matmul": 53.9514375,
+    "cross_kv_layout": 3.3960005
+  }
+}

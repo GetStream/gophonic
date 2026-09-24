@@ -102,7 +102,14 @@ func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
 }
 
 func softmaxRows(values []float32, rows, columns int) {
-	for row := 0; row < rows; row++ {
+	row := 0
+	for ; row+4 <= rows; row += 4 {
+		softmaxFourRows(
+			values[row*columns:(row+1)*columns], values[(row+1)*columns:(row+2)*columns],
+			values[(row+2)*columns:(row+3)*columns], values[(row+3)*columns:(row+4)*columns],
+		)
+	}
+	for ; row < rows; row++ {
 		softmaxRow(values[row*columns : (row+1)*columns])
 	}
 }

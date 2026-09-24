@@ -24,8 +24,12 @@ controls dispatch overhead. The operation must only write its own rows and
 must not re-enter the same executor. It can call single-thread `PackedB.Mul`
 to combine matrix and elementwise work inside one worker dispatch.
 
-With Go 1.27 and `GOEXPERIMENT=simd` on ARM64, dispatch selects a NEON 4 × 16
-kernel. Other builds use a scalar 4 × 4 kernel. Both paths are pure Go. The
+With Go 1.27 and `GOEXPERIMENT=simd` on ARM64, dispatch selects a NEON 2 × 32
+kernel for pairs of packed panels, with a 4 × 16 kernel for a remaining full
+panel. The wider kernel reuses each source broadcast across more columns and
+preserves increasing-K FMA order. Final one-to-three-row tails retain their
+existing reduction streams, so executor worker counts keep identical results.
+Other builds use a scalar 4 × 4 kernel. Both paths are pure Go. The
 SIMD kernel uses fused FP32 multiply-add; its single-row path uses four
 independent reduction streams. The scalar path accumulates in increasing K
 order and permits compiler-fused FP32 multiply-add. Results therefore need

@@ -264,3 +264,22 @@ func TestTranscriberRejectsClosedAndLongWindow(t *testing.T) {
 		t.Fatalf("closed worker error = %v", err)
 	}
 }
+
+func TestTranscriberExplicitWorkerBudget(t *testing.T) {
+	for _, workers := range []int{0, 65} {
+		if _, err := NewTranscriberWithWorkers(&Model{}, workers); err == nil {
+			t.Fatalf("accepted %d workers", workers)
+		}
+	}
+	worker, err := NewTranscriberWithWorkers(&Model{}, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if got := worker.encoder.attention.workers; got != 12 {
+		t.Fatalf("encoder has %d workers, want 12", got)
+	}
+	if worker.decoder.gemm != worker.encoder.gemm {
+		t.Fatal("decoder does not share the configured encoder executor")
+	}
+}

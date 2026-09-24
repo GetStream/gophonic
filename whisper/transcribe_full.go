@@ -73,7 +73,11 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 			if err != nil {
 				return dst, err
 			}
-			logprob += math.Log(tokenProbability(t.logits, next))
+			// The silence rule below only consults average log probability
+			// when the prompt's no-speech probability exceeds its threshold.
+			if noSpeech > 0.6 {
+				logprob += math.Log(tokenProbability(t.logits, next))
+			}
 			t.tokens = append(t.tokens, next)
 			if next == t.tokenizer.EOT() {
 				break

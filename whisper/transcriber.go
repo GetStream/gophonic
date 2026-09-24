@@ -3,7 +3,10 @@
 
 package whisper
 
-import "errors"
+import (
+	"errors"
+	"runtime"
+)
 
 const WindowSamples = 30 * 16000
 
@@ -35,24 +38,38 @@ type Transcriber struct {
 	closed       bool
 }
 
-// NewTranscriber prepares one reusable tiny.en worker.
+// NewTranscriber prepares one reusable tiny.en worker with at most eight
+// execution slots, capped by GOMAXPROCS.
 func NewTranscriber(model *Model) (*Transcriber, error) {
+	return NewTranscriberWithWorkers(model, min(runtime.GOMAXPROCS(0), 8))
+}
+
+// NewTranscriberWithWorkers prepares one reusable tiny.en worker with an
+// explicit CPU slot count, including the caller. The count must be 1 through
+// 64. Use one Transcriber per concurrent caller and Close it when finished.
+func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) {
 	if model == nil {
 		return nil, ErrDecoderNilModel
 	}
+	encoder, err := NewEncoderWorkspaceWithWorkers(workers)
+	if err != nil {
+		return nil, err
+	}
 	tokenizer, err := NewTokenizer(EnglishOnly)
 	if err != nil {
+		encoder.Close()
 		return nil, err
 	}
 	policy, err := NewGreedyPolicy(tokenizer, GreedyOptions{WithoutTimestamps: true})
 	if err != nil {
+		encoder.Close()
 		return nil, err
 	}
 	worker := &Transcriber{
 		model:        model,
 		frontend:     NewFeatureWorkspace(),
 		fullFrontend: NewFullFeatureWorkspace(),
-		encoder:      NewEncoderWorkspace(),
+		encoder:      encoder,
 		decoder:      NewDecoderScratch(),
 		tokenizer:    tokenizer,
 		policy:       policy,
