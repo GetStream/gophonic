@@ -71,6 +71,9 @@ func NewWeightsF16(k, n int) (*Weights, error) {
 		return nil, ErrDimensions
 	}
 	w.h = make([]uint16, w.panels*w.pairs*2*OutputPanel)
+	if !usingSME() && k > 0 && n > 0 {
+		prepareF16Table()
+	}
 	return w, nil
 }
 

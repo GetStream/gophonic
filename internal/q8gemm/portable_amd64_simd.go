@@ -7,8 +7,11 @@ package q8gemm
 
 import "simd/archsimd"
 
+const portableKernelName = "amd64-avx2-fma"
+
 // fmaPanel retains the existing packed weight layout and reduction order.
 // Eight adjacent output columns share one AVX2/FMA operation.
+//
 //go:nosplit
 func fmaPanel(acc, w *[OutputPanel]float32, a float32) {
 	s := archsimd.BroadcastFloat32x8(a)

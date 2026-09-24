@@ -5,6 +5,8 @@
 
 package q8gemm
 
+const portableKernelName = "scalar"
+
 // fmaPanel computes acc += a*w over one 64-column panel.
 func fmaPanel(acc, w *[OutputPanel]float32, a float32) {
 	for c := range acc {

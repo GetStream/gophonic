@@ -7,6 +7,8 @@ package q8gemm
 
 import "simd/archsimd"
 
+const portableKernelName = "arm64-neon"
+
 // fmaPanel computes acc += a*w over one 64-column panel.
 func fmaPanel(acc, w *[OutputPanel]float32, a float32) {
 	s := archsimd.BroadcastFloat32x4(a)
