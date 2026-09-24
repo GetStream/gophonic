@@ -135,6 +135,7 @@ type DecoderScratch struct {
 	// cache packed for the streaming GEMV kernel; nil without SME.
 	crossKeyVec   []*whispergemm.PackedVector
 	crossValueVec []*whispergemm.PackedVector
+	encoderT      *whispergemm.PackedB        // encoder^T for transposed key projection
 	layerKeys     []*whispergemm.PackedVector // current layer's packed heads, if any
 	layerValues   []*whispergemm.PackedVector
 	crossKey      []*whispergemm.PackedB
@@ -297,6 +298,15 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 
 	frames := len(encoder) / audioState
 	scale := float32(math.Pow(float64(textState/textHeads), -0.25))
+	if s.crossKeyVec != nil && frames == AudioFrames {
+		if err := s.beginPacked(encoder, scale); err != nil {
+			return err
+		}
+		s.audioFrames = frames
+		s.nextPos = 0
+		s.ready = true
+		return nil
+	}
 	for layer := 0; layer < textLayers; layer++ {
 		base := layer * AudioFrames * audioState
 		keys := s.crossKeys[base : base+frames*audioState]
@@ -334,6 +344,47 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 	s.audioFrames = frames
 	s.nextPos = 0 // Old self-KV entries at positions >= 0 are overwritten before read.
 	s.ready = true
+	return nil
+}
+
+// beginPacked projects the cross-attention cache straight into the per-head
+// streaming GEMV layout. Keys are computed transposed, as Wk * encoder^T, so
+// each head's frames are contiguous; values keep [frame,state] so each head's
+// dimensions are contiguous. The SME GEMM sums every output in the same K
+// order either way, so keys are bit-identical to the untransposed product.
+func (s *DecoderScratch) beginPacked(encoder []float32, scale float32) error {
+	d := s.dims
+	state, heads := d.TextState, d.TextHeads
+	headSize := state / heads
+	if s.encoderT == nil {
+		var err error
+		if s.encoderT, err = whispergemm.NewPackedB(state, AudioFrames); err != nil {
+			return err
+		}
+	}
+	if err := s.encoderT.Pack(encoder, state, true); err != nil {
+		return err
+	}
+	keysT := s.crossKeys[:state*AudioFrames] // scratch: [state, frames]
+	values := s.crossTemp[:AudioFrames*state]
+	for layer := 0; layer < d.TextLayers; layer++ {
+		w := &s.weights.layers[layer]
+		if err := s.multiply(s.encoderT, keysT, AudioFrames, w.crossK.weight, state, state); err != nil {
+			return err
+		}
+		if err := s.multiply(s.crossValue[layer], values, state, encoder, state, AudioFrames); err != nil {
+			return err
+		}
+		for head := 0; head < heads; head++ {
+			i := layer*heads + head
+			if err := s.crossKeyVec[i].RepackColumns(keysT[head*headSize*AudioFrames:], AudioFrames, AudioFrames, headSize, scale, nil); err != nil {
+				return err
+			}
+			if err := s.crossValueVec[i].RepackColumns(values[head*headSize:], state, headSize, AudioFrames, 1, w.crossV.bias[head*headSize:]); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

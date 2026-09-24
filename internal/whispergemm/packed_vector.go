@@ -86,6 +86,57 @@ func (p *PackedVector) RepackShape(weights []float32, stride, rows, k int) error
 	return nil
 }
 
+// RepackColumns fills FP32 storage with a rows-by-K matrix whose element
+// (row, col) is src[col*stride+row]*scale + bias[row]. Consecutive rows are
+// adjacent in src, so each packed lane group is a contiguous copy. A scale of
+// one and a nil bias leave values unchanged. It allocates nothing.
+func (p *PackedVector) RepackColumns(src []float32, stride, rows, k int, scale float32, bias []float32) error {
+	if p.w32 == nil || rows < 0 || k < 0 || !validMatrix(src, k, rows, stride) || (bias != nil && len(bias) < rows) {
+		return ErrShape
+	}
+	kp := (k + 3) &^ 3
+	groups := (rows + vectorGroup - 1) / vectorGroup
+	if groups*vectorGroup*kp > cap(p.w32) {
+		return ErrShape
+	}
+	p.n, p.k, p.kp = rows, k, kp
+	p.w32 = p.w32[:cap(p.w32)]
+	for first := 0; first < groups; first += vectorChunkGroup {
+		g := min(vectorChunkGroup, groups-first)
+		base := first * vectorGroup * kp
+		for c := 0; c < kp; c++ {
+			for gi := 0; gi < g; gi++ {
+				dst := p.w32[base+(c*g+gi)*vectorGroup : base+(c*g+gi+1)*vectorGroup]
+				row0 := (first + gi) * vectorGroup
+				width := min(vectorGroup, rows-row0)
+				if c >= k {
+					clear(dst)
+					continue
+				}
+				in := src[c*stride+row0 : c*stride+row0+width]
+				switch {
+				case bias != nil:
+					b := bias[row0 : row0+width]
+					for i, v := range in {
+						if scale != 1 {
+							v *= scale
+						}
+						dst[i] = v + b[i]
+					}
+				case scale != 1:
+					for i, v := range in {
+						dst[i] = v * scale
+					}
+				default:
+					copy(dst, in)
+				}
+				clear(dst[width:])
+			}
+		}
+	}
+	return nil
+}
+
 func (p *PackedVector) pack(weights []float32, stride, rows, k int, allowHalf bool) error {
 	if rows < 0 || k < 0 || !validMatrix(weights, rows, k, stride) {
 		return ErrShape

@@ -174,6 +174,58 @@ func TestPackedVectorRepackShape(t *testing.T) {
 	}
 }
 
+func TestPackedVectorRepackColumns(t *testing.T) {
+	p, _ := NewPackedVectorFP32(1500, 64)
+	for _, shape := range [][2]int{{1500, 64}, {64, 1500}, {70, 9}} {
+		rows, k := shape[0], shape[1]
+		stride := rows + 5
+		src := make([]float32, k*stride)
+		state := uint32(rows*31 + k)
+		for i := range src {
+			src[i] = nextValue(&state)
+		}
+		bias := make([]float32, rows)
+		for i := range bias {
+			bias[i] = nextValue(&state)
+		}
+		for _, variant := range []struct {
+			scale float32
+			bias  []float32
+		}{{1, nil}, {0.35355338, nil}, {1, bias}} {
+			if err := p.RepackColumns(src, stride, rows, k, variant.scale, variant.bias); err != nil {
+				t.Fatal(err)
+			}
+			weights := make([]float32, rows*k)
+			for r := 0; r < rows; r++ {
+				for c := 0; c < k; c++ {
+					v := src[c*stride+r]
+					if variant.scale != 1 {
+						v *= variant.scale
+					}
+					if variant.bias != nil {
+						v += variant.bias[r]
+					}
+					weights[r*k+c] = v
+				}
+			}
+			x := make([]float32, k)
+			for i := range x {
+				x[i] = nextValue(&state)
+			}
+			want := vectorReference(weights, k, rows, k, x)
+			got := make([]float32, rows)
+			if err := p.Mul(got, x); err != nil {
+				t.Fatal(err)
+			}
+			for i := range got {
+				if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+					t.Fatalf("rows=%d k=%d scale=%v bias=%v index %d", rows, k, variant.scale, variant.bias != nil, i)
+				}
+			}
+		}
+	}
+}
+
 func TestPackedVectorSignalStorm(t *testing.T) {
 	if !PackedVectorAccelerated() || testing.Short() {
 		t.Skip("SME signal stress")
