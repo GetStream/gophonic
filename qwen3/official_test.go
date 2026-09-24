@@ -5,6 +5,7 @@ package qwen3
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -575,4 +576,174 @@ func BenchmarkOfficialStream(b *testing.B) {
 		}
 		i++
 	}
+}
+
+var contextConversation = []string{
+	"Customer: Hi, I was charged twice for my order #4411 last week.",
+	"Agent: I'm sorry about that. Let me look into the duplicate charge for you.",
+	"Customer: It's been a week and nobody has answered my emails. This is really frustrating.",
+	"Agent: I understand. I've now refunded the duplicate payment; it will reach your card in 3-5 business days.",
+	"Customer: Okay, thanks. That's all I needed.",
+}
+
+func contextQuestions(tb testing.TB, m *Model) ([]*ContextQuestion, [][]string) {
+	specs := []struct {
+		q    string
+		opts []string
+	}{
+		{"How does the customer feel at the end of this conversation?", []string{"satisfied", "angry", "confused"}},
+		{"What was the customer's problem about?", []string{"billing", "shipping", "technical issue", "account login"}},
+		{"Was the customer's issue resolved?", []string{"yes", "no"}},
+	}
+	qs := make([]*ContextQuestion, len(specs))
+	opts := make([][]string, len(specs))
+	for i, sp := range specs {
+		q, err := m.ContextQuestion(sp.q, sp.opts)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		qs[i], opts[i] = q, sp.opts
+	}
+	return qs, opts
+}
+
+// TestOfficialContext asks several questions about a growing conversation
+// and checks tokenization, answers, incremental updates, and allocations.
+func TestOfficialContext(t *testing.T) {
+	m, _ := loadOfficialEncoder(t, WeightsF16)
+	c, err := m.NewContext(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(contextConversation, "\n")
+	var ws TokenizerWorkspace
+	whole, err := m.tokens.EncodeInto("<|im_start|>user\n"+text+contextSeparator, make([]int, 0, 1024), &ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set(context.Background(), text); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(c.kv.Tokens(), whole) {
+		t.Fatal("piecewise context tokens differ from whole-prompt tokens")
+	}
+	qs, opts := contextQuestions(t, m)
+	full, err := m.tokens.EncodeInto("<|im_start|>user\n"+text+contextSeparator+
+		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter, make([]int, 0, 1024), &ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(append(slices.Clone(c.kv.Tokens()), qs[0].tail...), full) {
+		t.Fatal("context plus question tail tokens differ from whole-prompt tokens")
+	}
+	probs := [][]float32{make([]float32, 3), make([]float32, 4), make([]float32, 2)}
+	if err := c.Ask(context.Background(), qs, probs); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"satisfied", "billing", "yes"}
+	for i, p := range probs {
+		best := slices.Index(p, slices.Max(p))
+		t.Logf("%-10s %.3f", opts[i][best], p[best])
+		if opts[i][best] != want[i] {
+			t.Errorf("question %d answered %q, want %q", i, opts[i][best], want[i])
+		}
+	}
+	// Growing the conversation evaluates only the new turn.
+	r0, c0 := m.PrefixStats()
+	_ = r0
+	longer := text + "\nCustomer: Actually, wait, the refund never arrived and now I'm really angry."
+	if err := c.Set(context.Background(), longer); err != nil {
+		t.Fatal(err)
+	}
+	_ = c0
+	if err := c.Ask(context.Background(), qs, probs); err != nil {
+		t.Fatal(err)
+	}
+	if best := slices.Index(probs[0], slices.Max(probs[0])); opts[0][best] != "angry" {
+		t.Errorf("after the new turn the customer feels %q, want angry", opts[0][best])
+	}
+	if allocs := testing.AllocsPerRun(3, func() {
+		if err := c.Set(context.Background(), longer); err != nil {
+			panic(err)
+		}
+		if err := c.Ask(context.Background(), qs, probs); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("warmed Set+Ask allocated %.2f times per call", allocs)
+	}
+}
+
+// BenchmarkOfficialContext compares three questions about a conversation
+// asked with Context (context evaluated once) against three Question.Choose
+// calls on the whole conversation.
+func BenchmarkOfficialContext(b *testing.B) {
+	m, _ := loadOfficialEncoder(b, WeightsF16)
+	text := strings.Join(contextConversation, "\n")
+	qs, _ := contextQuestions(b, m)
+	probs := [][]float32{make([]float32, 3), make([]float32, 4), make([]float32, 2)}
+	b.Run("context-ask", func(b *testing.B) {
+		c, err := m.NewContext(1024)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := c.Set(context.Background(), text); err != nil {
+			b.Fatal(err)
+		}
+		for b.Loop() {
+			if err := c.Ask(context.Background(), qs, probs); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("context-new-turn-and-ask", func(b *testing.B) {
+		c, err := m.NewContext(1024)
+		if err != nil {
+			b.Fatal(err)
+		}
+		i := 0
+		for b.Loop() {
+			turn := fmt.Sprintf("%s\nCustomer: one more question number %d about my refund.", text, i)
+			i++
+			b.StopTimer()
+			if err := c.Set(context.Background(), text); err != nil {
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err := c.Set(context.Background(), turn); err != nil {
+				b.Fatal(err)
+			}
+			if err := c.Ask(context.Background(), qs, probs); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("three-questions", func(b *testing.B) {
+		specs := []struct {
+			q    string
+			opts []string
+		}{
+			{"How does the customer feel at the end of this conversation?", []string{"satisfied", "angry", "confused"}},
+			{"What was the customer's problem about?", []string{"billing", "shipping", "technical issue", "account login"}},
+			{"Was the customer's issue resolved?", []string{"yes", "no"}},
+		}
+		var qq []*Question
+		for _, sp := range specs {
+			q, err := m.Question(sp.q, sp.opts)
+			if err != nil {
+				b.Fatal(err)
+			}
+			qq = append(qq, q)
+		}
+		i := 0
+		for b.Loop() {
+			in := fmt.Sprintf("%s\nCustomer: one more question number %d about my refund.", text, i)
+			i++
+			for j, q := range qq {
+				if err := q.Choose(context.Background(), in, probs[j]); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
 }

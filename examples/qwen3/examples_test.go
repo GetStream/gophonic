@@ -64,6 +64,25 @@ func TestOfficialExamples(t *testing.T) {
 			}
 		}
 	})
+	t.Run("conversation", func(t *testing.T) {
+		out, err := exec.CommandContext(t.Context(), goTool, "run", "./conversation").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		t.Logf("\n%s", out)
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		first, last := lines[1], lines[len(lines)-1]
+		for _, w := range []string{"mood=angry", "resolved=no"} {
+			if !strings.Contains(first, w) {
+				t.Errorf("after the first turn: %q lacks %s", first, w)
+			}
+		}
+		for _, w := range []string{"mood=satisfied", "topic=billing", "resolved=yes"} {
+			if !strings.Contains(last, w) {
+				t.Errorf("after the last turn: %q lacks %s", last, w)
+			}
+		}
+	})
 	t.Run("reply", func(t *testing.T) {
 		out, err := exec.CommandContext(t.Context(), goTool, "run", "./reply").CombinedOutput()
 		if err != nil {
