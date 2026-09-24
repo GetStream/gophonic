@@ -26,12 +26,17 @@ const (
 // Encoder owns one Qwen3-8B CPU decoder. Int8 mode reuses one FastWorkspace,
 // so calls are serialized; use one Encoder per concurrent inference lane.
 type Encoder struct {
-	mu     sync.Mutex
-	model  *decoder.Model
-	tokens *tokenizer.Tokenizer
-	fast   *FastEvaluator
-	ws     *FastWorkspace
-	closed bool
+	mu         sync.Mutex
+	model      *decoder.Model
+	tokens     *tokenizer.Tokenizer // GGUF fallback tokenizer
+	qwenTokens *QwenTokenizer
+	tokenWS    TokenizerWorkspace
+	tokenIDs   []int
+	fast       *FastEvaluator
+	ws         *FastWorkspace
+	prefill    *PrefillEvaluator
+	prefillWS  *PrefillWorkspace
+	closed     bool
 }
 
 // Options controls the local Qwen3-8B CPU backend. Quant may be empty for the
@@ -48,11 +53,12 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 		return nil, fmt.Errorf("clmqwen: unsupported quantization %q", opts.Quant)
 	}
 	var tok *tokenizer.Tokenizer
+	var qwenTok *QwenTokenizer
 	var err error
 	if strings.EqualFold(filepath.Ext(path), ".gguf") {
 		tok, err = tokenizer.LoadGGUF(path)
 	} else {
-		tok, err = tokenizer.Load(path)
+		qwenTok, err = LoadQwenTokenizer(path)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("clmqwen: load tokenizer: %w", err)
@@ -66,7 +72,7 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 		_ = model.Close()
 		return nil, fmt.Errorf("clmqwen: expected Qwen3-8B geometry, got type=%q hidden=%d layers=%d heads=%d kv_heads=%d", cfg.ModelType, cfg.HiddenDim, cfg.NumLayers, cfg.NumHeads, cfg.NumKVHeads)
 	}
-	e := &Encoder{model: model, tokens: tok}
+	e := &Encoder{model: model, tokens: tok, qwenTokens: qwenTok, tokenIDs: make([]int, 0, maxTokens)}
 	if opts.Quant == "int8" {
 		e.fast, err = NewFastEvaluator(model)
 		if err != nil {
@@ -74,6 +80,8 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 			return nil, fmt.Errorf("clmqwen: initialize fast Qwen3 evaluator: %w", err)
 		}
 		e.ws = e.fast.NewWorkspace()
+		e.prefill = newPrefillEvaluator(e.fast)
+		e.prefillWS = e.prefill.NewWorkspace()
 	}
 	return e, nil
 }
@@ -107,7 +115,19 @@ func (e *Encoder) Embed(ctx context.Context, role clm.Role, texts []string, dst 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ids, err := e.tokens.Encode(input, false)
+		var ids []int
+		var err error
+		if e.qwenTokens != nil {
+			// Byte-level BPE emits at most one token per input byte for this
+			// checkpoint. Grow only when a longer input arrives; the warmed
+			// text boundary is allocation-free.
+			if len(input) > cap(e.tokenIDs) {
+				e.tokenIDs = make([]int, 0, len(input))
+			}
+			ids, err = e.qwenTokens.EncodeInto(input, e.tokenIDs[:0], &e.tokenWS)
+		} else {
+			ids, err = e.tokens.Encode(input, false)
+		}
 		if err != nil {
 			return fmt.Errorf("clmqwen: tokenize input %d: %w", i, err)
 		}
@@ -120,8 +140,7 @@ func (e *Encoder) Embed(ctx context.Context, role clm.Role, texts []string, dst 
 
 // EmbedTokensInto embeds caller-tokenized inputs into caller-owned vectors.
 // With the int8 backend, this is allocation-free after each workspace has
-// warmed to the longest input. Text Embed remains the convenience API and pays
-// the tokenizer's allocations. FP32 keeps the existing GoInfer reference path.
+// warmed to the longest input. FP32 keeps the existing GoInfer reference path.
 func (e *Encoder) EmbedTokensInto(ctx context.Context, role clm.Role, tokenIDs [][]int, dst [][]float32) error {
 	if e == nil {
 		return errors.New("clmqwen: nil encoder")
@@ -167,6 +186,12 @@ func (e *Encoder) embedIDsLocked(ctx context.Context, index int, ids []int, dst 
 		ids = ids[len(ids)-maxTokens:]
 	}
 	if e.fast != nil {
+		if len(ids) > 1 && e.prefill != nil {
+			if err := e.prefill.HiddenLastInto(ids, dst, e.prefillWS); err != nil {
+				return fmt.Errorf("clmqwen: infer input %d: %w", index, err)
+			}
+			return nil
+		}
 		if err := e.fast.HiddenLastInto(ids, dst, e.ws); err != nil {
 			return fmt.Errorf("clmqwen: infer input %d: %w", index, err)
 		}
@@ -212,6 +237,11 @@ func (e *Encoder) Close() error {
 	err := e.model.Close()
 	e.fast = nil
 	e.ws = nil
+	e.prefill = nil
+	e.prefillWS = nil
+	e.qwenTokens = nil
+	e.tokens = nil
+	e.tokenIDs = nil
 	e.model = nil
 	return err
 }

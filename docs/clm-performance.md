@@ -3,8 +3,9 @@
 Measured on 2026-09-24 on an Apple M4 Max, with one CPU thread/core reported
 and GPU layers disabled. Model loading is excluded from steady-state timings.
 The local Qwen3-8B model is the official safetensors checkpoint; the competitor
-uses the official Qwen3-8B Q8_0 GGUF. These weight formats differ: the local int8 representation has one FP32
-scale per row, while GGUF Q8_0 has one FP16 scale per 32 weights. Hidden
+uses the official Qwen3-8B Q8_0 GGUF. These weight formats differ: the local
+int8 representation has one FP32 scale per row, while GGUF Q8_0 has one FP16
+scale per 32 weights. Hidden
 vectors and CLM rankings must be checked separately from timing.
 
 | Path | One-token last-hidden latency | Allocation boundary | Notes |
@@ -13,11 +14,21 @@ vectors and CLM rankings must be checked separately from timing.
 | gophonic fused Q8 evaluator | 436 ms | 0 B, 0 allocs | Same loaded int8 weights and token ID, pretokenized workspace path |
 | llama.cpp Q8_0 CPU, `llama-bench` | 111.5 ms | not measured | `-p 1 -n 0 -embd 1 -t 1 -ngl 0 -dev none -r 5` |
 
-The public text API also includes tokenization. GoInfer's tokenizer currently
-uses about 792 B and 39 allocations to tokenize `hello`; the zero-allocation
-claim applies only to the warmed, pretokenized fast evaluator. The benchmark
-suite includes both the text and head boundaries so this distinction remains
-visible.
+For 12 tokens, isolated sequential Go runs measured 5.251 s/op in the
+original token-major fast evaluator and 3.880 s/op in the current public text
+API with layer-batched prefill and reusable tokenizer. Both have zero warmed
+allocations. The older GoInfer batched path measured 4.0–4.2 s/op on the same
+input. llama.cpp CPU prefill measured 0.778 s/op (`-p 12 -n 0 -embd 1 -t 1
+-ngl 0 -dev none -r 5`). The original token-major loop streams about 83.35 GB
+of int8 projection weights for 12 tokens; the current layer-batched pass reuses
+weight rows across tokens. These numbers compare different quantized weight
+formats and input token contents. The 500 ms target remains unmet.
+
+The public text API includes tokenization. The new Qwen3 tokenizer matches
+official token IDs for the tested Unicode and special-token cases, and uses
+zero warmed allocations, including decomposed Unicode that needs NFC
+normalization. The previous GoInfer tokenizer used about 792 B and 39
+allocations to tokenize `hello`.
 
 For `hello`, cosine against the official BF16 Qwen3-8B last hidden vector was
 0.99738 for local per-row weight-only int8 and 0.99929 for llama.cpp Q8_0.
