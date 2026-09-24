@@ -16,3 +16,9 @@ func layerNormNEON(src, dst, gamma, beta *float32, n int)
 //
 //go:noescape
 func attnPrepNEON(q, k, v, qbias, vbias *float32, n int, scale float32)
+
+// maxNumNEON returns the largest non-NaN value of x[:n], or NaN when every
+// value is NaN. n must be a positive multiple of sixteen.
+//
+//go:noescape
+func maxNumNEON(x *float32, n int) float32

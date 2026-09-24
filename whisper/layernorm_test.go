@@ -61,3 +61,39 @@ func TestSoftmaxExpRowMatchesReference(t *testing.T) {
 		}
 	}
 }
+
+func TestArgmaxFiniteMatchesScalar(t *testing.T) {
+	nan, inf := float32(math.NaN()), float32(math.Inf(1))
+	cases := [][]float32{
+		{1, 2, 3}, {nan, nan}, {float32(math.Inf(-1)), nan},
+	}
+	long := make([]float32, 51864)
+	for i := range long {
+		long[i] = float32(math.Sin(float64(i) * 0.37))
+	}
+	long[40000], long[40001] = 7, 7 // ties keep the first
+	cases = append(cases, long)
+	withNaN := append([]float32(nil), long...)
+	withNaN[3] = nan
+	cases = append(cases, withNaN)
+	withInf := append([]float32(nil), long...)
+	withInf[51860] = inf
+	cases = append(cases, withInf)
+	allNaN := make([]float32, 64)
+	for i := range allNaN {
+		allNaN[i] = nan
+	}
+	cases = append(cases, allNaN)
+	for i, values := range cases {
+		want := -1
+		best := float32(math.Inf(-1))
+		for id, v := range values {
+			if v > best {
+				want, best = id, v
+			}
+		}
+		if got := argmaxFinite(values); got != want {
+			t.Fatalf("case %d: got %d want %d", i, got, want)
+		}
+	}
+}

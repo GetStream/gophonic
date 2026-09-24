@@ -46,6 +46,7 @@ type GreedyPolicy struct {
 	tokenizer                *Tokenizer
 	options                  GreedyOptions
 	suppressed               []bool
+	suppressedIDs            []int // the true entries of suppressed, in order
 	sampleBegin              int
 	spaceToken               int
 	withoutTimestamps        bool
@@ -116,6 +117,11 @@ func NewGreedyPolicy(tokenizer *Tokenizer, options GreedyOptions) (*GreedyPolicy
 		p.maxInitialTimestampIndex = int(math.Round(options.MaxInitialTimestampSeconds / 0.02))
 	}
 	p.initialTimestampLimit = !options.DisableInitialTimestampLimit && !p.withoutTimestamps
+	for id, suppress := range p.suppressed {
+		if suppress {
+			p.suppressedIDs = append(p.suppressedIDs, id)
+		}
+	}
 	return p, nil
 }
 
@@ -202,11 +208,11 @@ func (p *GreedyPolicy) SelectNextInto(dst, logits []float32, history []int) (int
 	if len(dst) < vocab {
 		return 0, ErrGreedyOutputTooSmall
 	}
-	copy(dst[:vocab], logits[:vocab])
-	for id, suppress := range p.suppressed {
-		if suppress {
-			dst[id] = float32(math.Inf(-1))
-		}
+	if &dst[0] != &logits[0] {
+		copy(dst[:vocab], logits[:vocab])
+	}
+	for _, id := range p.suppressedIDs {
+		dst[id] = float32(math.Inf(-1))
 	}
 	if !p.options.DisableBlankSuppression && len(history) == p.sampleBegin {
 		dst[p.tokenizer.EOT()] = float32(math.Inf(-1))
@@ -215,16 +221,7 @@ func (p *GreedyPolicy) SelectNextInto(dst, logits []float32, history []int) (int
 	if !p.withoutTimestamps && !p.options.DisableTimestampRules {
 		p.applyTimestampRules(dst[:vocab], history)
 	}
-	bestID := -1
-	best := float32(math.Inf(-1))
-	for id, value := range dst[:vocab] {
-		if math.IsNaN(float64(value)) || math.IsInf(float64(value), -1) {
-			continue
-		}
-		if bestID < 0 || value > best {
-			bestID, best = id, value
-		}
-	}
+	bestID := argmaxFinite(dst[:vocab])
 	if bestID < 0 {
 		return 0, ErrGreedyNoCandidate
 	}
@@ -386,4 +383,36 @@ func suppressSymbol(tokenizer *Tokenizer, text string, always bool, add func(int
 		add(encoded[0])
 	}
 	return true, nil
+}
+
+// argmaxFinite returns the first index of the largest value that is neither
+// NaN nor -Inf, or -1 when there is none.
+func argmaxFinite(values []float32) int {
+	n := len(values) / 16 * 16
+	if layerNormAccelerated && n > 0 {
+		best := maxNumNEON(&values[0], n)
+		for _, v := range values[n:] {
+			if v > best || best != best {
+				best = v
+			}
+		}
+		if best != best || math.IsInf(float64(best), -1) {
+			return -1
+		}
+		for id, v := range values {
+			if v == best {
+				return id
+			}
+		}
+	}
+	// NaN and -Inf never compare greater than -Inf, so they are skipped;
+	// strict comparison keeps the first of equal maxima.
+	bestID := -1
+	best := float32(math.Inf(-1))
+	for id, value := range values {
+		if value > best {
+			bestID, best = id, value
+		}
+	}
+	return bestID
 }
