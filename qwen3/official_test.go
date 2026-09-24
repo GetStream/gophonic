@@ -357,7 +357,7 @@ func TestOfficialQuestion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := append(append(append([]int(nil), q.prefix...), in...), q.suffix...)
+		got := append(append(append([]int(nil), q.kv.Tokens()...), in...), q.suffix...)
 		if !slices.Equal(got, want) {
 			t.Errorf("%q: piecewise prompt tokens differ from whole-prompt tokens", input)
 		}
@@ -382,6 +382,92 @@ func TestOfficialQuestion(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("warmed Choose allocated %.2f times per call", allocs)
+	}
+
+	// A second question interleaved with the first must not disturb it,
+	// and a batch must agree with one-at-a-time answers.
+	q2, err := m.Question("Is this message positive or negative?", []string{"positive", "negative"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := []string{
+		"my card got declined at the gas station even though I have money",
+		"cancel my plan before it renews next week",
+		"the app crashes every time I open settings",
+		"where's my package, it says delivered but it's not here",
+		"I forgot my password and the reset email never arrives",
+	}
+	rows := make([][]float32, len(batch))
+	for i := range rows {
+		rows[i] = make([]float32, len(options))
+	}
+	if err := q.ChooseBatch(context.Background(), batch, rows); err != nil {
+		t.Fatal(err)
+	}
+	two := make([]float32, 2)
+	for i, in := range batch {
+		if err := q2.Choose(context.Background(), "I love this!", two); err != nil {
+			t.Fatal(err)
+		}
+		if two[0] < 0.9 {
+			t.Errorf("second question: P(positive)=%.3f", two[0])
+		}
+		if err := q.Choose(context.Background(), in, probs); err != nil {
+			t.Fatal(err)
+		}
+		if best := slices.Index(rows[i], slices.Max(rows[i])); best != i {
+			t.Errorf("batch input %d chose %q", i, options[best])
+		}
+		for j := range probs {
+			if d := math.Abs(float64(probs[j] - rows[i][j])); d > 1e-3 {
+				t.Errorf("input %d option %d: single %.5f, batch %.5f", i, j, probs[j], rows[i][j])
+			}
+		}
+	}
+	if allocs := testing.AllocsPerRun(2, func() {
+		if err := q.ChooseBatch(context.Background(), batch, rows); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("warmed ChooseBatch allocated %.2f times per call", allocs)
+	}
+}
+
+// BenchmarkOfficialChooseBatch measures answering 16 new inputs per call
+// against one prepared question.
+func BenchmarkOfficialChooseBatch(b *testing.B) {
+	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
+	if path == "" {
+		b.Skip("set GOPHONIC_QWEN3_MODEL")
+	}
+	for _, format := range []string{WeightsF16, WeightsInt8} {
+		b.Run(format, func(b *testing.B) {
+			m, _ := loadOfficialEncoder(b, format)
+			q, err := m.Question("Which support team should handle this customer message?",
+				[]string{"payments", "cancellations", "technical support", "shipping", "account login"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			const n = 16
+			rows := make([][]float32, n)
+			for i := range rows {
+				rows[i] = make([]float32, 5)
+			}
+			texts := benchmarkTexts(n*64, 14)
+			if err := q.ChooseBatch(context.Background(), texts[:n], rows); err != nil {
+				b.Fatal(err)
+			}
+			i := 1
+			b.ReportAllocs()
+			for b.Loop() {
+				start := (i * n) % (len(texts) - n)
+				if err := q.ChooseBatch(context.Background(), texts[start:start+n], rows); err != nil {
+					b.Fatal(err)
+				}
+				i++
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N)/n, "ms/input")
+		})
 	}
 }
 
@@ -417,7 +503,4 @@ func BenchmarkOfficialQuestion(b *testing.B) {
 		}
 		i++
 	}
-	reused, computed := m.PrefixStats()
-	b.ReportMetric(float64(computed)/float64(i), "new-tokens/op")
-	b.ReportMetric(float64(reused)/float64(i), "reused-tokens/op")
 }

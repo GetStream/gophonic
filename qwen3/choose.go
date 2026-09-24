@@ -60,19 +60,24 @@ func loadLetterHead(dir string, tokens *Tokenizer, hidden, vocab int) (*letterHe
 }
 
 // Question is a prepared multiple-choice question. Model.Question tokenizes
-// the fixed parts of the prompt once; each Choose then tokenizes only its
-// input and assembles token IDs directly, so the hot path builds no strings
-// and does no map lookups. A Question is not safe for concurrent use; prepare
-// one per goroutine (calls on its Model are serialized anyway).
+// the fixed prompt once and evaluates its prefix (chat header, question, and
+// lettered options) once, keeping that prefix's keys and values. Choose and
+// ChooseBatch then evaluate only each input and the short prompt suffix
+// against the stored prefix, several inputs per forward pass. The hot path
+// builds no strings and does no map lookups. A Question is not safe for
+// concurrent use; calls on its Model are serialized anyway.
 type Question struct {
 	m       *Model
-	prefix  []int // chat header, question, lettered options, "Input:\n"
-	suffix  []int // end of turn and the empty non-thinking block
+	kv      *PrefixKV // the prompt prefix's keys and values, never modified
+	suffix  []int     // end of turn and the empty non-thinking block
 	options int
-	input   []int // reusable input token buffer
-	prompt  [1][]int
-	hidden  [1][]float32
+	ids     []int // token storage for a batch's inputs and suffixes
+	seqs    [][]int
+	hidden  [][]float32
 	tok     TokenizerWorkspace
+	one     [1]string
+	oneIDs  [1][]int
+	oneOut  [1][]float32
 }
 
 // The prompt ends each fixed part at a pre-tokenizer boundary: the prefix
@@ -85,8 +90,10 @@ const (
 	questionSuffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 )
 
-// Question prepares a multiple-choice question with 2 to 26 options. It
-// allocates; reuse the result for every input.
+// Question prepares a multiple-choice question with 2 to 26 options: it
+// tokenizes the prompt and evaluates its prefix once (about 144 KiB of keys
+// and values per prefix token in exact mode). It allocates; reuse the result
+// for every input.
 func (e *Model) Question(question string, options []string) (*Question, error) {
 	if e == nil || e.letters == nil {
 		return nil, errors.New("qwen3: this model was opened without the language-model head")
@@ -100,17 +107,28 @@ func (e *Model) Question(question string, options []string) (*Question, error) {
 	}
 	text += questionFooter
 	q := &Question{m: e, options: len(options)}
-	var err error
-	if q.prefix, err = e.tokens.EncodeInto(text, make([]int, 0, len(text)), &q.tok); err != nil {
+	prefix, err := e.tokens.EncodeInto(text, make([]int, 0, len(text)), &q.tok)
+	if err != nil {
 		return nil, err
 	}
 	if q.suffix, err = e.tokens.EncodeInto(questionSuffix, make([]int, 0, len(questionSuffix)), &q.tok); err != nil {
 		return nil, err
 	}
-	if len(q.prefix)+len(q.suffix) >= maxTokens {
-		return nil, fmt.Errorf("qwen3: question uses %d of the %d-token limit", len(q.prefix)+len(q.suffix), maxTokens)
+	if len(prefix)+len(q.suffix) >= maxTokens {
+		return nil, fmt.Errorf("qwen3: question uses %d of the %d-token limit", len(prefix)+len(q.suffix), maxTokens)
 	}
-	q.hidden[0] = make([]float32, e.model.cfg.hidden)
+	if q.kv, err = e.eval.NewPrefixKV(len(prefix)); err != nil {
+		return nil, err
+	}
+	scratch := make([]float32, e.model.cfg.hidden)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return nil, errors.New("qwen3: model closed")
+	}
+	if err := e.eval.HiddenLastExtendInto(q.kv, 0, prefix, scratch, e.ws); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
@@ -121,37 +139,136 @@ func (q *Question) Choose(ctx context.Context, input string, probs []float32) er
 	if q == nil {
 		return errors.New("qwen3: nil question")
 	}
-	input = strings.TrimSpace(input)
-	if len(input) > cap(q.input) {
-		q.input = make([]int, 0, len(input))
-	}
-	ids, err := q.m.tokens.EncodeInto(input, q.input[:0], &q.tok)
-	if err != nil {
-		return err
-	}
-	q.input = ids
-	return q.ChooseTokens(ctx, ids, probs)
+	q.one[0], q.oneOut[0] = input, probs
+	err := q.ChooseBatch(ctx, q.one[:], q.oneOut[:])
+	q.one[0], q.oneOut[0] = "", nil
+	return err
 }
 
 // ChooseTokens is Choose for input already tokenized with the model's
-// tokenizer; it involves no strings at all. If the prompt would exceed the
-// 2048-token limit, the input's earliest tokens are dropped.
+// tokenizer; it involves no strings at all.
 func (q *Question) ChooseTokens(ctx context.Context, input []int, probs []float32) error {
 	if q == nil {
 		return errors.New("qwen3: nil question")
 	}
-	if len(probs) != q.options {
-		return fmt.Errorf("qwen3: %d probabilities for %d options", len(probs), q.options)
+	q.oneIDs[0], q.oneOut[0] = input, probs
+	err := q.chooseTokens(ctx, q.oneIDs[:], q.oneOut[:])
+	q.oneIDs[0], q.oneOut[0] = nil, nil
+	return err
+}
+
+// ChooseBatch answers the question for every input, writing each input's
+// option probabilities to the matching probs row. Inputs share forward
+// passes, which is much faster than separate Choose calls. Buffers grow to
+// the largest batch seen; later batches up to that size allocate nothing.
+func (q *Question) ChooseBatch(ctx context.Context, inputs []string, probs [][]float32) error {
+	if q == nil {
+		return errors.New("qwen3: nil question")
 	}
-	if room := maxTokens - len(q.prefix) - len(q.suffix); len(input) > room {
-		input = input[len(input)-room:]
+	if len(probs) != len(inputs) {
+		return fmt.Errorf("qwen3: %d probability rows for %d inputs", len(probs), len(inputs))
 	}
-	p := append(append(append(q.prompt[0][:0], q.prefix...), input...), q.suffix...)
-	q.prompt[0] = p
-	if err := q.m.EmbedTokensInto(ctx, q.prompt[:], q.hidden[:]); err != nil {
-		return err
+	need := 0
+	for _, in := range inputs {
+		need += len(in) + len(q.suffix)
 	}
-	hidden, rows := q.hidden[0], q.m.letters.rows
+	if need > cap(q.ids) {
+		q.ids = make([]int, 0, 2*need)
+	}
+	q.growBatch(len(inputs))
+	ids := q.ids[:0]
+	for i, in := range inputs {
+		start := len(ids)
+		got, err := q.m.tokens.EncodeInto(strings.TrimSpace(in), ids[start:start:cap(ids)], &q.tok)
+		if err != nil {
+			return fmt.Errorf("qwen3: tokenize input %d: %w", i, err)
+		}
+		ids = ids[:start+len(got)]
+		q.seqs[i] = ids[start:len(ids):len(ids)]
+	}
+	return q.chooseTokens(ctx, q.seqs[:len(inputs)], probs)
+}
+
+func (q *Question) growBatch(n int) {
+	if n <= len(q.seqs) {
+		return
+	}
+	n = max(n, 2*len(q.seqs))
+	q.seqs = make([][]int, n)
+	hidden := make([]float32, n*q.m.model.cfg.hidden)
+	q.hidden = make([][]float32, n)
+	for i := range q.hidden {
+		q.hidden[i] = hidden[i*q.m.model.cfg.hidden : (i+1)*q.m.model.cfg.hidden]
+	}
+}
+
+// chooseTokens appends the suffix to each input (in place when the input
+// lives in q.ids, otherwise into q.ids) and answers all of them.
+func (q *Question) chooseTokens(ctx context.Context, inputs [][]int, probs [][]float32) error {
+	if len(probs) != len(inputs) {
+		return fmt.Errorf("qwen3: %d probability rows for %d inputs", len(probs), len(inputs))
+	}
+	for i, p := range probs {
+		if len(p) != q.options {
+			return fmt.Errorf("qwen3: row %d has %d probabilities for %d options", i, len(p), q.options)
+		}
+	}
+	q.growBatch(len(inputs))
+	room := maxTokens - len(q.kv.tokens) - len(q.suffix)
+	need := 0
+	for _, in := range inputs {
+		need += min(len(in), room) + len(q.suffix)
+	}
+	// Assemble input+suffix sequences after a region as long as all inputs,
+	// so inputs that ChooseBatch tokenized into the front of q.ids are never
+	// overwritten while being copied. Growing leaves old inputs readable.
+	used := 0
+	for _, in := range inputs {
+		used += len(in)
+	}
+	if used+need > cap(q.ids) {
+		q.ids = make([]int, 0, 2*(used+need))
+	}
+	buf := q.ids[:cap(q.ids)]
+	at := used
+	for i, in := range inputs {
+		if len(in) > room {
+			in = in[len(in)-room:] // keep the input's last tokens
+		}
+		start := at
+		at += copy(buf[at:], in)
+		at += copy(buf[at:], q.suffix)
+		q.seqs[i] = buf[start:at:at]
+	}
+	seqs := q.seqs[:len(inputs)]
+	e := q.m
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return errors.New("qwen3: model closed")
+	}
+	for start := 0; start < len(seqs); {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end, tokens := start, 0
+		for end < len(seqs) && (end == start || tokens+len(seqs[end]) <= batchTokens) {
+			tokens += len(seqs[end])
+			end++
+		}
+		if err := e.eval.HiddenLastSharedInto(q.kv, seqs[start:end], q.hidden[start:end], e.ws); err != nil {
+			return err
+		}
+		start = end
+	}
+	for i := range seqs {
+		q.letterProbs(q.hidden[i], probs[i])
+	}
+	return nil
+}
+
+func (q *Question) letterProbs(hidden, probs []float32) {
+	rows := q.m.letters.rows
 	maxLogit := math.Inf(-1)
 	for i := range probs {
 		probs[i] = dot32(hidden, rows[i*len(hidden):(i+1)*len(hidden)])
@@ -166,5 +283,4 @@ func (q *Question) ChooseTokens(ctx context.Context, input []int, probs []float3
 	for i := range probs {
 		probs[i] = float32(float64(probs[i]) / sum)
 	}
-	return nil
 }

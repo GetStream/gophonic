@@ -37,12 +37,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	probs := make([]float32, len(options))
-	for _, in := range inputs {
-		if err := q.Choose(context.Background(), in, probs); err != nil {
-			log.Fatal(err)
-		}
-		best := slices.Index(probs, slices.Max(probs))
-		fmt.Printf("%-20s %.2f  %s\n", options[best], probs[best], in)
+	// Classify every cue in one batch: inputs share forward passes.
+	probs := make([][]float32, len(inputs))
+	for i := range probs {
+		probs[i] = make([]float32, len(options))
+	}
+	if err := q.ChooseBatch(context.Background(), inputs, probs); err != nil {
+		log.Fatal(err)
+	}
+	for i, in := range inputs {
+		best := slices.Index(probs[i], slices.Max(probs[i]))
+		fmt.Printf("%-20s %.2f  %s\n", options[best], probs[i][best], in)
 	}
 }

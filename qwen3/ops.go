@@ -237,14 +237,29 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 		it := ws.attnItems[i]
 		base, q0, q1, g, past := int(it.start), int(it.q0), int(it.q1), int(it.group), int(it.past)
 		nk, qb := past+q1, q1-q0
-		keys, values := ws.keys[base*c.kvDim+g*hd:], ws.values[base*c.kvDim+g*hd:]
+		keys, values, stride := ws.keys[base*c.kvDim+g*hd:], ws.values[base*c.kvDim+g*hd:], c.kvDim
 		if kv := ws.prefix; kv != nil {
-			keys, values = kv.keys[o.layerIndex][g*hd:], kv.values[o.layerIndex][g*hd:]
+			if ws.shared {
+				// Gather the read-only prefix and this sequence's own rows
+				// into one contiguous range for packing.
+				pk, pv := kv.keys[o.layerIndex], kv.values[o.layerIndex]
+				for j := range past {
+					copy(sc.keys[j*hd:(j+1)*hd], pk[j*c.kvDim+g*hd:])
+					copy(sc.vals[j*hd:(j+1)*hd], pv[j*c.kvDim+g*hd:])
+				}
+				for j := range q1 {
+					copy(sc.keys[(past+j)*hd:(past+j+1)*hd], ws.keys[(base+j)*c.kvDim+g*hd:])
+					copy(sc.vals[(past+j)*hd:(past+j+1)*hd], ws.values[(base+j)*c.kvDim+g*hd:])
+				}
+				keys, values, stride = sc.keys, sc.vals, hd
+			} else {
+				keys, values = kv.keys[o.layerIndex][g*hd:], kv.values[o.layerIndex][g*hd:]
+			}
 		}
 		must(sc.keysT.Reshape(hd, nk))
-		must(sc.keysT.Pack(keys, c.kvDim, true))
+		must(sc.keysT.Pack(keys, stride, true))
 		must(sc.values.Reshape(nk, hd))
-		must(sc.values.Pack(values, c.kvDim, false))
+		must(sc.values.Pack(values, stride, false))
 		scores := sc.scores[:qb*nk]
 		for qh := g * group; qh < (g+1)*group; qh++ {
 			off := (base+q0)*qdim + qh*hd
