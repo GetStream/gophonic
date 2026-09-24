@@ -37,6 +37,15 @@ TEXT ·geluNEON(SB), NOSPLIT, $0-32
 	WORD	$0x0e0c3cca	// mov.s w10, v6[1]
 	WORD	$0x0e143ccb	// mov.s w11, v6[2]
 	WORD	$0x0e1c3ccc	// mov.s w12, v6[3]
+	WORD	$0x5280800d	// mov w13, #0x400 ; =1024
+	WORD	$0x7110013f	// cmp w9, #0x400
+	WORD	$0x1a8d3129	// csel w9, w9, w13, lo
+	WORD	$0x7110015f	// cmp w10, #0x400
+	WORD	$0x1a8d314a	// csel w10, w10, w13, lo
+	WORD	$0x7110017f	// cmp w11, #0x400
+	WORD	$0x1a8d316b	// csel w11, w11, w13, lo
+	WORD	$0x7110019f	// cmp w12, #0x400
+	WORD	$0x1a8d318c	// csel w12, w12, w13, lo
 	WORD	$0x8b090c69	// add x9, x3, x9, lsl #3
 	WORD	$0x8b0a0c6a	// add x10, x3, x10, lsl #3
 	WORD	$0x8b0b0c6b	// add x11, x3, x11, lsl #3
@@ -65,5 +74,5 @@ TEXT ·geluNEON(SB), NOSPLIT, $0-32
 	WORD	$0x6e23dc00	// fmul.4s v0, v0, v3
 	WORD	$0x3c810400	// str q0, [x0], #0x10
 	WORD	$0xf1001042	// subs x2, x2, #0x4
-	WORD	$0x54fffa8c	// b.gt 0x2c
+	WORD	$0x54fff96c	// b.gt 0x2c
 	RET
