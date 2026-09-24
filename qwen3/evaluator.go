@@ -106,6 +106,7 @@ type attentionScratch struct {
 	keysT, values *whispergemm.PackedB
 	scores        []float32
 	gemm          []float32 // whispergemm.MulScratch scratch
+	keys, vals    []float32 // gathered shared-prefix and own rows, [positions][headDim]
 }
 
 // Evaluator computes Qwen3 last-token hidden states a layer at a time. All
@@ -125,6 +126,24 @@ func NewEvaluator(m *Weights) (*Evaluator, error) {
 	return &Evaluator{m: m}, nil
 }
 
+// HiddenLastSharedInto evaluates independent sequences that each continue
+// the tokens held in kv, and writes each one's last-token state to dst. kv is
+// read, never written, so one prefix (for example a prepared prompt) can
+// serve any number of batches. Every sequence attends to the whole prefix and
+// to its own earlier tokens.
+func (e *Evaluator) HiddenLastSharedInto(kv *PrefixKV, seqs [][]int, dst [][]float32, ws *Workspace) error {
+	if kv == nil || kv.owner != e {
+		return errors.New("qwen3: prefix store belongs to another evaluator")
+	}
+	if ws == nil {
+		return errors.New("qwen3: nil workspace")
+	}
+	ws.prefix, ws.shared, ws.past = kv, true, len(kv.tokens)
+	err := e.HiddenLastBatchInto(seqs, dst, ws)
+	ws.prefix, ws.shared, ws.past = nil, false, 0
+	return err
+}
+
 // Workspace owns reusable activations for a packed batch of rows, one layer's
 // keys and values, per-tile activation scratch, and optionally a pool of
 // persistent workers. It belongs to one evaluator and one concurrent call.
@@ -134,7 +153,8 @@ type Workspace struct {
 	rowStart, rowPos, rowLen        []int32   // each row's sequence start, position, and sequence length
 	attnItems                       []attentionItem
 	attnScratch                     []attentionScratch // per participant
-	prefix                          *PrefixKV          // set only by HiddenLastExtendInto
+	prefix                          *PrefixKV          // set by HiddenLastExtendInto and HiddenLastSharedInto
+	shared                          bool               // prefix is read-only and shared by every sequence
 	past                            int
 	ropeCos, ropeSin                []float32
 	ropePositions                   int // positions whose RoPE values are filled
@@ -240,7 +260,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		rows += len(ids)
 		longest = max(longest, len(ids))
 	}
-	if ws.prefix != nil && len(seqs) != 1 {
+	if ws.prefix != nil && !ws.shared && len(seqs) != 1 {
 		return errors.New("qwen3: a prefix extension evaluates exactly one sequence")
 	}
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
@@ -287,7 +307,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.addNorm(residual, l.attnNorm)
 		ws.project(ws.norm, c.hidden, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
-		if kv := ws.prefix; kv != nil {
+		if kv := ws.prefix; kv != nil && !ws.shared {
 			// Store this layer's new keys and values after the kept prefix;
 			// blocked attention then reads the whole causal range from kv.
 			n := rows * c.kvDim
@@ -416,19 +436,21 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 		ws.ropeCos = make([]float32, capP*c.headDim/2)
 		ws.ropeSin = make([]float32, capP*c.headDim/2)
 		ws.ropePositions = 0
-		if capP >= gemmAttentionMin {
-			for i := range ws.attnScratch {
-				sc := &ws.attnScratch[i]
-				var err error
-				if sc.keysT, err = whispergemm.NewPackedB(c.headDim, capP); err != nil {
-					return err
-				}
-				if sc.values, err = whispergemm.NewPackedB(capP, c.headDim); err != nil {
-					return err
-				}
-				sc.scores = make([]float32, attentionBlock*capP)
-				sc.gemm = make([]float32, whispergemm.ScratchLen(max(capP, c.headDim)))
+		// Prefix modes always use blocked attention, so the scratch exists
+		// for every capacity.
+		for i := range ws.attnScratch {
+			sc := &ws.attnScratch[i]
+			var err error
+			if sc.keysT, err = whispergemm.NewPackedB(c.headDim, capP); err != nil {
+				return err
 			}
+			if sc.values, err = whispergemm.NewPackedB(capP, c.headDim); err != nil {
+				return err
+			}
+			sc.scores = make([]float32, attentionBlock*capP)
+			sc.gemm = make([]float32, whispergemm.ScratchLen(max(capP, c.headDim)))
+			sc.keys = make([]float32, capP*c.headDim)
+			sc.vals = make([]float32, capP*c.headDim)
 		}
 		ws.positions = capP
 	}

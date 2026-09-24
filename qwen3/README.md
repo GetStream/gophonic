@@ -33,15 +33,19 @@ serialized; open one per concurrent lane.
 
 ## Question
 
-`Model.Question` tokenizes the Qwen3 chat prompt (non-thinking mode) with the
-options listed as `A)`, `B)`, … once. `Choose` tokenizes only the input,
-splices the token IDs together (the fixed parts end on pre-tokenizer
-boundaries, so this equals tokenizing the whole prompt, which a test checks),
-and compares the next-token logits of the answer letters. It needs only the
-language-model head rows of the letters (read at `Open`, not the 1.2 GB
-head). The question comes first and the input last, so successive inputs
-reuse the stored prompt prefix and evaluate only their own tokens. On an M4
-Max a new input costs about 117 ms (≈19 new tokens).
+`Model.Question` builds the Qwen3 chat prompt (non-thinking mode) with the
+options listed as `A)`, `B)`, …, tokenizes it once, and evaluates its prefix
+once, keeping that prefix's keys and values (about 144 KiB per prompt token).
+`Choose` then tokenizes only the input, evaluates the input and a short
+suffix against the stored prefix, and compares the next-token logits of the
+answer letters; it needs only the language-model head rows of the letters
+(read at `Open`, not the 1.2 GB head). The fixed parts end on pre-tokenizer
+boundaries, so this equals tokenizing the whole prompt, which a test checks.
+Questions do not share state, so alternating between them costs nothing.
+
+`ChooseBatch` answers many inputs in shared forward passes. On an M4 Max, a
+new input costs about 140 ms alone, 94 ms per input in a batch of 16, and
+58 ms per input in a batch with `Weights: "int8"`.
 
 The programs in [`../examples/qwen3`](../examples/qwen3) are each one short
 `main.go`: `turn` (has a voice-agent user finished speaking?), `sentiment`,

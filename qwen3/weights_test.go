@@ -491,3 +491,66 @@ func TestPrefixExtensionMatchesFullEvaluation(t *testing.T) {
 		_ = ws.Close()
 	}
 }
+
+// TestSharedPrefixMatchesFullEvaluation checks HiddenLastSharedInto against
+// fresh evaluation of prefix+sequence for short and multi-block sequences,
+// and that the shared prefix is left untouched.
+func TestSharedPrefixMatchesFullEvaluation(t *testing.T) {
+	ck := writeTinyCheckpoint(t, 8)
+	for _, format := range []string{WeightsF16, WeightsInt8} {
+		m, err := LoadWeights(ck.dir, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, _ := NewEvaluator(m)
+		ws, _ := e.NewWorkspace(3)
+		mk := func(n, seed int) []int {
+			ids := make([]int, n)
+			for i := range ids {
+				ids[i] = (i*3 + seed + i/5) % tinyShape.vocab
+			}
+			return ids
+		}
+		for _, prefixLen := range []int{5, 40, 150} {
+			prefix := mk(prefixLen, 1)
+			kv, err := e.NewPrefixKV(prefixLen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scratch := make([]float32, tinyShape.hidden)
+			if err := e.HiddenLastExtendInto(kv, 0, prefix, scratch, ws); err != nil {
+				t.Fatal(err)
+			}
+			before := slices.Clone(kv.keys[1][:prefixLen*m.cfg.kvDim])
+			seqs := [][]int{mk(1, 2), mk(9, 3), mk(130, 4), mk(3, 5)}
+			got := make([][]float32, len(seqs))
+			for i := range got {
+				got[i] = make([]float32, tinyShape.hidden)
+			}
+			if err := e.HiddenLastSharedInto(kv, seqs, got, ws); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(before, kv.keys[1][:prefixLen*m.cfg.kvDim]) || !slices.Equal(kv.Tokens(), prefix) {
+				t.Fatalf("%s prefix %d: shared evaluation modified the prefix", format, prefixLen)
+			}
+			want := make([]float32, tinyShape.hidden)
+			for i, seq := range seqs {
+				full := append(slices.Clone(prefix), seq...)
+				if err := e.HiddenLastInto(full, want, ws); err != nil {
+					t.Fatal(err)
+				}
+				if cos, maxAbs := vectorParity(got[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
+					t.Fatalf("%s prefix %d seq %d: shared vs fresh cosine=%.9f max_abs=%g", format, prefixLen, i, cos, maxAbs)
+				}
+			}
+			if allocs := testing.AllocsPerRun(5, func() {
+				if err := e.HiddenLastSharedInto(kv, seqs, got, ws); err != nil {
+					panic(err)
+				}
+			}); allocs != 0 {
+				t.Fatalf("%s: shared evaluation allocated %.2f times", format, allocs)
+			}
+		}
+		_ = ws.Close()
+	}
+}
