@@ -95,31 +95,42 @@ and `tools/reference_rank.py` regenerates the golden CLM probabilities. The
 tokenizer goldens in `testdata/` were produced by the official Hugging Face
 tokenizer. One short ranking cannot establish corpus-level accuracy.
 
-## Task examples
+## Example: choosing the best reply
 
-CLM ranks candidate texts as responses to a state. Phrase the classes as
-natural sentences and the same ranker does zero-shot classification. Each
-program in [`examples/`](examples) is one short `main.go` sharing a small
-loader:
-
-| Example | State | Candidates |
-| --- | --- | --- |
-| `turn` | unpunctuated live transcript | finished speaking / mid-sentence |
-| `sentiment` | short text | joy, anger, sadness, fear, neutral |
-| `intent` | customer message | five support teams |
-| `subtitles` | cues of an embedded SubRip file | seven program genres |
-| `reply` | conversation | candidate agent replies |
+CLM ranks candidate texts as the next action for a state.
+[`examples/reply`](examples/reply) is one short `main.go` that ranks
+candidate agent replies for three conversations. This is real output on the
+official checkpoint:
 
 ```sh
 export GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B
 export GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm
-CGO_ENABLED=0 GOEXPERIMENT=simd go run ./examples/turn
+CGO_ENABLED=0 GOEXPERIMENT=simd go run ./examples/reply
 ```
 
-Each program prints one verdict per input and a summary with the per-text
-latency and embedding-cache hits; candidate texts are embedded once and then
-served from the cache. CLM was trained to rank actions for a state, not as a
-classifier: results depend on how the candidates are worded, and these few
-inputs say nothing about accuracy on a real corpus. The opt-in
-`TestOfficialExamples` in `examples/` runs `turn` and `sentiment` against the
-official checkpoint and checks their clear-cut cases.
+```text
+Customer: I was charged twice for order #4411 and I want my money back today.
+  1.00  I'm sorry about the double charge. I've refunded the duplicate payment
+  0.00  Have you tried restarting your device?
+  0.00  Thanks for the kind words! We love hearing from happy customers.
+  0.00  Refunds are not possible.
+User: my flight got cancelled and I'm stuck in Frankfurt with two kids. what are my options?
+  0.99  I'm so sorry. You can rebook on the next flight at no cost, and becaus
+  0.00  Frankfurt has a beautiful old town you could visit.
+  0.01  Please contact your airline.
+  0.00  Here is a recipe for apple strudel.
+User: the build fails with 'undefined: slices.Concat' on our CI but works on my laptop.
+  0.99  slices.Concat was added in Go 1.22; your CI is likely on an older Go.
+  0.01  Have you tried turning it off and on again?
+  0.00  Go is a statically typed language developed at Google.
+  0.00  Please open a ticket with IT.
+```
+
+CLM v0.1 is not a zero-shot classifier. On the official checkpoint (this
+runtime matches the official BF16 pipeline to within 7e-5 in probability),
+framing turn-taking, sentiment, support intent, subtitle genre, or tool
+selection as candidate sentences scored near chance on small probe sets:
+3/6, 2/6, 1–2/5, 1/6, and 3/8 correct across several phrasings. Use it to
+rank natural-language responses or actions, and validate any other use on
+your own data. `TestOfficialExamples` in `examples/` runs `reply` against the
+official checkpoint and checks that the helpful reply ranks first.

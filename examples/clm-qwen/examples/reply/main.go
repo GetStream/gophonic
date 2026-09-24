@@ -34,6 +34,15 @@ var conversations = []struct {
 			"Here is a recipe for apple strudel.",
 		},
 	},
+	{
+		"User: the build fails with 'undefined: slices.Concat' on our CI but works on my laptop.",
+		[]string{
+			"slices.Concat was added in Go 1.22; your CI is likely on an older Go. Check `go version` there and bump the toolchain or the go directive.",
+			"Have you tried turning it off and on again?",
+			"Go is a statically typed language developed at Google.",
+			"Please open a ticket with IT.",
+		},
+	},
 }
 
 func main() {
