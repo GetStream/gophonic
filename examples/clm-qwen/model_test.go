@@ -21,7 +21,7 @@ import (
 // attention, partial output panels, and odd tile counts.
 var tinyShape = struct {
 	hidden, layers, heads, kvHeads, headDim, inter, vocab, maxPos int
-}{hidden: 96, layers: 2, heads: 4, kvHeads: 2, headDim: 24, inter: 136, vocab: 23, maxPos: 64}
+}{hidden: 96, layers: 2, heads: 4, kvHeads: 2, headDim: 24, inter: 136, vocab: 23, maxPos: 320}
 
 type tinyCheckpoint struct {
 	dir     string
@@ -311,7 +311,16 @@ func TestEvaluatorPortableMatchesReference(t *testing.T) {
 
 func testEvaluatorMatchesReference(t *testing.T) {
 	ck := writeTinyCheckpoint(t, 3)
-	seqs := [][]int{{1}, {2, 3, 0, 1, 2}, {3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 2, 1, 3, 2, 22, 7, 9}, {0, 2}, {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}}
+	long := func(n, seed int) []int {
+		ids := make([]int, n)
+		for i := range ids {
+			ids[i] = (i*7 + seed) % tinyShape.vocab
+		}
+		return ids
+	}
+	// 70 and 290 tokens take the blocked GEMM attention path (three blocks,
+	// the last partial); the rest use the streaming path in the same batch.
+	seqs := [][]int{{1}, {2, 3, 0, 1, 2}, long(70, 3), {3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 2, 1, 3, 2, 22, 7, 9}, {0, 2}, long(290, 5), {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}}
 	want := make([][]float32, len(seqs))
 	for i, ids := range seqs {
 		want[i] = ck.referenceHidden(ids)

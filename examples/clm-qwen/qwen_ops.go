@@ -18,6 +18,7 @@ const (
 	opProject
 	opQKRope
 	opAttention
+	opAttentionGEMM
 	opSwiGLU
 )
 
@@ -62,6 +63,8 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 		o.qkRope(start, end)
 	case opAttention:
 		o.attention(start, end)
+	case opAttentionGEMM:
+		o.attentionGEMM(worker, start, end)
 	case opSwiGLU:
 		o.swiglu(start, end)
 	}
@@ -160,6 +163,9 @@ func (o *layerOp) attention(start, end int) {
 	scale := float32(f.attnScale)
 	for item := start; item < end; item++ {
 		r, g := item/f.kvHeads, item%f.kvHeads
+		if ws.rowLen[r] >= gemmAttentionMin {
+			continue // handled by attentionGEMM
+		}
 		first := int(ws.rowStart[r])
 		for qh := g * group; qh < (g+1)*group; qh++ {
 			q := ws.q[r*f.hidden+qh*hd : r*f.hidden+(qh+1)*hd]
@@ -184,6 +190,45 @@ func (o *layerOp) attention(start, end int) {
 			}
 			scaleVector(out, 1/sum)
 		}
+	}
+}
+
+// attentionGEMM handles blocked causal attention for long sequences. Each item
+// packs its KV group's keys and values up to the block's last query once, then
+// for every query head in the group computes scores = Q·Kᵀ and ctx = P·V as
+// matrix products, never touching keys beyond the causal limit.
+func (o *layerOp) attentionGEMM(worker, start, end int) {
+	ws, c := o.ws, &o.ws.owner.m.cfg
+	hd, group, qdim := c.headDim, c.heads/c.kvHeads, c.heads*c.headDim
+	sc := &ws.attnScratch[worker]
+	scale := float32(c.attnScale)
+	for i := start; i < end; i++ {
+		it := ws.attnItems[i]
+		base, q0, q1, g := int(it.start), int(it.q0), int(it.q1), int(it.group)
+		nk, qb := q1, q1-q0
+		kv := base*c.kvDim + g*hd
+		must(sc.keysT.Reshape(hd, nk))
+		must(sc.keysT.Pack(ws.keys[kv:], c.kvDim, true))
+		must(sc.values.Reshape(nk, hd))
+		must(sc.values.Pack(ws.values[kv:], c.kvDim, false))
+		scores := sc.scores[:qb*nk]
+		for qh := g * group; qh < (g+1)*group; qh++ {
+			off := (base+q0)*qdim + qh*hd
+			must(sc.keysT.Mul(scores, nk, ws.q[off:], qdim, qb))
+			for r := range qb {
+				row := scores[r*nk : (r+1)*nk]
+				valid := q0 + r + 1
+				softmaxScaled(row[:valid], scale)
+				clear(row[valid:])
+			}
+			must(sc.values.Mul(ws.ctx[off:], qdim, scores, nk, qb))
+		}
+	}
+}
+
+func must(err error) {
+	if err != nil {
+		panic("clmqwen: blocked attention: " + err.Error())
 	}
 }
 

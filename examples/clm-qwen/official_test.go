@@ -237,6 +237,7 @@ func BenchmarkOfficialEmbed(b *testing.B) {
 		{"1text-12tok", []string{"The Moon causes tides by pulling on Earth's oceans."}},
 		{"1text-64tok", benchmarkTexts(1, 64)},
 		{"16texts-12tok", benchmarkTexts(16, 12)},
+		{"1text-2048tok", benchmarkTexts(1, 1900)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dst := make([][]float32, len(tc.texts))

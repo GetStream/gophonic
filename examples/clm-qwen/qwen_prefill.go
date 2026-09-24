@@ -9,7 +9,27 @@ import (
 	"math"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/whispergemm"
 )
+
+const (
+	// gemmAttentionMin is the sequence length from which attention runs as
+	// blocked matrix products instead of the per-row streaming loop.
+	gemmAttentionMin = 64
+	// attentionBlock is the query rows per blocked-attention item.
+	attentionBlock = 128
+)
+
+// attentionItem is one KV-head group and one query block of one sequence.
+type attentionItem struct {
+	start, q0, q1, group int32
+}
+
+// attentionScratch is one participant's blocked-attention storage.
+type attentionScratch struct {
+	keysT, values *whispergemm.PackedB
+	scores        []float32
+}
 
 // Evaluator computes Qwen3 last-token hidden states a layer at a time. All
 // tokens of a call, including tokens from several independent sequences, pass
@@ -34,7 +54,9 @@ func NewEvaluator(m *Model) (*Evaluator, error) {
 type Workspace struct {
 	h, norm, q, ctx, attn, gate, up []float32
 	keys, values                    []float32 // K and V projections of the current layer, [rows][kvDim]
-	rowStart, rowPos                []int32   // first row of each row's sequence, and its position
+	rowStart, rowPos, rowLen        []int32   // each row's sequence start, position, and sequence length
+	attnItems                       []attentionItem
+	attnScratch                     []attentionScratch // per participant
 	ropeCos, ropeSin                []float32
 	ropePositions                   int
 	capacity                        int
@@ -66,6 +88,7 @@ func (e *Evaluator) NewWorkspace(workers int) (*Workspace, error) {
 		ws.pool = newWorkerPool(workers)
 	}
 	c := &e.m.cfg
+	ws.attnScratch = make([]attentionScratch, workers)
 	ws.scratch = make([]*q8gemm.Scratch, workers)
 	for i := range ws.scratch {
 		ws.scratch[i] = q8gemm.NewScratch(max(c.hidden, c.heads*c.headDim, c.intermediate))
@@ -139,12 +162,22 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		return err
 	}
 	row := 0
+	ws.attnItems = ws.attnItems[:0]
 	for _, ids := range seqs {
 		start := int32(row)
 		for pos, id := range ids {
 			m.embedRow(id, ws.h[row*c.hidden:(row+1)*c.hidden])
-			ws.rowStart[row], ws.rowPos[row] = start, int32(pos)
+			ws.rowStart[row], ws.rowPos[row], ws.rowLen[row] = start, int32(pos), int32(len(ids))
 			row++
+		}
+		if len(ids) >= gemmAttentionMin {
+			// Later query blocks attend to more keys; queue them first so the
+			// dynamic scheduler finishes with the cheapest items.
+			for q0 := (len(ids) - 1) / attentionBlock * attentionBlock; q0 >= 0; q0 -= attentionBlock {
+				for g := range c.kvHeads {
+					ws.attnItems = append(ws.attnItems, attentionItem{start, int32(q0), int32(min(q0+attentionBlock, len(ids))), int32(g)})
+				}
+			}
 		}
 	}
 	ws.prepareRoPE(c, longest)
@@ -164,6 +197,9 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.project(ws.norm, c.hidden, projection{l.q, ws.q}, projection{l.k, ws.keys}, projection{l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
 		ws.run(opAttention, rows*c.kvHeads, 4)
+		if len(ws.attnItems) > 0 {
+			ws.run(opAttentionGEMM, len(ws.attnItems), 1)
+		}
 		ws.project(ws.ctx, c.heads*c.headDim, projection{l.o, ws.attn})
 		ws.addNorm(ws.attn, l.mlpNorm)
 		ws.project(ws.norm, c.hidden, projection{l.gate, ws.gate}, projection{l.up, ws.up})
@@ -210,6 +246,7 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 		ws.values = make([]float32, capN*c.kvDim)
 		ws.rowStart = make([]int32, capN)
 		ws.rowPos = make([]int32, capN)
+		ws.rowLen = make([]int32, capN)
 		tiles := (capN + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
 		for len(ws.tiles) < tiles {
 			tile, err := q8gemm.NewWorkspace(max(c.hidden, qdim, c.intermediate))
@@ -219,6 +256,22 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 			ws.tiles = append(ws.tiles, tile)
 		}
 		ws.capacity = capN
+	}
+	if positions >= gemmAttentionMin {
+		for i := range ws.attnScratch {
+			sc := &ws.attnScratch[i]
+			if len(sc.scores) >= attentionBlock*positions {
+				continue
+			}
+			var err error
+			if sc.keysT, err = whispergemm.NewPackedB(c.headDim, positions); err != nil {
+				return err
+			}
+			if sc.values, err = whispergemm.NewPackedB(positions, c.headDim); err != nil {
+				return err
+			}
+			sc.scores = make([]float32, attentionBlock*positions)
+		}
 	}
 	if positions > len(ws.ropeCos)/(c.headDim/2) {
 		capP := max(16, positions)

@@ -6,6 +6,7 @@
 package clmqwen
 
 import (
+	"math"
 	"simd/archsimd"
 	"unsafe"
 )
@@ -157,4 +158,27 @@ func rotateHalves(x1, x2, cos, sin []float32) {
 		x1[i] = a*cos[i] - b*sin[i]
 		x2[i] = b*cos[i] + a*sin[i]
 	}
+}
+
+// softmaxScaled replaces row with softmax(row*scale).
+func softmaxScaled(row []float32, scale float32) {
+	m := float32(math.Inf(-1))
+	for _, v := range row {
+		m = max(m, v)
+	}
+	m *= scale
+	s, mv := archsimd.BroadcastFloat32x4(scale), archsimd.BroadcastFloat32x4(m)
+	var acc archsimd.Float32x4
+	i := 0
+	for ; i+4 <= len(row); i += 4 {
+		e := exp4(load4(row, i).Mul(s).Sub(mv))
+		store4(e, row, i)
+		acc = acc.Add(e)
+	}
+	sum := sum4(acc)
+	for ; i < len(row); i++ {
+		row[i] = expNonPositive32(row[i]*scale - m)
+		sum += row[i]
+	}
+	scaleVector(row, 1/sum)
 }

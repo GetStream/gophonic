@@ -269,3 +269,52 @@ func TestConcurrentMul(t *testing.T) {
 	}
 	group.Wait()
 }
+
+func TestPackedBReshapeReusesStorage(t *testing.T) {
+	b, err := NewPackedB(64, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shape := range [][2]int{{17, 33}, {64, 100}, {5, 1}, {64, 97}} {
+		k, n := shape[0], shape[1]
+		if allocs := testing.AllocsPerRun(1, func() {
+			if err := b.Reshape(k, n); err != nil {
+				panic(err)
+			}
+		}); allocs != 0 {
+			t.Fatalf("reshape to %dx%d allocated", k, n)
+		}
+		src := make([]float32, n*k)
+		for i := range src {
+			src[i] = float32(i%13) - 6
+		}
+		if err := b.Pack(src, k, true); err != nil {
+			t.Fatal(err)
+		}
+		a := make([]float32, 3*k)
+		for i := range a {
+			a[i] = float32(i%5) - 2
+		}
+		got := make([]float32, 3*n)
+		if err := b.Mul(got, n, a, k, 3); err != nil {
+			t.Fatal(err)
+		}
+		for r := range 3 {
+			for c := range n {
+				var want float32
+				for kk := range k {
+					want += a[r*k+kk] * src[c*k+kk]
+				}
+				if d := got[r*n+c] - want; d > 1e-3 || d < -1e-3 {
+					t.Fatalf("%dx%d [%d,%d] = %g, want %g", k, n, r, c, got[r*n+c], want)
+				}
+			}
+		}
+	}
+	if err := b.Reshape(1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if k, n := b.Dims(); k != 1000 || n != 1000 {
+		t.Fatalf("dims %d %d", k, n)
+	}
+}

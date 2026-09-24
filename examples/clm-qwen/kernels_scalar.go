@@ -78,3 +78,18 @@ func rotateHalves(x1, x2, cos, sin []float32) {
 		x2[i] = b*cos[i] + a*sin[i]
 	}
 }
+
+// softmaxScaled replaces row with softmax(row*scale).
+func softmaxScaled(row []float32, scale float32) {
+	m := row[0]
+	for _, v := range row {
+		m = max(m, v)
+	}
+	m *= scale
+	var sum float32
+	for i, v := range row {
+		row[i] = expNonPositive32(v*scale - m)
+		sum += row[i]
+	}
+	scaleVector(row, 1/sum)
+}
