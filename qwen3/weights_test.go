@@ -242,7 +242,7 @@ func TestLoadModelExactF16Weights(t *testing.T) {
 	}
 	// Every BF16 projection weight must round-trip exactly through packing.
 	want := ck.tensors["model.layers.1.mlp.down_proj.weight"]
-	w := m.layers[1].down
+	w := m.layers[1].down.f16
 	k, n := w.Dims()
 	x := make([]float32, k)
 	got := make([]float32, n)

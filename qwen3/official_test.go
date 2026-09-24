@@ -89,7 +89,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		cosine float64
 	}{
 		{WeightsF16, 0.9999},
-		{WeightsInt8, 0.997},
+		{WeightsInt8, 0.998},
 	} {
 		enc, load := loadOfficialEncoder(t, tc.format)
 		got := [][]float32{make([]float32, hiddenSize)}
@@ -124,7 +124,7 @@ func TestOfficialCLMRankingAndZeroAlloc(t *testing.T) {
 		tolerance float64
 	}{
 		{WeightsF16, 0.0002},
-		{WeightsInt8, 0.0015},
+		{WeightsInt8, 0.0005},
 	} {
 		enc, _ := loadOfficialEncoder(t, tc.format)
 		engine, err := clm.NewEngine(head, clmEmbedder(enc))

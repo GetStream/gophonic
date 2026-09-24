@@ -36,6 +36,14 @@ out += args([("w", "R0"), ("kPairs", "R1"), ("panels", "R2"), ("activation", "R3
              ("colScales", "R16"), ("rowScales", "R19")], 80)
 out += [words("tile16x64hh.S"), "\tMOVD\tR0, retries+80(FP)\n", "\tRET\n\n"]
 out += [
+    "// func smeMulI8(w *int8, kQuads, panels int, activation *int8, dst *float32, cols, rows, strideBytes int, colScales, rowScales *float32) (retries int)\n",
+    "TEXT ·smeMulI8(SB), NOSPLIT, $0-88\n",
+]
+out += args([("w", "R0"), ("kQuads", "R1"), ("panels", "R2"), ("activation", "R3"),
+             ("dst", "R4"), ("cols", "R5"), ("rows", "R6"), ("strideBytes", "R7"),
+             ("colScales", "R16"), ("rowScales", "R19")], 80)
+out += [words("tile16x64i8.S"), "\tMOVD\tR0, retries+80(FP)\n", "\tRET\n\n"]
+out += [
     "// func smeVectorBytes() int\n",
     "TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8\n",
     "\tWORD\t$0x04bf5820\t// rdsvl x0, #1\n",
@@ -56,6 +64,14 @@ neon = [
     "\tMOVD\tpairs+16(FP), R2\n",
     "\tFMOVS\tscale+24(FP), F0\n",
     words("packpairs.S"),
+    "\tRET\n\n",
+    "// func packQuadsNEON(dst *int8, src *float32, quads int, scale float32)\n",
+    "TEXT ·packQuadsNEON(SB), NOSPLIT, $0-28\n",
+    "\tMOVD\tdst+0(FP), R0\n",
+    "\tMOVD\tsrc+8(FP), R1\n",
+    "\tMOVD\tquads+16(FP), R2\n",
+    "\tFMOVS\tscale+24(FP), F0\n",
+    words("quantpack.S"),
     "\tRET\n\n",
     "// func maxAbsNEON(src *float32, n int) float32\n",
     "TEXT ·maxAbsNEON(SB), NOSPLIT, $0-20\n",

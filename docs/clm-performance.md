@@ -20,6 +20,14 @@ none` and its best thread count (8).
 | Cosine vs official BF16 (`hello`) | 0.99738 | 0.99929 | **0.99991** |
 | Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s |
 
+**int8 fast mode** (`Options{Weights: "int8"}`): 1 token 37 ms, 12 tokens
+49 ms, 70 tokens 200 ms, 16 texts × ~12 tokens 530 ms; cosine 0.99866 on
+`hello`, CLM probabilities within 2.2e-4 of official BF16. It rotates each
+projection's input with a randomized Hadamard transform and runs int8×int8
+`SMOPA` with exact int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms
+for FP16). GPTQ-rounded weights raise the fidelity further in an offline
+study (cosine 0.99961); that conversion is not yet part of the loader.
+
 All warmed paths report 0 allocs/op. “Before” is the previous single-thread
 per-row int8 path. Probabilities for the pinned CLM ranking now differ from the
 official BF16 PyTorch pipeline by at most 7.1e-5 (previously 1.0e-3).

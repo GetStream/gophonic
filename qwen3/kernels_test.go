@@ -69,3 +69,43 @@ func TestVectorKernelsMatchScalar(t *testing.T) {
 		t.Fatalf("dot32 = %g, want %g", dot32(x, up), dot)
 	}
 }
+
+func TestRotationIsOrthogonal(t *testing.T) {
+	for _, k := range []int{8, 96, 136, 4096, 12288} {
+		r := newRotation(k)
+		if want := min(4096, k&-k); r.block != want {
+			t.Fatalf("k=%d block %d, want %d", k, r.block, want)
+		}
+		x := make([]float32, k)
+		var norm float64
+		for i := range x {
+			x[i] = float32(math.Sin(float64(i)*1.7)) * float32(1+i%9)
+			norm += float64(x[i]) * float64(x[i])
+		}
+		y := append([]float32(nil), x...)
+		r.apply(y)
+		var rotated float64
+		for _, v := range y {
+			rotated += float64(v) * float64(v)
+		}
+		if math.Abs(rotated-norm) > 1e-5*norm {
+			t.Fatalf("k=%d: norm %g became %g", k, norm, rotated)
+		}
+		// Rotating a weight row and the input preserves the dot product.
+		w := make([]float32, k)
+		var dot float64
+		for i := range w {
+			w[i] = float32(math.Cos(float64(i)))
+			dot += float64(w[i]) * float64(x[i])
+		}
+		rw := append([]float32(nil), w...)
+		r.apply(rw)
+		var got float64
+		for i := range rw {
+			got += float64(rw[i]) * float64(y[i])
+		}
+		if math.Abs(got-dot) > 1e-4*math.Sqrt(norm)*math.Sqrt(float64(k)) {
+			t.Fatalf("k=%d: rotated dot %g, want %g", k, got, dot)
+		}
+	}
+}

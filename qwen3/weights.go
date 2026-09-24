@@ -24,8 +24,11 @@ const (
 	// WeightsF16 stores every BF16 checkpoint weight exactly: each output row
 	// is shifted by a power of two into FP16 range. It is the default.
 	WeightsF16 = "f16"
-	// WeightsInt8 stores each output row as symmetric int8 with one FP32
-	// scale, halving weight memory at a measurable accuracy cost.
+	// WeightsInt8 rotates each projection's input space with a randomized
+	// Hadamard transform, stores each output row as symmetric int8 with one
+	// FP32 scale, and quantizes activations to int8 per row at run time. It
+	// halves weight memory and runs the int8 matrix units at about twice the
+	// FP16 rate, at a measurable accuracy cost.
 	WeightsInt8 = "int8"
 )
 
@@ -43,7 +46,36 @@ type Weights struct {
 
 type modelLayer struct {
 	attnNorm, mlpNorm, qNorm, kNorm []float32
-	q, k, v, o, gate, up, down      *q8gemm.Weights
+	q, k, v, o, gate, up, down      linear
+}
+
+// linear is one packed projection: exact FP16 weights, or rotated int8
+// weights with the rotation their inputs need.
+type linear struct {
+	f16 *q8gemm.Weights
+	i8  *q8gemm.WeightsI8
+	rot *rotation
+}
+
+func (l *linear) dims() (k, n int) {
+	if l.i8 != nil {
+		return l.i8.Dims()
+	}
+	return l.f16.Dims()
+}
+
+func (l *linear) panels() int {
+	if l.i8 != nil {
+		return l.i8.Panels()
+	}
+	return l.f16.Panels()
+}
+
+func (l *linear) bytes() int {
+	if l.i8 != nil {
+		return l.i8.Bytes()
+	}
+	return l.f16.Bytes()
 }
 
 type modelConfig struct {
@@ -104,10 +136,15 @@ func LoadWeights(dir, format string) (*Weights, error) {
 	if m.finalNorm, err = st.vector("model.norm.weight", h); err != nil {
 		return nil, err
 	}
+	var rotHidden, rotContext, rotInter *rotation
+	if format == WeightsInt8 {
+		rotHidden, rotContext, rotInter = newRotation(h), newRotation(qdim), newRotation(inter)
+	}
 	type job struct {
 		name string
 		n, k int
-		dst  **q8gemm.Weights
+		dst  *linear
+		rot  *rotation
 	}
 	var jobs []job
 	for i := range m.layers {
@@ -128,13 +165,13 @@ func LoadWeights(dir, format string) (*Weights, error) {
 			}
 		}
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, &l.q},
-			job{p + "self_attn.k_proj.weight", kv, h, &l.k},
-			job{p + "self_attn.v_proj.weight", kv, h, &l.v},
-			job{p + "self_attn.o_proj.weight", h, qdim, &l.o},
-			job{p + "mlp.gate_proj.weight", inter, h, &l.gate},
-			job{p + "mlp.up_proj.weight", inter, h, &l.up},
-			job{p + "mlp.down_proj.weight", h, inter, &l.down},
+			job{p + "self_attn.q_proj.weight", qdim, h, &l.q, rotHidden},
+			job{p + "self_attn.k_proj.weight", kv, h, &l.k, rotHidden},
+			job{p + "self_attn.v_proj.weight", kv, h, &l.v, rotHidden},
+			job{p + "self_attn.o_proj.weight", h, qdim, &l.o, rotContext},
+			job{p + "mlp.gate_proj.weight", inter, h, &l.gate, rotHidden},
+			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden},
+			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter},
 		)
 	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
@@ -159,7 +196,7 @@ func LoadWeights(dir, format string) (*Weights, error) {
 				j := jobs[next]
 				next++
 				mu.Unlock()
-				w, err := st.projection(j.name, j.n, j.k, format, buf)
+				w, err := st.projection(j.name, j.n, j.k, buf, j.rot)
 				mu.Lock()
 				if err != nil && first == nil {
 					first = err
@@ -184,8 +221,8 @@ func (m *Weights) WeightBytes() int64 {
 	var n int64
 	for i := range m.layers {
 		l := &m.layers[i]
-		for _, w := range [...]*q8gemm.Weights{l.q, l.k, l.v, l.o, l.gate, l.up, l.down} {
-			n += int64(w.Bytes())
+		for _, w := range [...]*linear{&l.q, &l.k, &l.v, &l.o, &l.gate, &l.up, &l.down} {
+			n += int64(w.bytes())
 		}
 	}
 	return n
@@ -415,57 +452,60 @@ func (st *safetensors) vector(name string, n int) ([]float32, error) {
 	return out, nil
 }
 
-// projection reads an [n][k] BF16 matrix into buf and packs it.
-func (st *safetensors) projection(name string, n, k int, format string, buf []uint16) (*q8gemm.Weights, error) {
+// projection reads an [n][k] BF16 matrix into buf and packs it: exactly as
+// FP16 when rot is nil, otherwise as rotated per-row int8.
+func (st *safetensors) projection(name string, n, k int, buf []uint16, rot *rotation) (linear, error) {
 	t, err := st.lookup(name, n, k)
 	if err != nil {
-		return nil, err
+		return linear{}, err
 	}
 	if t.dtype != "BF16" {
-		return nil, fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", name, t.dtype)
+		return linear{}, fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", name, t.dtype)
 	}
 	raw := buf[:n*k]
 	if err := readInto(t, raw); err != nil {
-		return nil, err
+		return linear{}, err
 	}
-	if format == WeightsF16 {
+	if rot == nil {
 		w, err := q8gemm.NewWeightsF16(k, n)
 		if err != nil {
-			return nil, err
+			return linear{}, err
 		}
 		if _, err := w.PackBF16(raw); err != nil {
-			return nil, fmt.Errorf("qwen3: pack %s: %w", name, err)
+			return linear{}, fmt.Errorf("qwen3: pack %s: %w", name, err)
 		}
-		return w, nil
+		return linear{f16: w}, nil
 	}
-	q, scales := quantizeRowsInt8(raw, n, k)
-	w, err := q8gemm.NewWeights(k, n)
+	q, scales := quantizeRotatedRows(raw, n, k, rot)
+	w, err := q8gemm.NewWeightsI8(k, n)
 	if err != nil {
-		return nil, err
+		return linear{}, err
 	}
 	if err := w.Pack(q, scales); err != nil {
-		return nil, fmt.Errorf("qwen3: pack %s: %w", name, err)
+		return linear{}, fmt.Errorf("qwen3: pack %s: %w", name, err)
 	}
-	return w, nil
+	return linear{i8: w, rot: rot}, nil
 }
 
-// quantizeRowsInt8 maps each row to round(w/s) with s = max|w|/127.
-func quantizeRowsInt8(bf16 []uint16, n, k int) ([]int8, []float32) {
+// quantizeRotatedRows rotates each weight row by rot and maps it to
+// round(w/s) with s = max|w|/127.
+func quantizeRotatedRows(bf16 []uint16, n, k int, rot *rotation) ([]int8, []float32) {
 	q := make([]int8, n*k)
 	scales := make([]float32, n)
-	for row := range n {
-		src := bf16[row*k : (row+1)*k]
-		var m float32
-		for _, b := range src {
-			m = max(m, float32(math.Abs(float64(q8gemm.BF16ToF32(b)))))
+	row := make([]float32, k)
+	for r := range n {
+		for i, b := range bf16[r*k : (r+1)*k] {
+			row[i] = q8gemm.BF16ToF32(b)
 		}
+		rot.apply(row)
+		m := q8gemm.MaxAbs(row)
 		if m == 0 {
 			continue
 		}
 		scale := m / 127
-		scales[row] = scale
-		for i, b := range src {
-			q[row*k+i] = int8(max(-127, min(127, math.Round(float64(q8gemm.BF16ToF32(b)/scale)))))
+		scales[r] = scale
+		for i, v := range row {
+			q[r*k+i] = int8(max(-127, min(127, math.RoundToEven(float64(v/scale)))))
 		}
 	}
 	return q, scales

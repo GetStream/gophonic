@@ -218,6 +218,115 @@ TEXT ·smeMulF16W(SB), NOSPLIT, $0-88
 	MOVD	R0, retries+80(FP)
 	RET
 
+// func smeMulI8(w *int8, kQuads, panels int, activation *int8, dst *float32, cols, rows, strideBytes int, colScales, rowScales *float32) (retries int)
+TEXT ·smeMulI8(SB), NOSPLIT, $0-88
+	MOVD	w+0(FP), R0
+	MOVD	kQuads+8(FP), R1
+	MOVD	panels+16(FP), R2
+	MOVD	activation+24(FP), R3
+	MOVD	dst+32(FP), R4
+	MOVD	cols+40(FP), R5
+	MOVD	rows+48(FP), R6
+	MOVD	strideBytes+56(FP), R7
+	MOVD	colScales+64(FP), R16
+	MOVD	rowScales+72(FP), R19
+	WORD	$0xd503477f	// smstart
+	WORD	$0x2598e3e0	// ptrue p0.s
+	WORD	$0x2518e3e2	// ptrue p2.b
+	WORD	$0xd2800011	// mov x17, #0x0 ; =0
+	WORD	$0xd378dc28	// lsl x8, x1, #8
+	WORD	$0xd2800009	// mov x9, #0x0 ; =0
+	WORD	$0xc00800ff	// zero {za}
+	WORD	$0x25b9ce1f	// fmov z31.s, #1.00000000
+	WORD	$0xaa0003ea	// mov x10, x0
+	WORD	$0xaa0303eb	// mov x11, x3
+	WORD	$0xaa0103ec	// mov x12, x1
+	WORD	$0xb40001cc	// cbz x12, 0x64
+	WORD	$0xa400a960	// ld1b { z0.b }, p2/z, [x11]
+	WORD	$0xa400a944	// ld1b { z4.b }, p2/z, [x10]
+	WORD	$0xa401a945	// ld1b { z5.b }, p2/z, [x10, #0x1, mul vl]
+	WORD	$0xa402a946	// ld1b { z6.b }, p2/z, [x10, #0x2, mul vl]
+	WORD	$0xa403a947	// ld1b { z7.b }, p2/z, [x10, #0x3, mul vl]
+	WORD	$0xa0844800	// smopa za0.s, p2/m, p2/m, z0.b, z4.b
+	WORD	$0xa0854801	// smopa za1.s, p2/m, p2/m, z0.b, z5.b
+	WORD	$0xa0864802	// smopa za2.s, p2/m, p2/m, z0.b, z6.b
+	WORD	$0xa0874803	// smopa za3.s, p2/m, p2/m, z0.b, z7.b
+	WORD	$0x9104014a	// add x10, x10, #0x100
+	WORD	$0x9101016b	// add x11, x11, #0x40
+	WORD	$0xd100058c	// sub x12, x12, #0x1
+	WORD	$0x17fffff3	// b 0x2c
+	WORD	$0x2598e3e3	// ptrue p3.s
+	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+	WORD	$0x2550cc80	// ptest p3, p4.b
+	WORD	$0x54000801	// b.ne 0x170
+	WORD	$0x25a08c0e	// cntp x14, p3, p0.s
+	WORD	$0xf10041df	// cmp x14, #0x10
+	WORD	$0x540007a1	// b.ne 0x170
+	WORD	$0x8b09220f	// add x15, x16, x9, lsl #8
+	WORD	$0xcb0918ae	// sub x14, x5, x9, lsl #6
+	WORD	$0x25ae17e1	// whilelt p1.s, xzr, x14
+	WORD	$0xa540a5f0	// ld1w { z16.s }, p1/z, [x15]
+	WORD	$0xd10041ce	// sub x14, x14, #0x10
+	WORD	$0x25ae17e1	// whilelt p1.s, xzr, x14
+	WORD	$0xa541a5f1	// ld1w { z17.s }, p1/z, [x15, #0x1, mul vl]
+	WORD	$0xd10041ce	// sub x14, x14, #0x10
+	WORD	$0x25ae17e1	// whilelt p1.s, xzr, x14
+	WORD	$0xa542a5f2	// ld1w { z18.s }, p1/z, [x15, #0x2, mul vl]
+	WORD	$0xd10041ce	// sub x14, x14, #0x10
+	WORD	$0x25ae17e1	// whilelt p1.s, xzr, x14
+	WORD	$0xa543a5f3	// ld1w { z19.s }, p1/z, [x15, #0x3, mul vl]
+	WORD	$0xd280000d	// mov x13, #0x0 ; =0
+	WORD	$0xeb0601bf	// cmp x13, x6
+	WORD	$0x5400046a	// b.ge 0x148
+	WORD	$0x8b0d0a74	// add x20, x19, x13, lsl #2
+	WORD	$0x8540c294	// ld1rw { z20.s }, p0/z, [x20]
+	WORD	$0x9b0711ae	// madd x14, x13, x7, x4
+	WORD	$0xcb0918af	// sub x15, x5, x9, lsl #6
+	WORD	$0x8b0921ce	// add x14, x14, x9, lsl #8
+	WORD	$0x25af17e1	// whilelt p1.s, xzr, x15
+	WORD	$0xc0822001	// mov z1.s, p0/m, za0h.s[w13, 0]
+	WORD	$0x6594a021	// scvtf z1.s, p0/m, z1.s
+	WORD	$0x65900821	// fmul z1.s, z1.s, z16.s
+	WORD	$0x65940821	// fmul z1.s, z1.s, z20.s
+	WORD	$0xe540e5c1	// st1w { z1.s }, p1, [x14]
+	WORD	$0xd10041ef	// sub x15, x15, #0x10
+	WORD	$0x25af17e1	// whilelt p1.s, xzr, x15
+	WORD	$0xc0822082	// mov z2.s, p0/m, za1h.s[w13, 0]
+	WORD	$0x6594a042	// scvtf z2.s, p0/m, z2.s
+	WORD	$0x65910842	// fmul z2.s, z2.s, z17.s
+	WORD	$0x65940842	// fmul z2.s, z2.s, z20.s
+	WORD	$0xe541e5c2	// st1w { z2.s }, p1, [x14, #0x1, mul vl]
+	WORD	$0xd10041ef	// sub x15, x15, #0x10
+	WORD	$0x25af17e1	// whilelt p1.s, xzr, x15
+	WORD	$0xc0822103	// mov z3.s, p0/m, za2h.s[w13, 0]
+	WORD	$0x6594a063	// scvtf z3.s, p0/m, z3.s
+	WORD	$0x65920863	// fmul z3.s, z3.s, z18.s
+	WORD	$0x65940863	// fmul z3.s, z3.s, z20.s
+	WORD	$0xe542e5c3	// st1w { z3.s }, p1, [x14, #0x2, mul vl]
+	WORD	$0xd10041ef	// sub x15, x15, #0x10
+	WORD	$0x25af17e1	// whilelt p1.s, xzr, x15
+	WORD	$0xc0822181	// mov z1.s, p0/m, za3h.s[w13, 0]
+	WORD	$0x6594a021	// scvtf z1.s, p0/m, z1.s
+	WORD	$0x65930821	// fmul z1.s, z1.s, z19.s
+	WORD	$0x65940821	// fmul z1.s, z1.s, z20.s
+	WORD	$0xe543e5c1	// st1w { z1.s }, p1, [x14, #0x3, mul vl]
+	WORD	$0x910005ad	// add x13, x13, #0x1
+	WORD	$0x17ffffdd	// b 0xb8
+	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+	WORD	$0x2550cc80	// ptest p3, p4.b
+	WORD	$0x54000101	// b.ne 0x170
+	WORD	$0x8b080000	// add x0, x0, x8
+	WORD	$0x91000529	// add x9, x9, #0x1
+	WORD	$0xeb02013f	// cmp x9, x2
+	WORD	$0x54fff5cb	// b.lt 0x18
+	WORD	$0xd503467f	// smstop
+	WORD	$0xaa1103e0	// mov x0, x17
+	WORD	$0x14000003	// b 0x178
+	WORD	$0x91000631	// add x17, x17, #0x1
+	WORD	$0x17ffffa9	// b 0x18
+	MOVD	R0, retries+80(FP)
+	RET
+
 // func smeVectorBytes() int
 TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8
 	WORD	$0x04bf5820	// rdsvl x0, #1

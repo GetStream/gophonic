@@ -27,3 +27,16 @@ func mulPanelsSME(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 i
 }
 
 func retryCount() uint64 { return smeRetries.Load() }
+
+func mulPanelsI8SME(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, p0, p1 int) bool {
+	if !usingSME() {
+		return false
+	}
+	col := p0 * OutputPanel
+	retries := smeMulI8(&w.q[p0*w.quads*4*OutputPanel], w.quads, p1-p0, &ws.activation[0],
+		&dst[col], w.n-col, ws.rows, 4*stride, &w.scales[col], &ws.rowScale[0])
+	if retries != 0 {
+		smeRetries.Add(uint64(retries))
+	}
+	return true
+}

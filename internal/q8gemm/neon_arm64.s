@@ -27,6 +27,39 @@ TEXT ·packPairsNEON(SB), NOSPLIT, $0-28
 	WORD	$0x17fffff4	// b 0x8
 	RET
 
+// func packQuadsNEON(dst *int8, src *float32, quads int, scale float32)
+TEXT ·packQuadsNEON(SB), NOSPLIT, $0-28
+	MOVD	dst+0(FP), R0
+	MOVD	src+8(FP), R1
+	MOVD	quads+16(FP), R2
+	FMOVS	scale+24(FP), F0
+	WORD	$0x4e04041f	// dup.4s v31, v0[0]
+	WORD	$0xd2800803	// mov x3, #0x40 ; =64
+	WORD	$0xf100105f	// cmp x2, #0x4
+	WORD	$0x540002cb	// b.lt 0x64
+	WORD	$0x4cdf2820	// ld1.4s { v0, v1, v2, v3 }, [x1], #64
+	WORD	$0x6e3fdc00	// fmul.4s v0, v0, v31
+	WORD	$0x6e3fdc21	// fmul.4s v1, v1, v31
+	WORD	$0x6e3fdc42	// fmul.4s v2, v2, v31
+	WORD	$0x6e3fdc63	// fmul.4s v3, v3, v31
+	WORD	$0x4e21a800	// fcvtns.4s v0, v0
+	WORD	$0x4e21a821	// fcvtns.4s v1, v1
+	WORD	$0x4e21a842	// fcvtns.4s v2, v2
+	WORD	$0x4e21a863	// fcvtns.4s v3, v3
+	WORD	$0x0e614804	// sqxtn.4h v4, v0
+	WORD	$0x4e614824	// sqxtn2.8h v4, v1
+	WORD	$0x0e614845	// sqxtn.4h v5, v2
+	WORD	$0x4e614865	// sqxtn2.8h v5, v3
+	WORD	$0x0e214886	// sqxtn.8b v6, v4
+	WORD	$0x4e2148a6	// sqxtn2.16b v6, v5
+	WORD	$0x0d838006	// st1.s { v6 }[0], [x0], x3
+	WORD	$0x0d839006	// st1.s { v6 }[1], [x0], x3
+	WORD	$0x4d838006	// st1.s { v6 }[2], [x0], x3
+	WORD	$0x4d839006	// st1.s { v6 }[3], [x0], x3
+	WORD	$0xd1001042	// sub x2, x2, #0x4
+	WORD	$0x17ffffea	// b 0x8
+	RET
+
 // func maxAbsNEON(src *float32, n int) float32
 TEXT ·maxAbsNEON(SB), NOSPLIT, $0-20
 	MOVD	src+0(FP), R0
