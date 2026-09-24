@@ -18,9 +18,11 @@ var (
 
 // upload aliases the caller's bounded request body. No part bytes are copied.
 type upload struct {
-	name  []byte
-	audio []byte
-	text  bool
+	name        []byte
+	audio       []byte
+	format      byte
+	words       bool
+	granularity bool
 }
 
 func parseUpload(contentType string, body []byte) (upload, error) {
@@ -53,6 +55,9 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 		if len(body[pos:]) >= 2 && bytes.Equal(body[pos:pos+2], []byte("--")) {
 			if len(result.audio) == 0 {
 				return upload{}, errFile
+			}
+			if result.granularity && result.format != 2 {
+				return upload{}, errValue
 			}
 			return result, nil
 		}
@@ -97,8 +102,21 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 			}
 		case bytes.Equal(field, []byte("response_format")):
 			if bytes.Equal(value, []byte("text")) {
-				result.text = true
+				result.format = 1
+			} else if bytes.Equal(value, []byte("verbose_json")) {
+				result.format = 2
+			} else if bytes.Equal(value, []byte("srt")) {
+				result.format = 3
+			} else if bytes.Equal(value, []byte("vtt")) {
+				result.format = 4
 			} else if !bytes.Equal(value, []byte("json")) {
+				return upload{}, errValue
+			}
+		case bytes.Equal(field, []byte("timestamp_granularities[]")) || bytes.Equal(field, []byte("timestamp_granularities")):
+			result.granularity = true
+			if bytes.Equal(value, []byte("word")) {
+				result.words = true
+			} else if !bytes.Equal(value, []byte("segment")) {
 				return upload{}, errValue
 			}
 		case bytes.Equal(field, []byte("language")):

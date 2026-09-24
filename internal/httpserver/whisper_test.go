@@ -58,8 +58,13 @@ func TestReadUploadValidatesAPIFields(t *testing.T) {
 		"model": "gophonic-whisper", "response_format": "text", "language": "en",
 	})
 	got, err := parseTestUpload(t, request)
-	if err != nil || string(got.name) != "sample.wav" || string(got.audio) != "wav" || !got.text {
+	if err != nil || string(got.name) != "sample.wav" || string(got.audio) != "wav" || got.format != 1 {
 		t.Fatalf("upload: %+v err=%v", got, err)
+	}
+	wordRequest := multipartRequest(t, "sample.wav", []byte("wav"), map[string]string{"response_format": "verbose_json", "timestamp_granularities[]": "word"})
+	wordUpload, err := parseTestUpload(t, wordRequest)
+	if err != nil || !wordUpload.words || wordUpload.format != 2 {
+		t.Fatalf("word upload: %+v err=%v", wordUpload, err)
 	}
 	limited := multipartRequest(t, "sample.wav", []byte("wav"), nil)
 	small := make([]byte, 16)
@@ -68,7 +73,9 @@ func TestReadUploadValidatesAPIFields(t *testing.T) {
 	}
 	for _, fields := range []map[string]string{
 		{"model": "unsupported"}, {"language": "fr"},
-		{"response_format": "verbose_json"}, {"prompt": "not implemented"},
+		{"prompt": "not implemented"},
+		{"timestamp_granularities[]": "word"},
+		{"response_format": "verbose_json", "timestamp_granularities[]": "phoneme"},
 	} {
 		request := multipartRequest(t, "sample.wav", []byte("wav"), fields)
 		if _, err := parseTestUpload(t, request); err == nil {
@@ -134,6 +141,42 @@ func TestWhisperServerOfficialJFK(t *testing.T) {
 			t.Fatalf("unexpected transcript %q", transcript)
 		}
 	}
+	verboseRequest := multipartRequest(t, "jfk.wav", wav.Bytes(), map[string]string{
+		"model": "whisper-1", "response_format": "verbose_json", "timestamp_granularities[]": "word",
+	})
+	verboseResponse := httptest.NewRecorder()
+	server.ServeHTTP(verboseResponse, verboseRequest)
+	if verboseResponse.Code != http.StatusOK {
+		t.Fatalf("verbose status=%d body=%s", verboseResponse.Code, verboseResponse.Body.String())
+	}
+	var verbose struct {
+		Text     string `json:"text"`
+		Segments []struct {
+			Start, End float64
+			Text       string
+		} `json:"segments"`
+		Words []struct {
+			Start, End float64
+			Word       string
+		} `json:"words"`
+	}
+	if err := json.Unmarshal(verboseResponse.Body.Bytes(), &verbose); err != nil {
+		t.Fatalf("%v: %s", err, verboseResponse.Body.Bytes())
+	}
+	if verbose.Text != "And so my fellow Americans ask not what your country can do for you ask what you can do for your country." || len(verbose.Segments) != 1 || len(verbose.Words) < 10 || verbose.Segments[0].Start != 0 {
+		t.Fatalf("verbose response: %+v", verbose)
+	}
+	if verbose.Words[0].Word != " And" || verbose.Words[len(verbose.Words)-1].Word != " country." {
+		t.Fatalf("word boundaries: %+v", verbose.Words)
+	}
+	for _, format := range []struct{ name, marker string }{{"srt", "00:00:00,000 --> 00:00:11,000"}, {"vtt", "00:00:00.000 --> 00:00:11.000"}} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, multipartRequest(t, "jfk.wav", wav.Bytes(), map[string]string{"response_format": format.name}))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), format.marker) || !strings.Contains(response.Body.String(), "And so my fellow Americans") {
+			t.Fatalf("%s status=%d body=%q", format.name, response.Code, response.Body.String())
+		}
+	}
+
 	bad := httptest.NewRecorder()
 	server.ServeHTTP(bad, multipartRequest(t, "invalid.wav", []byte("not WAV"), nil))
 	if bad.Code != http.StatusBadRequest {
@@ -230,6 +273,27 @@ func TestWarmedWAVHandlerAllocations(t *testing.T) {
 	t.Logf("warmed WAV handler allocations: %g allocs/op", allocs)
 	if allocs != 0 {
 		t.Fatalf("warmed WAV handler must allocate zero heap objects, got %g", allocs)
+	}
+	wordRequest := multipartRequest(t, "jfk.wav", wav, map[string]string{"response_format": "verbose_json", "timestamp_granularities[]": "word"})
+	wordBody, err := io.ReadAll(wordRequest.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wordReader := bytes.NewReader(wordBody)
+	wordRequest.Body = io.NopCloser(wordReader)
+	wordCall := func() {
+		wordReader.Reset(wordBody)
+		response.status, response.bytes = 0, 0
+		server.transcribe(response, wordRequest)
+		if response.status != 0 || response.bytes == 0 {
+			panic("word transcription failed")
+		}
+	}
+	wordCall()
+	wordAllocs := testing.AllocsPerRun(3, wordCall)
+	t.Logf("warmed word-timestamp handler allocations: %g allocs/op", wordAllocs)
+	if wordAllocs != 0 {
+		t.Fatalf("warmed word-timestamp handler allocates %g objects", wordAllocs)
 	}
 }
 

@@ -283,3 +283,178 @@ func TestTranscriberExplicitWorkerBudget(t *testing.T) {
 		t.Fatal("decoder does not share the configured encoder executor")
 	}
 }
+
+func TestSegmentTimestampOffsets(t *testing.T) {
+	tok, err := NewTokenizer(EnglishOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := tok.EncodeInto(make([]int, 0, 8), " hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := tok.TimestampBegin()
+	tokens := append([]int{begin + 25}, ids...)
+	tokens = append(tokens, begin+75)
+	worker := &Transcriber{tokenizer: tok, history: make([]int, 0, 16)}
+	text, segments, err := worker.appendTranscribedSegmentsAt(make([]byte, 0, 64), tokens, MelFrames, true, 100, make([]Segment, 0, 2), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].Start != 1.5 || segments[0].End != 2.5 || string(text[segments[0].TextStart:segments[0].TextEnd]) != " hello" {
+		t.Fatalf("segments=%+v text=%q", segments, text)
+	}
+}
+
+func TestOfficialJFKSegmentTimestamps(t *testing.T) {
+	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
+	if path == "" {
+		t.Skip("set GOPHONIC_WHISPER_MODEL")
+	}
+	model, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := NewTranscriber(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]float32, len(data)/4)
+	for i := range pcm {
+		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
+	}
+	text, segments, err := worker.TranscribeSegmentsInto(pcm, make([]byte, 0, 4096), make([]Segment, 0, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].Start != 0 || segments[0].End != 11 || string(text[segments[0].TextStart:segments[0].TextEnd]) != " And so my fellow Americans ask not what your country can do for you ask what you can do for your country." {
+		t.Fatalf("segments=%+v text=%q", segments, text)
+	}
+}
+
+func TestOfficialJFKWordTimestamps(t *testing.T) {
+	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
+	if path == "" {
+		t.Skip("set GOPHONIC_WHISPER_MODEL")
+	}
+	model, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := NewTranscriber(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]float32, len(data)/4)
+	for i := range pcm {
+		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
+	}
+	text, segments, words, err := worker.TranscribeWordsInto(pcm, make([]byte, 0, 4096), make([]Segment, 0, 64), make([]Word, 0, 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || len(words) < 10 || segments[0].WordStart != 0 || segments[0].WordEnd != len(words) {
+		t.Fatalf("segments=%+v words=%+v", segments, words)
+	}
+	for i, word := range words {
+		if word.Start < 0 || word.End < word.Start || word.End > 11.1 || word.TextStart < 0 || word.TextEnd > len(text) || word.TextStart >= word.TextEnd {
+			t.Fatalf("invalid word %d: %+v", i, word)
+		}
+		t.Logf("%q %.2f %.2f p=%.3f", text[word.TextStart:word.TextEnd], word.Start, word.End, word.Probability)
+	}
+}
+
+func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
+	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
+	if path == "" {
+		t.Skip("set GOPHONIC_WHISPER_MODEL")
+	}
+	model, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := NewTranscriber(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]float32, len(data)/4)
+	for i := range pcm {
+		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
+	}
+	text := make([]byte, 0, 4096)
+	segments := make([]Segment, 0, 64)
+	words := make([]Word, 0, 128)
+	call := func() {
+		transcript, timed, aligned, err := worker.TranscribeWordsInto(pcm, text[:0], segments[:0], words[:0])
+		if err != nil || len(transcript) == 0 || len(timed) == 0 || len(aligned) == 0 {
+			panic("alignment failed")
+		}
+	}
+	call()
+	allocs := testing.AllocsPerRun(3, call)
+	if allocs != 0 {
+		t.Fatalf("warmed word alignment: %g allocs/op", allocs)
+	}
+}
+
+func TestEnglishModelWordAlignmentHeads(t *testing.T) {
+	for _, tc := range []struct{ state, layers, heads, count int }{{384, 4, 6, 8}, {512, 6, 8, 5}, {768, 12, 12, 19}} {
+		selected := alignmentHeadsForDims(Dims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
+		if len(selected) != tc.count {
+			t.Fatalf("%dx%d heads=%d, want %d", tc.layers, tc.heads, len(selected), tc.count)
+		}
+		for _, head := range selected {
+			if head.layer >= tc.layers || head.head >= tc.heads {
+				t.Fatalf("invalid alignment head %+v", head)
+			}
+		}
+	}
+}
+
+func TestOfficialOtherEnglishModelWordTimestamps(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]float32, len(data)/4)
+	for i := range pcm {
+		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
+	}
+	for _, name := range []string{"BASE", "SMALL"} {
+		path := os.Getenv("GOPHONIC_WHISPER_" + name + "_MODEL")
+		if path == "" {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			model, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := NewTranscriber(model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer worker.Close()
+			text, segments, words, err := worker.TranscribeWordsInto(pcm, make([]byte, 0, 4096), make([]Segment, 0, 64), make([]Word, 0, 128))
+			if err != nil || len(text) == 0 || len(segments) == 0 || len(words) < 10 {
+				t.Fatalf("text=%q segments=%d words=%d err=%v", text, len(segments), len(words), err)
+			}
+			t.Logf("%s: %d words, first=%q %.2f-%.2f", name, len(words), text[words[0].TextStart:words[0].TextEnd], words[0].Start, words[0].End)
+		})
+	}
+}

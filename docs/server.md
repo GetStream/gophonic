@@ -22,29 +22,36 @@ curl -sS http://127.0.0.1:8080/v1/audio/transcriptions \
 # {"text":"..."}
 ```
 
-`POST /v1/audio/transcriptions` accepts WAV files, returning JSON
-`{"text":"..."}` or plain text when `response_format=text`. It accepts
-`model=gophonic-whisper` or `model=whisper-1` for clients that require a model
-field, and `language=en`. Other transcription options are rejected explicitly.
+`POST /v1/audio/transcriptions` accepts WAV files. The default response is
+`{"text":"..."}`. Set `response_format=text`, `srt`, or `vtt` for plain text or
+subtitles. `response_format=verbose_json` returns segment start/end times; add
+`timestamp_granularities[]=word` for aligned word times. The HTTP JSON
+`words` array has `word`, `start`, and `end` fields; the Go API also returns
+mean token probability for each word.
+Word timing uses a second decoder pass over selected OpenAI alignment heads;
+plain text and segment timing do not pay that cost. The server accepts
+`model=gophonic-whisper` or `model=whisper-1`, and `language=en`. Unsupported
+transcription options are rejected explicitly.
 This is a small file-transcription subset of the OpenAI API, not a claim of full
 API compatibility. `GET /healthz` and `GET /readyz` return 200 while the server
 is running.
 
 The CLI also decodes Ogg Opus. The HTTP endpoint currently accepts WAV so its
 hot path can reuse all parser and decoder storage. Uploads are limited to
-25 MiB, and decoded audio defaults to at most 120
-seconds (`-max-audio-seconds` changes that limit). The default address is
+25 MiB, and decoded audio defaults to at most 120 seconds (`-max-audio-seconds` changes that limit). The default address is
 loopback. The server has no authentication or TLS; put it behind an
 authenticating reverse proxy before binding to a non-loopback address. A bounded
-admission queue holds at most twice the configured number of workers; additional requests receive HTTP 503. One worker uses its own upload, decoded PCM, mono PCM, text, response,
-transcriber, and resampling workspace, so concurrent requests do not share
-mutable state. The first upload at a new maximum size or sample rate may
-grow scratch; repeated requests within prepared capacities allocate zero
-heap objects at the handler boundary. Shut down with Ctrl-C; the server drains active requests
-before closing workspaces.
+admission queue holds at most twice the configured number of workers;
+additional requests receive HTTP 503. Each worker owns upload, decoded PCM,
+mono PCM, text, response, transcriber, and resampling storage. The first upload
+at a new maximum size or sample rate may grow scratch; repeated requests
+within prepared capacities allocate zero heap objects at the handler boundary.
+Shut down with Ctrl-C; the server drains active requests before closing
+workspaces.
 
-The model currently provides English greedy transcription without word
-timestamps, beam search, or true incremental decoding. A live WebRTC service
+The model currently provides English greedy transcription with segment and
+word timestamps for official tiny.en, base.en, and small.en checkpoints. It
+does not implement beam search or true incremental decoding. A live WebRTC service
 needs an audio/Opus ingestion loop, buffering and VAD, and a separate contract
 for partial versus committed transcripts. The file endpoint does not pretend
 that repeated complete-file requests are incremental decoding.
@@ -57,3 +64,14 @@ this server's official JFK test also exercises the multipart endpoint:
 GOPHONIC_WHISPER_MODEL=/path/to/tiny.en.gophonic \
   GOEXPERIMENT=simd go test ./internal/httpserver -run TestWhisperServerOfficialJFK -count=1
 ```
+
+To request word timestamps:
+
+```sh
+curl -sS http://127.0.0.1:8080/v1/audio/transcriptions \
+  -F model=whisper-1 -F file=@recording.wav \
+  -F response_format=verbose_json -F 'timestamp_granularities[]=word'
+```
+
+The warmed handler allocation test covers both default and word-timestamp
+responses. The Go HTTP transport still allocates before entering the handler.

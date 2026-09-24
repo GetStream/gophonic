@@ -12,9 +12,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/GetStream/gophonic/internal/audiofile"
+	"github.com/GetStream/gophonic/internal/transcriptformat"
 	"github.com/GetStream/gophonic/whisper"
 )
 
@@ -38,6 +38,8 @@ type whisperLane struct {
 	upload      []byte
 	response    []byte
 	text        []byte
+	segments    []whisper.Segment
+	words       []whisper.Word
 }
 
 // NewWhisperServer constructs all inference lanes before serving requests.
@@ -55,7 +57,7 @@ func NewWhisperServer(model *whisper.Model, workers, maxSeconds int) (*WhisperSe
 			s.Close()
 			return nil, err
 		}
-		lane := &whisperLane{transcriber: transcriber, pcm: whisper.NewPCMWorkspace(), mono: make([]float32, maxSeconds*16000+1), upload: make([]byte, MaxUploadBytes+1), text: make([]byte, 0, 65536), response: make([]byte, 0, 65536)}
+		lane := &whisperLane{transcriber: transcriber, pcm: whisper.NewPCMWorkspace(), mono: make([]float32, maxSeconds*16000+1), upload: make([]byte, MaxUploadBytes+1), text: make([]byte, 0, 65536), response: make([]byte, 0, 65536), segments: make([]whisper.Segment, 0, 512), words: make([]whisper.Word, 0, 4096)}
 		s.all = append(s.all, lane)
 		s.lanes <- lane
 	}
@@ -144,27 +146,51 @@ func (s *WhisperServer) transcribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := lane.transcriber.TranscribeInto(lane.mono[:n], lane.text[:0])
+	var result []byte
+	if submitted.words {
+		result, lane.segments, lane.words, err = lane.transcriber.TranscribeWordsInto(lane.mono[:n], lane.text[:0], lane.segments[:0], lane.words[:0])
+	} else if submitted.format >= 2 {
+		result, lane.segments, err = lane.transcriber.TranscribeSegmentsInto(lane.mono[:n], lane.text[:0], lane.segments[:0])
+	} else {
+		result, err = lane.transcriber.TranscribeInto(lane.mono[:n], lane.text[:0])
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "transcription failed")
 		return
 	}
 	lane.text = result[:0]
-	result = bytes.TrimSpace(result)
-	if submitted.text {
+	trimmed := bytes.TrimSpace(result)
+	if submitted.format == 1 {
 		w.Header()["Content-Type"] = textContentType
-		_, _ = w.Write(result)
+		_, _ = w.Write(trimmed)
+		return
+	}
+	if submitted.format == 3 || submitted.format == 4 {
+		if submitted.format == 3 {
+			w.Header()["Content-Type"] = srtContentType
+		} else {
+			w.Header()["Content-Type"] = vttContentType
+		}
+		lane.response = transcriptformat.AppendSubtitles(lane.response[:0], result, lane.segments, submitted.format == 4)
+		_, _ = w.Write(lane.response)
 		return
 	}
 	w.Header()["Content-Type"] = jsonContentType
+	if submitted.format == 2 {
+		lane.response = transcriptformat.AppendVerboseJSON(lane.response[:0], trimmed, result, lane.segments, lane.words, submitted.words, n)
+		_, _ = w.Write(lane.response)
+		return
+	}
 	lane.response = append(lane.response[:0], '{', '"', 't', 'e', 'x', 't', '"', ':')
-	lane.response = strconv.AppendQuote(lane.response, string(result))
+	lane.response = transcriptformat.AppendJSONString(lane.response, trimmed)
 	lane.response = append(lane.response, '}', '\n')
 	_, _ = w.Write(lane.response)
 }
 
 var jsonContentType = []string{"application/json"}
 var textContentType = []string{"text/plain; charset=utf-8"}
+var srtContentType = []string{"application/x-subrip; charset=utf-8"}
+var vttContentType = []string{"text/vtt; charset=utf-8"}
 
 var errUploadTooLarge = errors.New("upload exceeds 25 MiB")
 

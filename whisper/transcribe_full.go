@@ -20,12 +20,49 @@ import (
 // to advance between windows. Temperature fallback and word timestamps are
 // not part of this API.
 func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) {
+	text, _, _, err := t.transcribeFullInto(pcm, dst, nil, nil, 0)
+	return text, err
+}
+
+// Segment records a retained Whisper segment. Times are seconds from the
+// beginning of the recording. TextStart:TextEnd indexes the returned text.
+type Segment struct {
+	Start, End           float64
+	TextStart, TextEnd   int
+	WordStart, WordEnd   int
+	tokenStart, tokenEnd int
+}
+
+// TranscribeSegmentsInto returns the same transcript as TranscribeInto plus
+// model-derived 20 ms timestamp segments in caller-owned storage. Warm calls
+// with sufficient text and segment capacity allocate no heap objects.
+func (t *Transcriber) TranscribeSegmentsInto(pcm []float32, dst []byte, segments []Segment) ([]byte, []Segment, error) {
+	text, timed, _, err := t.transcribeFullInto(pcm, dst, segments, nil, 1)
+	return text, timed, err
+}
+
+// Word records forced-alignment timing for a word, with byte offsets into the
+// returned transcript. Probability is the model's mean token probability.
+type Word struct {
+	Start, End         float64
+	TextStart, TextEnd int
+	Probability        float64
+}
+
+// TranscribeWordsInto adds word timing by aligning the selected tiny.en
+// cross-attention heads using a second decoder pass over retained text tokens.
+// Scratch is retained per Transcriber; warm calls reuse it.
+func (t *Transcriber) TranscribeWordsInto(pcm []float32, dst []byte, segments []Segment, words []Word) ([]byte, []Segment, []Word, error) {
+	return t.transcribeFullInto(pcm, dst, segments, words, 2)
+}
+
+func (t *Transcriber) transcribeFullInto(pcm []float32, dst []byte, segments []Segment, words []Word, mode uint8) ([]byte, []Segment, []Word, error) {
 	if t == nil || t.closed {
-		return dst, ErrTranscriberClosed
+		return dst, segments, words, ErrTranscriberClosed
 	}
 	frames, err := FullFeatureFrames(len(pcm))
 	if err != nil {
-		return dst, err
+		return dst, segments, words, err
 	}
 	need := frames * MelBins
 	if cap(t.fullMel) < need {
@@ -33,13 +70,21 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 	}
 	t.fullMel = t.fullMel[:need]
 	if err := FullFeaturesInto(pcm, t.fullMel, t.fullFrontend); err != nil {
-		return dst, err
+		return dst, segments, words, err
 	}
 	contentFrames := frames - MelFrames
+	t.recordWords = mode == 2
+	t.lastSpeechTimestamp = 0
 	start := len(dst)
+	segmentsStart, wordsStart := len(segments), len(words)
 	t.history = t.history[:0]
 	for seek := 0; seek < contentFrames; {
 		segmentFrames := min(MelFrames, contentFrames-seek)
+		firstSegment := len(segments)
+		if mode == 2 {
+			t.alignTokens = t.alignTokens[:0]
+			t.alignOffsets = append(t.alignOffsets[:0], len(dst))
+		}
 		for mel := 0; mel < MelBins; mel++ {
 			source := t.fullMel[mel*frames+seek : mel*frames+seek+segmentFrames]
 			target := t.mel[mel*MelFrames : (mel+1)*MelFrames]
@@ -47,20 +92,20 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 			clear(target[segmentFrames:])
 		}
 		if err := t.model.EncodeInto(t.mel, t.audio, t.encoder); err != nil {
-			return dst, err
+			return dst, segments, words, err
 		}
 		if err := t.model.BeginDecode(t.audio, t.decoder); err != nil {
-			return dst, err
+			return dst, segments, words, err
 		}
 		promptLen, err := t.policy.PromptInto(t.tokens[:0], t.history, nil)
 		if err != nil {
-			return dst, err
+			return dst, segments, words, err
 		}
 		t.tokens = t.tokens[:promptLen]
 		noSpeech := float64(0)
 		for position, id := range t.tokens {
 			if err := t.model.LogitsForTokenInto(id, position, t.decoder, t.logits); err != nil {
-				return dst, err
+				return dst, segments, words, err
 			}
 			if id == t.tokenizer.SOT() {
 				noSpeech = tokenProbability(t.logits, t.tokenizer.NoSpeech())
@@ -71,7 +116,7 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 		for generated := 0; generated < TextContext/2 && len(t.tokens) <= TextContext; generated++ {
 			next, err := t.policy.SelectNextInto(t.logits, t.logits, t.tokens)
 			if err != nil {
-				return dst, err
+				return dst, segments, words, err
 			}
 			// The silence rule below only consults average log probability
 			// when the prompt's no-speech probability exceeds its threshold.
@@ -87,7 +132,7 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 				break
 			}
 			if err := t.model.LogitsForTokenInto(next, len(t.tokens)-1, t.decoder, t.logits); err != nil {
-				return dst, err
+				return dst, segments, words, err
 			}
 		}
 		generatedTokens := t.tokens[promptLen:textEnd]
@@ -97,18 +142,44 @@ func (t *Transcriber) TranscribeInto(pcm []float32, dst []byte) ([]byte, error) 
 			continue
 		}
 		accepted, advance, pairBranch := timestampSeek(generatedTokens, t.tokenizer.TimestampBegin(), segmentFrames)
+		windowSeek := seek
 		seek += advance
-		dst, err = t.appendTranscribedSegments(dst, accepted, segmentFrames, pairBranch)
+		dst, segments, err = t.appendTranscribedSegmentsAt(dst, accepted, segmentFrames, pairBranch, windowSeek, segments, mode != 0)
 		if err != nil {
-			return dst, err
+			return dst, segments, words, err
+		}
+		if mode == 2 && len(t.alignTokens) != 0 {
+			words, err = t.alignWordsForWindow(windowSeek, segmentFrames, dst, segments[firstSegment:], words)
+			if err != nil {
+				return dst, segments, words, err
+			}
 		}
 	}
-	return t.repairTranscriptionUTF8(dst, start)
+	invalidUTF8 := !utf8.Valid(dst[start:])
+	oldLength := len(dst) - start
+	repaired, err := t.repairTranscriptionUTF8(dst, start)
+	if err == nil && invalidUTF8 {
+		old := t.segmentText[:oldLength]
+		for i := segmentsStart; i < len(segments); i++ {
+			segments[i].TextStart = start + remapUTF8Boundary(old, segments[i].TextStart-start, false)
+			segments[i].TextEnd = start + remapUTF8Boundary(old, segments[i].TextEnd-start, true)
+		}
+		for i := wordsStart; i < len(words); i++ {
+			words[i].TextStart = start + remapUTF8Boundary(old, words[i].TextStart-start, false)
+			words[i].TextEnd = start + remapUTF8Boundary(old, words[i].TextEnd-start, true)
+		}
+	}
+	return repaired, segments, words, err
 }
 
 // appendTranscribedSegments mirrors transcribe.py's segment slicing and
 // empty/zero-duration cleanup before tokens become future-window context.
 func (t *Transcriber) appendTranscribedSegments(dst []byte, tokens []int, segmentFrames int, pairBranch bool) ([]byte, error) {
+	text, _, err := t.appendTranscribedSegmentsAt(dst, tokens, segmentFrames, pairBranch, 0, nil, false)
+	return text, err
+}
+
+func (t *Transcriber) appendTranscribedSegmentsAt(dst []byte, tokens []int, segmentFrames int, pairBranch bool, windowSeek int, segments []Segment, record bool) ([]byte, []Segment, error) {
 	begin := t.tokenizer.TimestampBegin()
 	start := 0
 	hasPair := false
@@ -118,28 +189,42 @@ func (t *Transcriber) appendTranscribedSegments(dst []byte, tokens []int, segmen
 		}
 		hasPair = true
 		var err error
-		dst, err = t.appendOneSegment(dst, tokens[start:i], true, segmentFrames)
+		dst, segments, err = t.appendOneSegmentAt(dst, tokens[start:i], true, segmentFrames, windowSeek, segments, record)
 		if err != nil {
-			return dst, err
+			return dst, segments, err
 		}
 		start = i
 	}
 	if start < len(tokens) {
-		return t.appendOneSegment(dst, tokens[start:], hasPair || pairBranch, segmentFrames)
+		return t.appendOneSegmentAt(dst, tokens[start:], hasPair || pairBranch, segmentFrames, windowSeek, segments, record)
 	}
-	return dst, nil
+	return dst, segments, nil
 }
 
 func (t *Transcriber) appendOneSegment(dst []byte, tokens []int, hasPair bool, segmentFrames int) ([]byte, error) {
+	text, _, err := t.appendOneSegmentAt(dst, tokens, hasPair, segmentFrames, 0, nil, false)
+	return text, err
+}
+
+func (t *Transcriber) appendOneSegmentAt(dst []byte, tokens []int, hasPair bool, segmentFrames, windowSeek int, segments []Segment, record bool) ([]byte, []Segment, error) {
 	begin := t.tokenizer.TimestampBegin()
+	startFrame, endFrame := windowSeek, windowSeek+segmentFrames
 	if hasPair {
 		// Each completed timestamp slice begins and ends with its boundaries.
 		if len(tokens) > 1 && tokens[0] >= begin && tokens[len(tokens)-1] >= begin && tokens[0] == tokens[len(tokens)-1] {
-			return dst, nil
+			return dst, segments, nil
+		}
+		if len(tokens) == 0 {
+			return dst, segments, nil
+		}
+		if tokens[0] >= begin {
+			startFrame += (tokens[0] - begin) * 2
+		}
+		if tokens[len(tokens)-1] >= begin {
+			endFrame = windowSeek + (tokens[len(tokens)-1]-begin)*2
 		}
 	} else {
-		// Without a pair, transcribe.py uses the last timestamp (if any) as
-		// the segment duration instead of the remaining mel window length.
+		// Without a pair, transcribe.py uses the last timestamp as duration.
 		for i := len(tokens) - 1; i >= 0; i-- {
 			if tokens[i] >= begin {
 				if tokens[i] != begin {
@@ -149,15 +234,18 @@ func (t *Transcriber) appendOneSegment(dst []byte, tokens []int, hasPair bool, s
 			}
 		}
 		if segmentFrames == 0 {
-			return dst, nil
+			return dst, segments, nil
 		}
+		endFrame = windowSeek + segmentFrames
 	}
-	// new_segment tests only ordinary text IDs when deciding whether a
-	// segment is blank. Control tokens do not make a segment audible.
+	// Match transcribe.py's blank/instantaneous segment rule.
+	if startFrame == endFrame {
+		return dst, segments, nil
+	}
 	need := 0
 	for _, id := range tokens {
 		if id < 0 || id >= t.tokenizer.VocabSize() {
-			return dst, ErrTokenizerTokenRange
+			return dst, segments, ErrTokenizerTokenRange
 		}
 		if id < t.tokenizer.EOT() {
 			need += len(t.tokenizer.decoder[id])
@@ -173,14 +261,29 @@ func (t *Transcriber) appendOneSegment(dst []byte, tokens []int, hasPair bool, s
 		}
 	}
 	if blankWhisperText(t.segmentText) {
-		return dst, nil
+		return dst, segments, nil
 	}
+	offset := len(dst)
 	decoded, err := t.tokenizer.DecodeInto(dst, tokens)
 	if err != nil {
-		return dst, err
+		return dst, segments, err
 	}
 	t.history = append(t.history, tokens...)
-	return decoded, nil
+	if record {
+		segment := Segment{Start: float64(startFrame) * 0.01, End: float64(endFrame) * 0.01, TextStart: offset, TextEnd: len(decoded)}
+		if t.recordWords {
+			segment.tokenStart = len(t.alignTokens)
+			for _, id := range tokens {
+				if id < t.tokenizer.EOT() {
+					t.alignTokens = append(t.alignTokens, id)
+					t.alignOffsets = append(t.alignOffsets, t.alignOffsets[len(t.alignOffsets)-1]+len(t.tokenizer.decoder[id]))
+				}
+			}
+			segment.tokenEnd = len(t.alignTokens)
+		}
+		segments = append(segments, segment)
+	}
+	return decoded, segments, nil
 }
 
 func blankWhisperText(encoded []byte) bool {
@@ -344,4 +447,30 @@ func tokenProbability(logits []float32, id int) float64 {
 		sum += math.Exp(float64(x) - maximum)
 	}
 	return math.Exp(float64(logits[id])-maximum) / sum
+}
+
+// remapUTF8Boundary maps a byte boundary in the generated token stream into
+// the repaired UTF-8 transcript. A boundary inside a multibyte code point is
+// expanded outward so exposed slices remain valid UTF-8.
+func remapUTF8Boundary(raw []byte, boundary int, end bool) int {
+	if boundary <= 0 {
+		return 0
+	}
+	oldAt, newAt := 0, 0
+	for oldAt < len(raw) {
+		width, valid := utf8Prefix(raw[oldAt:])
+		outputWidth := width
+		if !valid {
+			outputWidth = 3
+		}
+		if boundary <= oldAt+width {
+			if boundary < oldAt+width && !end {
+				return newAt
+			}
+			return newAt + outputWidth
+		}
+		oldAt += width
+		newAt += outputWidth
+	}
+	return newAt
 }

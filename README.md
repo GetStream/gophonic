@@ -38,6 +38,8 @@ python3 tools/whisper_pt_to_gophonic.py base.en.pt base.en.gophonic
 
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
 ./gophonic -whisper-model base.en.gophonic speech.wav   # {"text":"..."}
+./gophonic -whisper-model base.en.gophonic -response-format verbose_json -word-timestamps speech.wav
+./gophonic -whisper-model base.en.gophonic -response-format srt speech.wav
 ```
 
 To submit completed recordings over HTTP, use the optional
@@ -66,8 +68,9 @@ text, err := worker.TranscribeInto(mono16kPCM, make([]byte, 0, 4096))
 
 Transcription is greedy at temperature zero. It uses whole-file mel
 normalization, previous-window context, timestamp seeking, and the reference
-no-speech rule. It does not include temperature fallback, beam search,
-multilingual models, or word timestamps.
+no-speech rule. Segment and word timestamps are available through the Go API,
+CLI, and local server. Temperature fallback, beam search, and multilingual
+models are not yet supported.
 
 ### Performance
 
