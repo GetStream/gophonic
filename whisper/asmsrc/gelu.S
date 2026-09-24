@@ -9,6 +9,8 @@
 	movk w9, #0xaaab
 	dup v21.4s, w9
 	fmov v22.4s, #1.0
+	movz w9, #1024
+	dup v23.4s, w9
 1:
 	ldr q0, [x0]
 	cbz x1, 2f
@@ -20,6 +22,7 @@
 	fminnm v4.4s, v2.4s, v19.4s        // |x| clamped to 8 (index <= 1024); NaN selects 8
 	fadd v5.4s, v4.4s, v16.4s          // z = a + 65536 rounds to 1/128
 	sub v6.4s, v5.4s, v17.4s           // table index
+	umin v6.4s, v6.4s, v23.4s          // clamp NaN/sNaN-derived bits before gather
 	fsub v7.4s, v5.4s, v16.4s          // r
 	fsub v8.4s, v4.4s, v7.4s           // d
 	umov w9, v6.s[0]
