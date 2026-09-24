@@ -114,7 +114,7 @@ func (t *Transcriber) TranscribeWindowInto(pcm []float32, dst []byte) ([]byte, e
 	if len(pcm) > WindowSamples {
 		return dst, ErrTranscriberWindow
 	}
-	if err := FeaturesInto(pcm, t.mel, t.frontend); err != nil {
+	if err := featuresInto(pcm, t.mel, t.frontend, t.encoder.gemm); err != nil {
 		return dst, err
 	}
 	if err := t.model.EncodeInto(t.mel, t.audio, t.encoder); err != nil {

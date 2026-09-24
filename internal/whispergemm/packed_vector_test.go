@@ -108,6 +108,17 @@ func TestPackedVectorSequentialFMA(t *testing.T) {
 					t.Fatalf("generic half=%v rows=%d k=%d index %d", half, rows, k, i)
 				}
 			}
+			split := make([]float32, rows)
+			for c := 0; c < p.Chunks(); c++ {
+				if err := p.MulChunks(split, x, c, c+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := range split {
+				if math.Float32bits(split[i]) != math.Float32bits(want[i]) {
+					t.Fatalf("chunked half=%v rows=%d k=%d index %d", half, rows, k, i)
+				}
+			}
 			if allocs := testing.AllocsPerRun(3, func() { _ = p.Mul(got, x) }); allocs != 0 {
 				t.Fatalf("allocations: %g", allocs)
 			}

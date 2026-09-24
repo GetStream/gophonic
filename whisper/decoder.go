@@ -154,7 +154,12 @@ type DecoderScratch struct {
 
 type decoderVocabularyProjection struct {
 	weight, input, output []float32
+	packed                *whispergemm.PackedVector
+	shards                int
 }
+
+// vocabularyShards bounds concurrent streaming-matrix work on the vocabulary.
+var vocabularyShards = 8
 
 type decoderAttentionOperation struct {
 	dst, scaledQuery, keys, values, scores []float32
@@ -166,6 +171,16 @@ func (op *decoderAttentionOperation) ApplyRows(start, end int) {
 }
 
 func (p *decoderVocabularyProjection) ApplyRows(start, end int) {
+	if p.packed != nil {
+		chunks := p.packed.Chunks()
+		for shard := start; shard < end; shard++ {
+			first, last := shard*chunks/p.shards, (shard+1)*chunks/p.shards
+			if err := p.packed.MulChunks(p.output, p.input, first, last); err != nil {
+				panic(err) // Bound model and fixed decoder shapes have already been checked.
+			}
+		}
+		return
+	}
 	start, end = start*4, min(end*4, VocabSize)
 	if err := whispergemm.MulVector(p.output[start:end], p.weight[start*TextState:], TextState, p.input, end-start); err != nil {
 		panic(err) // Bound model and fixed decoder shapes have already been checked.
@@ -353,9 +368,20 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 
 	layerNorm(s.normalized, s.x, weights.finalNorm.weight, weights.finalNorm.bias)
 	if weights.vocabulary != nil {
-		// One streaming-matrix core saturates memory bandwidth here.
-		if err := weights.vocabulary.Mul(logits, s.normalized); err != nil {
-			return err
+		if s.gemm == nil || s.gemm.Workers() < 2 {
+			if err := weights.vocabulary.Mul(logits, s.normalized); err != nil {
+				return err
+			}
+		} else {
+			// Shards spread this bandwidth-bound product over the
+			// performance clusters' matrix units.
+			shards := min(s.gemm.Workers(), vocabularyShards)
+			s.vocabulary = decoderVocabularyProjection{packed: weights.vocabulary, input: s.normalized, output: logits, shards: shards}
+			err := s.gemm.Rows(&s.vocabulary, shards, 1)
+			s.vocabulary = decoderVocabularyProjection{}
+			if err != nil {
+				return err
+			}
 		}
 	} else if s.gemm == nil {
 		if err := whispergemm.MulVector(logits, weights.tokenEmbedding, state, s.normalized, VocabSize); err != nil {

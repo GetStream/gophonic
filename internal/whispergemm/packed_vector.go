@@ -144,6 +144,46 @@ func halfLane(index int) int {
 	return index - lane + half*32 + 2*(within%16) + within/16
 }
 
+// Chunks returns the number of independently computable output chunks.
+func (p *PackedVector) Chunks() int {
+	groups := (p.n + vectorGroup - 1) / vectorGroup
+	return (groups + vectorChunkGroup - 1) / vectorChunkGroup
+}
+
+// MulChunks computes outputs of chunks [first,last) only, writing the same
+// values Mul would. Disjoint ranges can run concurrently on different
+// goroutines, which spreads bandwidth-bound products over matrix units.
+func (p *PackedVector) MulChunks(dst, x []float32, first, last int) error {
+	if p == nil {
+		return ErrNilMatrix
+	}
+	if len(x) < p.k || len(dst) < p.n || first < 0 || last > p.Chunks() || first > last {
+		return ErrShape
+	}
+	start := first * vectorChunkGroup * vectorGroup
+	end := min(p.n, last*vectorChunkGroup*vectorGroup)
+	if start >= end {
+		return nil
+	}
+	if p.k == 0 {
+		clear(dst[start:end])
+		return nil
+	}
+	// Every chunk before the last is full, so chunk c starts at a fixed offset.
+	offset := start * p.kp
+	sub := PackedVector{k: p.k, n: end - start, kp: p.kp}
+	if p.w16 != nil {
+		sub.w16 = p.w16[offset:]
+	} else {
+		sub.w32 = p.w32[offset:]
+	}
+	if mulPackedVectorSME(&sub, dst[start:end], x) {
+		return nil
+	}
+	sub.mulGeneric(dst[start:end], x)
+	return nil
+}
+
 // Mul writes dst[:N] = W * x[:K]. It allocates no memory and may run
 // concurrently with other Mul calls on the same matrix.
 func (p *PackedVector) Mul(dst, x []float32) error {

@@ -20,8 +20,10 @@ type audioAttention struct {
 	rows, state, heads, workers int
 	keys, values                []*whispergemm.PackedB
 	scores                      []float32
-	q, dst                      []float32
+	q, k, v, dst                []float32
+	queryBias, valueBias        []float32
 	errors                      []error
+	preparing                   bool
 }
 
 func newAudioAttention(rows, state, heads, workers int) (*audioAttention, error) {
@@ -47,25 +49,23 @@ func newAudioAttention(rows, state, heads, workers int) (*audioAttention, error)
 // run permits dst to alias q: each query tile consumes its Q values before
 // overwriting them. K and V must remain disjoint from Q and the destination.
 func (a *audioAttention) run(q, k, v, dst []float32, executor *whispergemm.Executor) error {
-	headSize := a.state / a.heads
-	scale := float32(math.Pow(float64(headSize), -0.25))
-	for i := 0; i < a.rows*a.state; i++ {
-		q[i] *= scale
-		k[i] *= scale
-	}
-	for head := 0; head < a.heads; head++ {
-		offset := head * headSize
-		if err := a.keys[head].Pack(k[offset:], a.state, true); err != nil {
-			return err
-		}
-		if err := a.values[head].Pack(v[offset:], a.state, false); err != nil {
-			return err
-		}
-	}
-	a.q, a.dst = q, dst
+	return a.runBiased(q, k, v, dst, nil, nil, executor)
+}
+
+// runBiased first adds the optional Q and V projection biases, scales Q and K,
+// and packs each head's K and V, all in parallel over heads. Each element is
+// computed as (q+bias)*scale, k*scale, and v+bias, as separate passes would.
+func (a *audioAttention) runBiased(q, k, v, dst, queryBias, valueBias []float32, executor *whispergemm.Executor) error {
+	a.q, a.k, a.v, a.dst = q, k, v, dst
+	a.queryBias, a.valueBias = queryBias, valueBias
 	clear(a.errors)
-	err := executor.Rows(a, a.workers, 1)
-	a.q, a.dst = nil, nil
+	a.preparing = true
+	err := executor.Rows(a, a.heads, 1)
+	a.preparing = false
+	if err == nil {
+		err = executor.Rows(a, a.workers, 1)
+	}
+	a.q, a.k, a.v, a.dst, a.queryBias, a.valueBias = nil, nil, nil, nil, nil, nil
 	if err != nil {
 		return err
 	}
@@ -77,9 +77,52 @@ func (a *audioAttention) run(q, k, v, dst []float32, executor *whispergemm.Execu
 	return nil
 }
 
+func (a *audioAttention) prepareHeads(firstHead, lastHead int) {
+	headSize := a.state / a.heads
+	scale := float32(math.Pow(float64(headSize), -0.25))
+	for head := firstHead; head < lastHead; head++ {
+		offset := head * headSize
+		for t := 0; t < a.rows; t++ {
+			base := t*a.state + offset
+			q, k, v := a.q[base:base+headSize], a.k[base:base+headSize], a.v[base:base+headSize]
+			if a.queryBias != nil {
+				qb := a.queryBias[offset : offset+headSize]
+				for i := range q {
+					q[i] = (q[i] + qb[i]) * scale
+				}
+			} else {
+				for i := range q {
+					q[i] *= scale
+				}
+			}
+			for i := range k {
+				k[i] *= scale
+			}
+			if a.valueBias != nil {
+				vb := a.valueBias[offset : offset+headSize]
+				for i := range v {
+					v[i] += vb[i]
+				}
+			}
+		}
+		if err := a.keys[head].Pack(a.k[offset:], a.state, true); err != nil {
+			a.errors[head%a.workers] = err
+			return
+		}
+		if err := a.values[head].Pack(a.v[offset:], a.state, false); err != nil {
+			a.errors[head%a.workers] = err
+			return
+		}
+	}
+}
+
 // ApplyRows implements whispergemm.RowOperation. The row indices select
 // private worker scratch; query tiles are interleaved to balance the tail.
 func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
+	if a.preparing {
+		a.prepareHeads(firstWorker, lastWorker)
+		return
+	}
 	tilesPerHead := (a.rows + attentionTileRows - 1) / attentionTileRows
 	headSize := a.state / a.heads
 	for worker := firstWorker; worker < lastWorker; worker++ {
