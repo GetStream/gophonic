@@ -91,7 +91,12 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 	}{
 		{WeightsF16, 0.9999},
 		{WeightsInt8, 0.998},
+		{WeightsGPU, 0.999},
+		{WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
 	} {
+		if only := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); only != "" && only != tc.format {
+			continue
+		}
 		enc, load := loadOfficialEncoder(t, tc.format)
 		got := [][]float32{make([]float32, hiddenSize)}
 		if err := enc.Embed(context.Background(), []string{"hello"}, got); err != nil {

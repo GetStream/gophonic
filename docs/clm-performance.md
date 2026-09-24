@@ -23,6 +23,17 @@ none` and its best thread count (8).
 | CLM probability error vs official | 1.0e-3 | — | **7.1e-5** | 2.2e-4 |
 | Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s | 4.3 s |
 
+### GPU, one token
+
+With `Options{Weights: "gpu"}` the model runs on the M4 Max GPU through a
+pure-Go Metal binding. One token takes 15.8 ms with int8 weights (cosine
+0.99933) and 10.9 ms with `gpu-q4` (0.953). llama.cpp's Metal backend takes
+19.5 ms for Q8_0 (0.99933), 12.0 ms for Q4_0 (0.863), and 12.5 ms for
+Q4_K_M (0.942); the llama.cpp 4-bit files were requantized from Q8_0. One
+token must stream every projection weight once, 6.95 GB in int8 and 3.9 GB
+in 4.5 bits, so at the measured ≈440 GB/s the int8 path is at its bandwidth
+floor. Multi-token GPU inputs still run token by token.
+
 The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
 with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
 int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms for FP16). With

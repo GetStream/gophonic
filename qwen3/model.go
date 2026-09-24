@@ -149,7 +149,7 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 		return nil, err
 	}
 	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.cfg.hidden)}
-	if prefixTokens > 0 {
+	if prefixTokens > 0 && model.gpu == nil {
 		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
 			_ = ws.Close()
 			return nil, err
@@ -354,6 +354,7 @@ func (e *Model) Close() error {
 	}
 	e.closed = true
 	err := e.ws.Close()
+	e.model.releaseGPU()
 	e.ws, e.eval, e.model, e.tokens = nil, nil, nil, nil
 	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache, e.prefix = nil, nil, nil, nil, nil, nil
 	e.shortIDs, e.shortDst = nil, nil

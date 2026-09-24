@@ -112,6 +112,28 @@ CLM probabilities within 2.2e-4, and the 31 `Choose` probes give the same
 answers as the exact mode. It runs a 12-token text in 43 ms, one token in
 28 ms, and 16 short texts in 415 ms.
 
+## GPU
+
+`Options{Weights: "gpu"}` runs the model on the Apple GPU (darwin/arm64)
+through a pure-Go Metal binding (`internal/metal`, no cgo); the kernels are
+Metal shading language source embedded in the package. The residual stream
+is kept in a Hadamard-rotated basis, RMSNorm weights and a per-head value
+rotation are folded into the weights at load, and each projection is stored
+as per-row int8 while activations stay in FP32. A layer is six dispatches,
+and weight streaming runs at the measured memory bandwidth (≈440 GB/s).
+
+| One token, M4 Max | cosine vs BF16 (`hello`) | latency |
+| --- | ---: | ---: |
+| `gpu` (int8 weights) | 0.99933 | **15.8 ms** |
+| `gpu-q4` (4.5-bit weights) | 0.953 | **10.9 ms** |
+| llama.cpp Metal Q8_0 | 0.99933 | 19.5 ms |
+| llama.cpp Metal Q4_0 / Q4_K_M | 0.863 / 0.942 | 12.0 / 12.5 ms |
+
+`gpu-q4` stores blocks of 32 weights as 4-bit codes with one FP16 scale,
+chosen per block to minimize rounding error. Longer inputs currently run one
+token at a time (a batched kernel is in progress), and prefix stores
+(`Question`, `Context`, `Stream`) are not yet supported on the GPU.
+
 ## Performance
 
 On an Apple M4 Max CPU a 12-token text takes about 70 ms, 70 tokens 317 ms,
