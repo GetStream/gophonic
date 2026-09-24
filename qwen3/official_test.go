@@ -504,3 +504,75 @@ func BenchmarkOfficialQuestion(b *testing.B) {
 		i++
 	}
 }
+
+// TestOfficialStream feeds growing and revised partial transcripts to a
+// Stream and checks each answer against a fresh Choose on the same text.
+func TestOfficialStream(t *testing.T) {
+	m, _ := loadOfficialEncoder(t, WeightsF16)
+	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
+		[]string{"reply now", "wait"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := q.NewStream(256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partials := []string{
+		"can you", "can you book", "can you book me a table", "can you book me a table for two at",
+		"can you book me a table for two at seven tonight",
+		"can you book me a table for three at eight tonight", // revision
+		"so i was thinking maybe we could",
+	}
+	got, want := make([]float32, 2), make([]float32, 2)
+	for _, text := range partials {
+		if err := s.Update(context.Background(), text, got); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Choose(context.Background(), text, want); err != nil {
+			t.Fatal(err)
+		}
+		if d := math.Abs(float64(got[0] - want[0])); d > 2e-3 {
+			t.Errorf("%q: stream P(reply)=%.4f, fresh %.4f", text, got[0], want[0])
+		}
+		t.Logf("P(reply)=%.3f  %q", got[0], text)
+	}
+	text := partials[4]
+	if allocs := testing.AllocsPerRun(3, func() {
+		if err := s.Update(context.Background(), text, got); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("warmed Update allocated %.2f times per call", allocs)
+	}
+}
+
+// BenchmarkOfficialStream measures one stream update that adds three words
+// to a 20-word partial transcript.
+func BenchmarkOfficialStream(b *testing.B) {
+	m, _ := loadOfficialEncoder(b, WeightsF16)
+	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
+		[]string{"reply now", "wait"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	s, err := q.NewStream(256)
+	if err != nil {
+		b.Fatal(err)
+	}
+	base := benchmarkTexts(1, 20)[0]
+	probs := make([]float32, 2)
+	i := 0
+	for b.Loop() {
+		// Alternate between the base partial and one with three more words,
+		// so every update evaluates about three new tokens plus the suffix.
+		text := base
+		if i%2 == 1 {
+			text = base + " while the tide turns"
+		}
+		if err := s.Update(context.Background(), text, probs); err != nil {
+			b.Fatal(err)
+		}
+		i++
+	}
+}

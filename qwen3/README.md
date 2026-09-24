@@ -35,13 +35,19 @@ serialized; open one per concurrent lane.
 
 `Model.Question` builds the Qwen3 chat prompt (non-thinking mode) with the
 options listed as `A)`, `B)`, …, tokenizes it once, and evaluates its prefix
-once, keeping that prefix's keys and values (about 144 KiB per prompt token).
+once, keeping that prefix's keys and values (about 288 KiB per prompt token).
 `Choose` then tokenizes only the input, evaluates the input and a short
 suffix against the stored prefix, and compares the next-token logits of the
 answer letters; it needs only the language-model head rows of the letters
 (read at `Open`, not the 1.2 GB head). The fixed parts end on pre-tokenizer
 boundaries, so this equals tokenizing the whole prompt, which a test checks.
 Questions do not share state, so alternating between them costs nothing.
+
+`Question.NewStream` follows a growing input, such as a speech recognizer's
+partial transcripts: each `Update` evaluates only the tokens added (or
+revised) since the previous one plus the 9-token prompt suffix, and matches a
+fresh `Choose` on the same text. `examples/qwen3/turn` uses it for
+word-by-word turn detection at about 72 ms per word in exact mode.
 
 `ChooseBatch` answers many inputs in shared forward passes. On an M4 Max, a
 new input costs about 140 ms alone, 94 ms per input in a batch of 16, and
