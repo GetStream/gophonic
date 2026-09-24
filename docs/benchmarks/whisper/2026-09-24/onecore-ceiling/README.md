@@ -142,3 +142,9 @@ Go 1.27.1 through the `toolchain` directive while retaining Go 1.27.0 as
 the minimum version. Per-call durations and hashes are in
 [`go1271-ab.json`](go1271-ab.json).
 The three attached data artifacts are pinned in [`SHA256SUMS`](SHA256SUMS).
+The official Go development branch at
+[`35b807d`](https://github.com/golang/go/blob/35b807d2fca7b447ab54162e1f8c2172570d7d1b/src/simd/archsimd/ops_arm64.go)
+had the same ARM64 `archsimd` API file SHA-256
+`b5189d322b652829db53380c5b87347dbfc1b3beb3dc1da3b131b35c84095f2d`.
+Thus switching to that development snapshot would not expose FP16 or DOT
+intrinsics either; no development toolchain was installed.
