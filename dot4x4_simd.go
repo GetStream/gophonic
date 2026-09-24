@@ -1,7 +1,7 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-//go:build goexperiment.simd && (amd64 || arm64)
+//go:build goexperiment.simd && arm64
 
 package gophonic
 
@@ -78,7 +78,7 @@ func dotProduct4x4(a0, a1, a2, a3, b0, b1, b2, b3 []float32, out *[16]float32) {
 }
 
 func reduceVector(value archsimd.Float32x4) float32 {
-	var lanes [4]float32
-	value.StoreArray(&lanes)
-	return lanes[0] + lanes[1] + lanes[2] + lanes[3]
+	// Lane extracts keep the reduction in registers; the addition order
+	// matches the previous store-and-add sequence exactly.
+	return value.GetElem(0) + value.GetElem(1) + value.GetElem(2) + value.GetElem(3)
 }
