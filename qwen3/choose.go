@@ -262,13 +262,14 @@ func (q *Question) chooseTokens(ctx context.Context, inputs [][]int, probs [][]f
 		start = end
 	}
 	for i := range seqs {
-		q.letterProbs(q.hidden[i], probs[i])
+		q.m.letterProbs(q.hidden[i], probs[i])
 	}
 	return nil
 }
 
-func (q *Question) letterProbs(hidden, probs []float32) {
-	rows := q.m.letters.rows
+// letterProbs writes the softmax over the answer letters' next-token logits.
+func (e *Model) letterProbs(hidden, probs []float32) {
+	rows := e.letters.rows
 	maxLogit := math.Inf(-1)
 	for i := range probs {
 		probs[i] = dot32(hidden, rows[i*len(hidden):(i+1)*len(hidden)])
@@ -389,7 +390,7 @@ func (s *Stream) UpdateTokens(ctx context.Context, input []int, probs []float32)
 		return err
 	}
 	s.input = append(s.input[:0], input...)
-	q.letterProbs(s.hidden, probs)
+	q.m.letterProbs(s.hidden, probs)
 	copy(s.last, probs)
 	s.answered = true
 	return nil

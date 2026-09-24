@@ -49,6 +49,15 @@ revised) since the previous one plus the 9-token prompt suffix, and matches a
 fresh `Choose` on the same text. `examples/qwen3/turn` uses it for
 word-by-word turn detection at about 72 ms per word in exact mode.
 
+`Model.NewContext` holds a long shared text, such as a conversation, that
+several questions are asked about: `Set` evaluates it once and afterwards only
+the tokens that changed, and `Ask` answers any number of `ContextQuestion`s as
+short tails against it in shared forward passes. Three questions about a
+five-turn support conversation take about 520 ms after each new turn, against
+1.5 s for three `Choose` calls. The context comes first in this prompt, which
+agrees with `Question` on classification probes but not on turn detection;
+`examples/qwen3/conversation` tracks mood, topic, and resolution turn by turn.
+
 `ChooseBatch` answers many inputs in shared forward passes. On an M4 Max, a
 new input costs about 140 ms alone, 94 ms per input in a batch of 16, and
 58 ms per input in a batch with `Weights: "int8"`.
