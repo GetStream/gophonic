@@ -15,6 +15,10 @@ TEXT ·layerNormNEON(SB), NOSPLIT, $0-40
 	WORD	$0x6f00e411	// movi.2d v17, #0000000000000000
 	WORD	$0x6f00e412	// movi.2d v18, #0000000000000000
 	WORD	$0x6f00e413	// movi.2d v19, #0000000000000000
+	WORD	$0x6f00e41a	// movi.2d v26, #0000000000000000
+	WORD	$0x6f00e41b	// movi.2d v27, #0000000000000000
+	WORD	$0x6f00e41c	// movi.2d v28, #0000000000000000
+	WORD	$0x6f00e41d	// movi.2d v29, #0000000000000000
 	WORD	$0xaa0003e5	// mov x5, x0
 	WORD	$0xaa0403e6	// mov x6, x4
 	WORD	$0xacc104a0	// ldp q0, q1, [x5], #0x20
@@ -26,8 +30,12 @@ TEXT ·layerNormNEON(SB), NOSPLIT, $0-40
 	WORD	$0x4e63d631	// fadd.2d v17, v17, v3
 	WORD	$0x4e64d652	// fadd.2d v18, v18, v4
 	WORD	$0x4e65d673	// fadd.2d v19, v19, v5
+	WORD	$0x4e62cc5a	// fmla.2d v26, v2, v2
+	WORD	$0x4e63cc7b	// fmla.2d v27, v3, v3
+	WORD	$0x4e64cc9c	// fmla.2d v28, v4, v4
+	WORD	$0x4e65ccbd	// fmla.2d v29, v5, v5
 	WORD	$0xf10020c6	// subs x6, x6, #0x8
-	WORD	$0x54fffecc	// b.gt 0x18
+	WORD	$0x54fffe4c	// b.gt 0x28
 	WORD	$0x4e71d610	// fadd.2d v16, v16, v17
 	WORD	$0x4e73d652	// fadd.2d v18, v18, v19
 	WORD	$0x4e72d610	// fadd.2d v16, v16, v18
@@ -35,32 +43,13 @@ TEXT ·layerNormNEON(SB), NOSPLIT, $0-40
 	WORD	$0x9e620094	// scvtf d20, x4
 	WORD	$0x1e741a10	// fdiv d16, d16, d20
 	WORD	$0x4e080615	// dup.2d v21, v16[0]
-	WORD	$0x6f00e410	// movi.2d v16, #0000000000000000
-	WORD	$0x6f00e411	// movi.2d v17, #0000000000000000
-	WORD	$0x6f00e412	// movi.2d v18, #0000000000000000
-	WORD	$0x6f00e413	// movi.2d v19, #0000000000000000
-	WORD	$0xaa0003e5	// mov x5, x0
-	WORD	$0xaa0403e6	// mov x6, x4
-	WORD	$0xacc104a0	// ldp q0, q1, [x5], #0x20
-	WORD	$0x0e617802	// fcvtl v2.2d, v0.2s
-	WORD	$0x4e617803	// fcvtl2 v3.2d, v0.4s
-	WORD	$0x0e617824	// fcvtl v4.2d, v1.2s
-	WORD	$0x4e617825	// fcvtl2 v5.2d, v1.4s
-	WORD	$0x4ef5d442	// fsub.2d v2, v2, v21
-	WORD	$0x4ef5d463	// fsub.2d v3, v3, v21
-	WORD	$0x4ef5d484	// fsub.2d v4, v4, v21
-	WORD	$0x4ef5d4a5	// fsub.2d v5, v5, v21
-	WORD	$0x4e62cc50	// fmla.2d v16, v2, v2
-	WORD	$0x4e63cc71	// fmla.2d v17, v3, v3
-	WORD	$0x4e64cc92	// fmla.2d v18, v4, v4
-	WORD	$0x4e65ccb3	// fmla.2d v19, v5, v5
-	WORD	$0xf10020c6	// subs x6, x6, #0x8
-	WORD	$0x54fffe4c	// b.gt 0x78
-	WORD	$0x4e71d610	// fadd.2d v16, v16, v17
-	WORD	$0x4e73d652	// fadd.2d v18, v18, v19
-	WORD	$0x4e72d610	// fadd.2d v16, v16, v18
-	WORD	$0x7e70da10	// faddp.2d d16, v16
-	WORD	$0x1e741a10	// fdiv d16, d16, d20
+	WORD	$0x4e7bd75a	// fadd.2d v26, v26, v27
+	WORD	$0x4e7dd79c	// fadd.2d v28, v28, v29
+	WORD	$0x4e7cd75a	// fadd.2d v26, v26, v28
+	WORD	$0x7e70db51	// faddp.2d d17, v26
+	WORD	$0x1e741a31	// fdiv d17, d17, d20
+	WORD	$0x1e700a12	// fmul d18, d16, d16
+	WORD	$0x1e723a30	// fsub d16, d17, d18
 	WORD	$0xd28d1e27	// mov x7, #0x68f1 ; =26865
 	WORD	$0xf2b11c67	// movk x7, #0x88e3, lsl #16
 	WORD	$0xf2df16a7	// movk x7, #0xf8b5, lsl #32
@@ -91,5 +80,5 @@ TEXT ·layerNormNEON(SB), NOSPLIT, $0-40
 	WORD	$0x4e6168c0	// fcvtn2 v0.4s, v6.2d
 	WORD	$0x3c810420	// str q0, [x1], #0x10
 	WORD	$0xf10010c6	// subs x6, x6, #0x4
-	WORD	$0x54fffdac	// b.gt 0xf4
+	WORD	$0x54fffdac	// b.gt 0xc8
 	RET
