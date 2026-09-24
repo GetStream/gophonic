@@ -65,6 +65,11 @@ func (b *PackedB) Pack(src []float32, stride int, transposed bool) error {
 	if b.k == 0 || b.n == 0 {
 		return nil
 	}
+	if transposed && smeEnabled {
+		// ZA transposes 16x16 blocks; padding columns come out zero.
+		smeTransposePack(&src[0], stride*4, b.n, b.k, &b.data[0])
+		return nil
+	}
 	for n := 0; n < b.n; n += panelColumns {
 		width := min(panelColumns, b.n-n)
 		panel := b.data[n*b.k : (n+panelColumns)*b.k]

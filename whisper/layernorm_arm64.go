@@ -10,3 +10,9 @@ const layerNormAccelerated = true
 //
 //go:noescape
 func layerNormNEON(src, dst, gamma, beta *float32, n int)
+
+// attnPrepNEON applies q = (q+qbias)*scale, k *= scale, and v += vbias to n
+// values of one row each; n must be a positive multiple of four.
+//
+//go:noescape
+func attnPrepNEON(q, k, v, qbias, vbias *float32, n int, scale float32)

@@ -20,7 +20,8 @@ def text(name, args, frame, loads, src, ret):
     for off, reg, arg in loads:
         out.append(f"\tMOVD\t{arg}+{off}(FP), R{reg}")
     out.append(words(src).rstrip("\n"))
-    out.append(f"\tMOVD\tR0, {ret}(FP)")
+    if ret:
+        out.append(f"\tMOVD\tR0, {ret}(FP)")
     out.append("\tRET\n")
     return "\n".join(out)
 
@@ -34,6 +35,8 @@ parts = [
          56, gemv_args, "gemv_f32.S", "retries+48"),
     text("smeVectorF16", "(x *float32, k int, w *uint16, n int, y *float32, kp int) (retries int)",
          56, gemv_args, "gemv_f16.S", "retries+48"),
+    text("smeTransposePack", "(src *float32, strideBytes, n, k int, dst *float32)",
+         40, [(0, 0, "src"), (8, 1, "strideBytes"), (16, 2, "n"), (24, 3, "k"), (32, 4, "dst")], "transpose.S", None),
     "// func smeVectorBytes() int\nTEXT ·smeVectorBytes(SB), NOSPLIT, $0-8\n\tWORD\t$0x04bf5820\t// rdsvl x0, #1\n\tMOVD\tR0, ret+0(FP)\n\tRET\n",
 ]
 open("../sme_arm64.s", "w").write("\n".join(parts))

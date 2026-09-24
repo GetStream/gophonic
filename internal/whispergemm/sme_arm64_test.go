@@ -204,3 +204,36 @@ func TestSMESignalStorm(t *testing.T) {
 	}
 	t.Logf("tiles recomputed after signals: %d", smeRetries.Load()-before)
 }
+
+func TestSMETransposePackMatchesScalar(t *testing.T) {
+	requireSME(t)
+	for _, shape := range [][2]int{{1, 1}, {15, 17}, {16, 16}, {17, 33}, {1500, 64}, {384, 384}, {33, 1500}, {7, 3}} {
+		n, k := shape[0], shape[1]
+		stride := k + 3
+		src := make([]float32, n*stride)
+		state := uint32(n*131 + k)
+		for i := range src {
+			src[i] = nextValue(&state)
+		}
+		got, _ := NewPackedB(k, n)
+		for i := range got.data {
+			got.data[i] = -317 // padding must be overwritten with zeros
+		}
+		if err := got.Pack(src, stride, true); err != nil {
+			t.Fatal(err)
+		}
+		saved := smeEnabled
+		smeEnabled = false
+		want, _ := NewPackedB(k, n)
+		err := want.Pack(src, stride, true)
+		smeEnabled = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range want.data {
+			if math.Float32bits(got.data[i]) != math.Float32bits(want.data[i]) {
+				t.Fatalf("n=%d k=%d index %d: %v != %v", n, k, i, got.data[i], want.data[i])
+			}
+		}
+	}
+}

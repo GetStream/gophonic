@@ -88,3 +88,8 @@ func mulPackedVectorSME(p *PackedVector, dst, x []float32) bool {
 	}
 	return true
 }
+
+// smeTransposePack writes PackedB panels from an N-by-K source through ZA.
+//
+//go:noescape
+func smeTransposePack(src *float32, strideBytes, n, k int, dst *float32)

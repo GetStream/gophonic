@@ -14,3 +14,5 @@ const smeEnabled = false
 func mulSME([]float32, int, []float32, int, []float32, int, int, int) bool { return false }
 
 func mulPackedVectorSME(*PackedVector, []float32, []float32) bool { return false }
+
+func smeTransposePack(*float32, int, int, int, *float32) { panic("unreachable") }

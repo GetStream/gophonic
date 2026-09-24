@@ -23,7 +23,7 @@ type audioAttention struct {
 	q, k, v, dst                []float32
 	queryBias, valueBias        []float32
 	errors                      []error
-	preparing                   bool
+	preparing, rowPrep, packing bool
 }
 
 func newAudioAttention(rows, state, heads, workers int) (*audioAttention, error) {
@@ -59,8 +59,15 @@ func (a *audioAttention) runBiased(q, k, v, dst, queryBias, valueBias []float32,
 	a.q, a.k, a.v, a.dst = q, k, v, dst
 	a.queryBias, a.valueBias = queryBias, valueBias
 	clear(a.errors)
+	// Whole rows first: one NEON pass per row when both biases are present.
 	a.preparing = true
+	a.rowPrep = layerNormAccelerated && queryBias != nil && valueBias != nil && a.state%4 == 0
 	err := executor.Rows(a, a.heads, 1)
+	if err == nil && a.rowPrep {
+		a.packing = true
+		err = executor.Rows(a, a.heads, 1)
+		a.packing = false
+	}
 	a.preparing = false
 	if err == nil {
 		err = executor.Rows(a, a.workers, 1)
@@ -82,6 +89,15 @@ func (a *audioAttention) prepareHeads(firstHead, lastHead int) {
 	scale := float32(math.Pow(float64(headSize), -0.25))
 	for head := firstHead; head < lastHead; head++ {
 		offset := head * headSize
+		if a.rowPrep {
+			// This head's share of rows gets the full-row elementwise pass;
+			// every head's columns are ready before any head packs below.
+			for t := head * a.rows / a.heads; t < (head+1)*a.rows/a.heads; t++ {
+				base := t * a.state
+				attnPrepNEON(&a.q[base], &a.k[base], &a.v[base], &a.queryBias[0], &a.valueBias[0], a.state, scale)
+			}
+			continue
+		}
 		for t := 0; t < a.rows; t++ {
 			base := t*a.state + offset
 			q, k, v := a.q[base:base+headSize], a.k[base:base+headSize], a.v[base:base+headSize]
@@ -105,20 +121,30 @@ func (a *audioAttention) prepareHeads(firstHead, lastHead int) {
 				}
 			}
 		}
-		if err := a.keys[head].Pack(a.k[offset:], a.state, true); err != nil {
-			a.errors[head%a.workers] = err
-			return
-		}
-		if err := a.values[head].Pack(a.v[offset:], a.state, false); err != nil {
-			a.errors[head%a.workers] = err
-			return
-		}
+		a.packHead(head)
+	}
+}
+
+func (a *audioAttention) packHead(head int) {
+	offset := head * (a.state / a.heads)
+	if err := a.keys[head].Pack(a.k[offset:], a.state, true); err != nil {
+		a.errors[head%a.workers] = err
+		return
+	}
+	if err := a.values[head].Pack(a.v[offset:], a.state, false); err != nil {
+		a.errors[head%a.workers] = err
 	}
 }
 
 // ApplyRows implements whispergemm.RowOperation. The row indices select
 // private worker scratch; query tiles are interleaved to balance the tail.
 func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
+	if a.packing {
+		for head := firstWorker; head < lastWorker; head++ {
+			a.packHead(head)
+		}
+		return
+	}
 	if a.preparing {
 		a.prepareHeads(firstWorker, lastWorker)
 		return

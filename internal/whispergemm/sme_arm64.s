@@ -739,6 +739,54 @@ TEXT ·smeVectorF16(SB), NOSPLIT, $0-56
 	MOVD	R0, retries+48(FP)
 	RET
 
+// func smeTransposePack(src *float32, strideBytes, n, k int, dst *float32)
+TEXT ·smeTransposePack(SB), NOSPLIT, $0-40
+	MOVD	src+0(FP), R0
+	MOVD	strideBytes+8(FP), R1
+	MOVD	n+16(FP), R2
+	MOVD	k+24(FP), R3
+	MOVD	dst+32(FP), R4
+	WORD	$0xd503477f	// smstart
+	WORD	$0x2598e3e0	// ptrue p0.s
+	WORD	$0xd2800005	// mov x5, #0x0 ; =0
+	WORD	$0xcb050046	// sub x6, x2, x5
+	WORD	$0xf10040df	// cmp x6, #0x10
+	WORD	$0xd2800207	// mov x7, #0x10 ; =16
+	WORD	$0x9a87b0c6	// csel x6, x6, x7, lt
+	WORD	$0xd2800008	// mov x8, #0x0 ; =0
+	WORD	$0xc0080011	// zero {za0.s}
+	WORD	$0x25a31501	// whilelt p1.s, x8, x3
+	WORD	$0x9b0100a9	// madd x9, x5, x1, x0
+	WORD	$0x8b080929	// add x9, x9, x8, lsl #2
+	WORD	$0x5280000c	// mov w12, #0x0 ; =0
+	WORD	$0xeb06019f	// cmp x12, x6
+	WORD	$0x540000aa	// b.ge 0x4c
+	WORD	$0xe09f0520	// ld1w {za0h.s[w12, 0]}, p1/z, [x9]
+	WORD	$0x8b010129	// add x9, x9, x1
+	WORD	$0x1100058c	// add w12, w12, #0x1
+	WORD	$0x17fffffb	// b 0x34
+	WORD	$0xcb08006a	// sub x10, x3, x8
+	WORD	$0xf100415f	// cmp x10, #0x10
+	WORD	$0x9a87b14a	// csel x10, x10, x7, lt
+	WORD	$0x9b037cab	// mul x11, x5, x3
+	WORD	$0x8b08116b	// add x11, x11, x8, lsl #4
+	WORD	$0x8b0b088b	// add x11, x4, x11, lsl #2
+	WORD	$0x5280000c	// mov w12, #0x0 ; =0
+	WORD	$0xeb0a019f	// cmp x12, x10
+	WORD	$0x540000aa	// b.ge 0x80
+	WORD	$0xe0bf8160	// st1w {za0v.s[w12, 0]}, p0, [x11]
+	WORD	$0x9101016b	// add x11, x11, #0x40
+	WORD	$0x1100058c	// add w12, w12, #0x1
+	WORD	$0x17fffffb	// b 0x68
+	WORD	$0x91004108	// add x8, x8, #0x10
+	WORD	$0xeb03011f	// cmp x8, x3
+	WORD	$0x54fffccb	// b.lt 0x20
+	WORD	$0x910040a5	// add x5, x5, #0x10
+	WORD	$0xeb0200bf	// cmp x5, x2
+	WORD	$0x54fffbcb	// b.lt 0xc
+	WORD	$0xd503467f	// smstop
+	RET
+
 // func smeVectorBytes() int
 TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8
 	WORD	$0x04bf5820	// rdsvl x0, #1
