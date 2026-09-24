@@ -63,14 +63,17 @@ type Model struct {
 	ownsWeights bool // loaded by Open, so Close frees their GPU memory
 }
 
-// Options controls the local Qwen3-8B CPU backend. Weights selects WeightsF16
-// (the default: every BF16 checkpoint weight exactly) or WeightsInt8 (per-row
-// int8, half the memory, lower fidelity). Threads bounds the worker
-// goroutines, including the caller; zero selects min(performance cores,
-// GOMAXPROCS). CacheEntries sizes an exact cache of finished embeddings
-// keyed by token IDs (16 KiB per entry): zero selects 4096 entries, and a
-// negative value disables it. A hit returns exactly the vector a fresh
-// evaluation would produce.
+// Options controls the local Qwen3-8B backend. The zero value picks the
+// fastest backend available: on an Apple GPU, WeightsGPU (int8 weights with
+// FP32 activations, llama.cpp Q8_0 fidelity); elsewhere WeightsF16 on the CPU
+// (every BF16 checkpoint weight exactly). Weights may name a backend
+// explicitly: WeightsF16, WeightsInt8 (CPU, per-row int8), WeightsGPU, or
+// WeightsGPUQ4 (4.5-bit GPU weights, lowest latency, lower fidelity).
+// Threads bounds the CPU worker goroutines, including the caller; zero
+// selects min(performance cores, GOMAXPROCS). CacheEntries sizes an exact
+// cache of finished embeddings keyed by token IDs (16 KiB per entry): zero
+// selects 4096 entries, and a negative value disables it. A hit returns
+// exactly the vector a fresh evaluation would produce.
 //
 // PrefixCacheTokens sizes a store of the last long input's per-layer keys and
 // values (288 KiB per token): when a later input of at least 64 tokens shares
@@ -95,7 +98,7 @@ func (o Options) threads() int {
 }
 
 // Open loads an official Qwen3-8B safetensors snapshot directory. The zero
-// Options value selects exact weights and default threads and caches.
+// Options value selects the fastest backend and default caches.
 func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("qwen3: invalid thread count %d", opts.Threads)

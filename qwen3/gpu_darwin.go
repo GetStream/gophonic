@@ -41,6 +41,7 @@ type gpuModel struct {
 	dev                          *metal.Device
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
+	attendFlash                  *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	layers                       []gpuLayer
@@ -62,6 +63,26 @@ func gpuRows(bits int) int {
 func alignUp(n int) int { return (n + gpuAlign - 1) &^ (gpuAlign - 1) }
 
 // loadGPU quantizes every projection into GPU buffers.
+// gpuSupports reports whether a Metal GPU is present and the model has the
+// geometry the GPU kernels are written for (Qwen3-8B).
+func gpuSupports(c *modelConfig) bool {
+	if c.hidden != 4096 || c.heads != 32 || c.kvHeads != 8 || c.headDim != 128 || c.intermediate%maxRotationBlock != 0 {
+		return false
+	}
+	gpuProbe.Do(func() {
+		if d, err := metal.Open(); err == nil {
+			d.Close()
+			gpuPresent = true
+		}
+	})
+	return gpuPresent
+}
+
+var (
+	gpuProbe   sync.Once
+	gpuPresent bool
+)
+
 func (m *Weights) loadGPU(st *safetensors, bits int) error {
 	c := &m.cfg
 	if c.hidden != 4096 || c.heads != 32 || c.kvHeads != 8 || c.headDim != 128 || c.intermediate%maxRotationBlock != 0 {
@@ -84,7 +105,7 @@ func (m *Weights) loadGPU(st *safetensors, bits int) error {
 		dst  **metal.Pipeline
 		name string
 	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate4096"},
-		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"},
+		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix}, {&g.mm[0][1], "mm_o" + suffix}, {&g.mm[0][2], "mm_gateup" + suffix}, {&g.mm[0][3], "mm_down" + suffix},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
 		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
@@ -337,14 +358,15 @@ type gpuWorkspace struct {
 	qkv0Args, qkvArgs, oArgs, guArgs, dArgs gemvArgs
 	attn                                    attnArgs
 	mm                                      mmArgs
-	perRow                                  uint32
+	perRow, batchRows                       uint32
 	rows                                    int
 	past                                    int
 	shared                                  bool
 }
 
-// gpuTokenByToken forces the single-token kernels; tests compare the paths.
-var gpuTokenByToken bool
+// gpuTokenByToken forces the single-token kernels and gpuScalarAttention
+// the per-key attention loop; tests compare the paths.
+var gpuTokenByToken, gpuScalarAttention bool
 
 // mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal).
 const mmColumns = 64
@@ -613,12 +635,19 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
 		e.Dispatch(metal.Size{X: c.heads + 2*c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32, Y: 1, Z: 1})
 
-		e.SetPipeline(g.attendM)
 		e.SetBuffer(w.info, 0, 3)
 		e.SetBuffer(w.preK, i*w.preStride, 4)
 		e.SetBuffer(w.preV, i*w.preStride, 5)
 		e.SetBuffer(w.ctx, 0, 6)
-		e.Dispatch(metal.Size{X: c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
+		if gpuScalarAttention {
+			e.SetPipeline(g.attendM)
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
+		} else {
+			w.batchRows = uint32(rows)
+			e.SetPipeline(g.attendFlash)
+			e.SetBytes(unsafe.Pointer(&w.batchRows), 4, 8)
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: (rows + 7) / 8, Z: 1}, metal.Size{X: 128, Y: 1, Z: 1})
+		}
 
 		w.mmDispatch(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, qdim, c.hidden, rows, 0)
 		w.mmDispatch(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, c.hidden, 2*c.intermediate, rows, parts)
