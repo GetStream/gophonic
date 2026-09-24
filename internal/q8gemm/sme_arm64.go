@@ -27,6 +27,18 @@ func smeMulF16W(w *uint16, kPairs, panels int, activation *uint16, dst *float32,
 //go:noescape
 func smeMulI8(w *int8, kQuads, panels int, activation *int8, dst *float32, cols, rows, strideBytes int, colScales, rowScales *float32) (retries int)
 
+// smeRowI8 multiplies one contiguous int8 activation row by int8 weight
+// panels with SME2 multi-vector SDOT; K must be a multiple of 32.
+//
+//go:noescape
+func smeRowI8(w *int8, kGroups, panels int, activation *int8, dst *float32, cols int, colScales, rowScale *float32) (retries int)
+
+// smeRowF16 multiplies one contiguous FP16 activation row by FP16 weight
+// panels with SME2 multi-vector FDOT; K must be a multiple of 16.
+//
+//go:noescape
+func smeRowF16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols int, colScales, rowScale *float32) (retries int)
+
 //go:noescape
 func smeVectorBytes() int
 

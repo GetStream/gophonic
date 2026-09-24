@@ -17,6 +17,7 @@ import "math"
 // goroutines may call MulPanels concurrently for disjoint panel ranges.
 type Workspace struct {
 	activation []uint16
+	row        []uint16                // contiguous copy of a single-row tile, for the row kernel
 	act32      []float32               // [K][16] FP32 copy of activation, only without SME
 	scratch    *Scratch                // MulInto's own scratch, only without SME
 	rowScale   [ActivationRows]float32 // multiplies inputs before FP16 rounding
@@ -49,7 +50,7 @@ func NewWorkspace(k int) (*Workspace, error) {
 	if k < 0 || k > int(^uint(0)>>2)/ActivationRows {
 		return nil, ErrDimensions
 	}
-	ws := &Workspace{activation: make([]uint16, ((k+1)/2)*2*ActivationRows)}
+	ws := &Workspace{activation: make([]uint16, ((k+1)/2)*2*ActivationRows), row: make([]uint16, ((k+1)/2)*2)}
 	if !usingSME() {
 		ws.act32 = make([]float32, k*ActivationRows)
 		ws.scratch = NewScratch(k)
@@ -150,6 +151,12 @@ func (ws *Workspace) PackRange(x []float32, stride, k0, k1 int) error {
 			clear(ws.activation[pair*2*ActivationRows+rows*2 : (pair+1)*2*ActivationRows])
 		}
 	}
+	if rows == 1 {
+		// The row kernel reads the same FP16 values contiguously.
+		for pair := p0; pair < p1; pair++ {
+			copy(ws.row[pair*2:pair*2+2], ws.activation[pair*2*ActivationRows:])
+		}
+	}
 	if ws.act32 != nil {
 		// The portable kernel reads the same FP16-rounded values as FP32.
 		for kk := k0; kk < k1; kk++ {
@@ -183,6 +190,9 @@ func MulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int,
 		for r := range rows {
 			clear(dst[r*stride+p0*OutputPanel : r*stride+min(p1*OutputPanel, w.n)])
 		}
+		return nil
+	}
+	if rows == 1 && w.h != nil && w.k%16 == 0 && mulRowF16SME(dst, ws, w, p0, p1) {
 		return nil
 	}
 	if mulPanelsSME(dst, stride, ws, w, p0, p1) {

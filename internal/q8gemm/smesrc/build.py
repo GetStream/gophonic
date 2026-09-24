@@ -44,6 +44,20 @@ out += args([("w", "R0"), ("kQuads", "R1"), ("panels", "R2"), ("activation", "R3
              ("colScales", "R16"), ("rowScales", "R19")], 80)
 out += [words("tile16x64i8.S"), "\tMOVD\tR0, retries+80(FP)\n", "\tRET\n\n"]
 out += [
+    "// func smeRowI8(w *int8, kGroups, panels int, activation *int8, dst *float32, cols int, colScales, rowScale *float32) (retries int)\n",
+    "TEXT ·smeRowI8(SB), NOSPLIT, $0-72\n",
+]
+out += args([("w", "R0"), ("kGroups", "R1"), ("panels", "R2"), ("activation", "R3"),
+             ("dst", "R4"), ("cols", "R5"), ("colScales", "R16"), ("rowScale", "R19")], 64)
+out += [words("row64i8.S"), "\tMOVD\tR0, retries+64(FP)\n", "\tRET\n\n"]
+out += [
+    "// func smeRowF16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols int, colScales, rowScale *float32) (retries int)\n",
+    "TEXT ·smeRowF16(SB), NOSPLIT, $0-72\n",
+]
+out += args([("w", "R0"), ("kGroups", "R1"), ("panels", "R2"), ("activation", "R3"),
+             ("dst", "R4"), ("cols", "R5"), ("colScales", "R16"), ("rowScale", "R19")], 64)
+out += [words("row64h.S"), "\tMOVD\tR0, retries+64(FP)\n", "\tRET\n\n"]
+out += [
     "// func smeVectorBytes() int\n",
     "TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8\n",
     "\tWORD\t$0x04bf5820\t// rdsvl x0, #1\n",

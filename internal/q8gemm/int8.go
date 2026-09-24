@@ -71,6 +71,7 @@ func (w *WeightsI8) at(row, k int) int8 {
 // goroutines may call MulPanelsI8 concurrently for disjoint panel ranges.
 type WorkspaceI8 struct {
 	activation []int8 // [K/4][16][4]
+	row        []int8 // contiguous copy of a single-row tile, for the row kernel
 	rowScale   [ActivationRows]float32
 	rowInverse [ActivationRows]float32
 	k, rows    int
@@ -81,7 +82,7 @@ func NewWorkspaceI8(k int) (*WorkspaceI8, error) {
 	if k < 0 || k > int(^uint(0)>>3)/ActivationRows {
 		return nil, ErrDimensions
 	}
-	return &WorkspaceI8{activation: make([]int8, ((k+3)/4)*4*ActivationRows)}, nil
+	return &WorkspaceI8{activation: make([]int8, ((k+3)/4)*4*ActivationRows), row: make([]int8, ((k+3)/4)*4)}, nil
 }
 
 // Prepare records the next tile's shape and clears its row scales.
@@ -138,6 +139,12 @@ func (ws *WorkspaceI8) PackRange(x []float32, stride, k0, k1 int) error {
 			clear(ws.activation[quad*4*ActivationRows+ws.rows*4 : (quad+1)*4*ActivationRows])
 		}
 	}
+	if ws.rows == 1 {
+		// The row kernel reads the same quantized values contiguously.
+		for quad := q0; quad < q1; quad++ {
+			copy(ws.row[quad*4:quad*4+4], ws.activation[quad*4*ActivationRows:])
+		}
+	}
 	return nil
 }
 
@@ -166,6 +173,9 @@ func MulPanelsI8(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, p0, p
 		for r := range ws.rows {
 			clear(dst[r*stride+p0*OutputPanel : r*stride+min(p1*OutputPanel, w.n)])
 		}
+		return nil
+	}
+	if ws.rows == 1 && w.k%32 == 0 && mulRowI8SME(dst, ws, w, p0, p1) {
 		return nil
 	}
 	if !mulPanelsI8SME(dst, stride, ws, w, p0, p1) {

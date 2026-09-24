@@ -44,7 +44,7 @@ func packI8(t testing.TB, ws *WorkspaceI8, x []float32, rows, k int) {
 // TestInt8KernelMatchesExactOracle checks the SME kernel against the integer
 // oracle bit for bit, and the NEON quantizer against scalar rounding.
 func TestInt8KernelMatchesExactOracle(t *testing.T) {
-	for _, shape := range [][3]int{{1, 4, 1}, {3, 7, 17}, {12, 64, 64}, {16, 257, 129}, {12, 4096, 1024}, {5, 12288, 64}} {
+	for _, shape := range [][3]int{{1, 4, 1}, {3, 7, 17}, {12, 64, 64}, {16, 257, 129}, {12, 4096, 1024}, {5, 12288, 64}, {1, 32, 64}, {1, 4096, 1024}, {1, 12288, 200}, {1, 96, 5}} {
 		rows, k, n := shape[0], shape[1], shape[2]
 		t.Run(shapeName(rows, k, n), func(t *testing.T) {
 			w, q, scales := int8Fixture(t, k, n, int64(k*31+n))

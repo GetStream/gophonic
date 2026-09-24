@@ -40,3 +40,29 @@ func mulPanelsI8SME(dst []float32, stride int, ws *WorkspaceI8, w *WeightsI8, p0
 	}
 	return true
 }
+
+func mulRowI8SME(dst []float32, ws *WorkspaceI8, w *WeightsI8, p0, p1 int) bool {
+	if !usingSME() {
+		return false
+	}
+	col := p0 * OutputPanel
+	retries := smeRowI8(&w.q[p0*w.quads*4*OutputPanel], w.k/32, p1-p0, &ws.row[0],
+		&dst[col], w.n-col, &w.scales[col], &ws.rowScale[0])
+	if retries != 0 {
+		smeRetries.Add(uint64(retries))
+	}
+	return true
+}
+
+func mulRowF16SME(dst []float32, ws *Workspace, w *Weights, p0, p1 int) bool {
+	if !usingSME() {
+		return false
+	}
+	col := p0 * OutputPanel
+	retries := smeRowF16(&w.h[p0*w.pairs*2*OutputPanel], w.k/16, p1-p0, &ws.row[0],
+		&dst[col], w.n-col, &w.scales[col], &ws.rowInverse[0])
+	if retries != 0 {
+		smeRetries.Add(uint64(retries))
+	}
+	return true
+}

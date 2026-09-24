@@ -402,3 +402,41 @@ func TestPortableKernelMatchesSME(t *testing.T) {
 		}
 	}
 }
+
+// TestF16RowKernelMatchesTile checks the one-row FDOT kernel against the
+// scalar oracle over the same packed values (FP32 sums in another order).
+func TestF16RowKernelMatchesTile(t *testing.T) {
+	for _, shape := range [][2]int{{16, 64}, {4096, 1024}, {12288, 200}, {96, 5}} {
+		k, n := shape[0], shape[1]
+		rng := rand.New(rand.NewSource(int64(k + n)))
+		bf := make([]uint16, k*n)
+		for i := range bf {
+			bf[i] = uint16(math.Float32bits(float32(rng.NormFloat64()*0.05)) >> 16)
+		}
+		w, _ := NewWeightsF16(k, n)
+		if _, err := w.PackBF16(bf); err != nil {
+			t.Fatal(err)
+		}
+		ws, _ := NewWorkspace(k)
+		x := make([]float32, k)
+		for i := range x {
+			x[i] = float32(rng.NormFloat64()) * float32(1+i%7)
+		}
+		got := make([]float32, n)
+		if err := MulInto(got, x, 1, w, ws); err != nil {
+			t.Fatal(err)
+		}
+		want := make([]float32, n)
+		scalarMulPanels(want, n, ws, w, 0, w.Panels())
+		for c := range n {
+			var sumAbs float64
+			for kk := range k {
+				sumAbs += math.Abs(float64(f16ToF32(ws.row[kk]))) * math.Abs(float64(w.at(c, kk)))
+			}
+			bound := 2e-6 * sumAbs * float64(w.scales[c]*ws.rowInverse[0]) * math.Sqrt(float64(k))
+			if d := math.Abs(float64(got[c] - want[c])); d > bound+1e-6 {
+				t.Fatalf("K=%d N=%d col %d: row kernel %g, oracle %g", k, n, c, got[c], want[c])
+			}
+		}
+	}
+}
