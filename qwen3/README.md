@@ -1,9 +1,19 @@
-# qwen3: Qwen3-8B on the CPU in pure Go
+# qwen3: Qwen3-8B in pure Go, on the CPU or the Apple GPU
 
 Package `qwen3` runs the official `Qwen/Qwen3-8B` checkpoint with no cgo and
 no inference runtime: the safetensors loader, tokenizer, transformer, and
-matrix kernels are Go and Go assembly. On Apple M4 it uses the SME matrix
-units; other CPUs use portable kernels (NEON on arm64).
+matrix kernels are Go and Go assembly. On Apple M4 the CPU path uses the SME
+matrix units, and the GPU path drives Metal through a pure-Go binding; other
+CPUs use portable kernels (NEON on arm64).
+
+| M4 Max, one text | 1 token | 12 tokens | ~70 tokens | 16 × 12 tokens | cosine vs BF16 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gpu` | **15.8 ms** | **25 ms** | **179 ms** | **356 ms** | 0.99933 |
+| `gpu-q4` | **11.0 ms** | 25 ms | 159 ms | 331 ms | 0.953 |
+| CPU `int8` | 28 ms | 43 ms | 150 ms | 415 ms | 0.99866 |
+| CPU exact (default) | 51 ms | 66 ms | 304 ms | 841 ms | **0.99991** |
+| llama.cpp Metal Q8_0 | 19.5 ms | 57 ms | 92 ms (64) | — | 0.99933 |
+| llama.cpp CPU Q8_0 | 31.8 ms | 90 ms | 487 ms (64) | — | 0.99929 |
 
 ```go
 m, err := qwen3.Open("/path/to/Qwen3-8B", qwen3.Options{})
@@ -122,27 +132,29 @@ rotation are folded into the weights at load, and each projection is stored
 as per-row int8 while activations stay in FP32. A layer is six dispatches,
 and weight streaming runs at the measured memory bandwidth (≈440 GB/s).
 
-| One token, M4 Max | cosine vs BF16 (`hello`) | latency |
-| --- | ---: | ---: |
-| `gpu` (int8 weights) | 0.99933 | **15.8 ms** |
-| `gpu-q4` (4.5-bit weights) | 0.953 | **10.9 ms** |
-| llama.cpp Metal Q8_0 | 0.99933 | 19.5 ms |
-| llama.cpp Metal Q4_0 / Q4_K_M | 0.863 / 0.942 | 12.0 / 12.5 ms |
+The table at the top compares it with the CPU paths and llama.cpp; the
+llama.cpp Metal 4-bit files reach cosine 0.863 (Q4_0, 12.0 ms for one token)
+and 0.942 (Q4_K_M, 12.5 ms), below `gpu-q4`.
+
+A single token streams every weight once through GEMV kernels. Longer
+inputs, and several texts packed into one pass, run batched simdgroup-matrix
+kernels that read each weight once per 16 or 32 tokens, splitting K across
+threadgroups when a projection alone would leave GPU cores idle.
 
 `gpu-q4` stores blocks of 32 weights as 4-bit codes with one FP16 scale,
-chosen per block to minimize rounding error. Longer inputs currently run one
-token at a time (a batched kernel is in progress), and prefix stores
-(`Question`, `Context`, `Stream`) are not yet supported on the GPU.
+chosen per block to minimize rounding error. Prefix stores (`Question`,
+`Context`, `Stream`) are not yet supported on the GPU.
 
 ## Performance
 
-On an Apple M4 Max CPU a 12-token text takes about 70 ms, 70 tokens 317 ms,
-16 short texts 850 ms, and 2048 tokens 8.2 s; a 30-token turn appended to an
-1800-token state takes 203 ms because the stored prefix is reused, and cached
-re-ranks take under 2 ms. See [the performance report](../docs/clm-performance.md).
+On the M4 Max CPU, 2048 tokens take 8.2 s exact and 4.9 s in `int8`; a
+30-token turn appended to an 1800-token state takes 155 ms because the stored
+prefix is reused; `Question.Choose` takes 128 ms per new input and
+`ChooseBatch` 94 ms (47 ms in `int8`); cached re-ranks take under 2 ms. See
+[the performance report](../docs/clm-performance.md).
 
 - **Threads.** `Options.Threads` defaults to min(performance cores,
-  `GOMAXPROCS`, 8). Workers live as long as the `Model`; call `Close`.
+  `GOMAXPROCS`, 16). Workers live as long as the `Model`; call `Close`.
 - **Batching.** Texts in one `Embed` call share 16-row matrix tiles.
 - **Caches.** `Options.CacheEntries` sizes an exact embedding cache (default
   4096 × 16 KiB) and `Options.PrefixCacheTokens` a store of the last long

@@ -40,7 +40,9 @@ type gpuLayer struct {
 type gpuModel struct {
 	dev                          *metal.Device
 	qkv, o, gateup, down, attend *metal.Pipeline
-	rotate                       *metal.Pipeline
+	rotate, qkRope, attendM      *metal.Pipeline
+	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
+	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	layers                       []gpuLayer
 	norms, signs, rope           *metal.Buffer
 	hidden, inter, head          *rotation
@@ -81,7 +83,11 @@ func (m *Weights) loadGPU(st *safetensors, bits int) error {
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
-	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate4096"}} {
+	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate4096"},
+		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"},
+		{&g.mm[0][0], "mm_qkv" + suffix}, {&g.mm[0][1], "mm_o" + suffix}, {&g.mm[0][2], "mm_gateup" + suffix}, {&g.mm[0][3], "mm_down" + suffix},
+		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
+		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
 		if *p.dst, err = dev.Pipeline(lib, p.name); err != nil {
 			return err
 		}
@@ -319,13 +325,37 @@ func abs32(x float32) float32 { return math.Float32frombits(math.Float32bits(x) 
 type gpuWorkspace struct {
 	g                                       *gpuModel
 	h, qkv, ctx, act, kc                    *metal.Buffer
-	vc, embedParts                          *metal.Buffer
+	vc, embedParts, info                    *metal.Buffer // info: per row (position, sequence start row)
+	scratch                                 *metal.Buffer // split-K partial sums
 	attnParts, mlpParts                     *metal.Buffer // residual sums of squares for the next RMSNorm
 	enc                                     metal.Encoder
 	qkv0Args, qkvArgs, oArgs, guArgs, dArgs gemvArgs
 	attn                                    attnArgs
+	mm                                      mmArgs
+	perRow                                  uint32
 	rows                                    int
 }
+
+// gpuTokenByToken forces the single-token kernels; tests compare the paths.
+var gpuTokenByToken bool
+
+// mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal).
+const mmColumns = 64
+
+type mmArgs struct {
+	k, n, m         uint32
+	eps             float32
+	parts, partsOut uint32
+	splitK, splits  uint32
+	padM            uint32
+}
+
+// mmMinGroups is the threadgroup count below which projections split K.
+const mmMinGroups = 256
+
+// mmScratchFloats bounds split-K scratch: splits only happen while the grid
+// is below mmMinGroups tiles of at most 32×64, and splits are at most 8.
+const mmScratchFloats = 8 * mmMinGroups * 32 * mmColumns
 
 type gemvArgs struct {
 	k, n  uint32
@@ -349,14 +379,16 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		n   int
 	}{
 		{&w.h, 4 * maxTokens * c.hidden},
-		{&w.qkv, 4 * (qdim + 2*c.kvDim)},
-		{&w.ctx, 4 * qdim},
-		{&w.act, 4 * c.intermediate},
+		{&w.qkv, 4 * maxTokens * (qdim + 2*c.kvDim)},
+		{&w.ctx, 4 * maxTokens * qdim},
+		{&w.act, 4 * maxTokens * c.intermediate},
 		{&w.kc, 4 * c.layers * maxTokens * c.kvDim},
 		{&w.vc, 4 * c.layers * maxTokens * c.kvDim},
 		{&w.embedParts, 4 * maxTokens},
-		{&w.attnParts, 4 * c.hidden / rows},
-		{&w.mlpParts, 4 * c.hidden / rows},
+		{&w.info, 8 * maxTokens},
+		{&w.scratch, 4 * mmScratchFloats},
+		{&w.attnParts, 4 * max(c.hidden/rows, maxTokens*c.hidden/mmColumns)},
+		{&w.mlpParts, 4 * max(c.hidden/rows, maxTokens*c.hidden/mmColumns)},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
 			return nil, err
@@ -389,25 +421,160 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 	e.Dispatch(metal.Size{X: int(args.n) / gpuRows(w.g.bits), Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
 }
 
-// sequence evaluates one sequence token by token and writes its last
-// token's post-final-norm state to dst.
-func (w *gpuWorkspace) sequence(m *Weights, ids []int, dst []float32) error {
-	g, c := w.g, &m.cfg
-	if len(ids) > w.rows {
-		return fmt.Errorf("qwen3: %d tokens exceeds the GPU context %d", len(ids), w.rows)
+// batch evaluates independent sequences and writes each one's last-token
+// post-final-norm state to dst. Sequences are packed into shared forward
+// passes of up to maxTokens rows; a lone single token takes the GEMV path.
+func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32) error {
+	for start := 0; start < len(seqs); {
+		end, rows := start, 0
+		for end < len(seqs) && rows+len(seqs[end]) <= w.rows {
+			rows += len(seqs[end])
+			end++
+		}
+		if end == start {
+			return fmt.Errorf("qwen3: %d tokens exceeds the GPU context %d", len(seqs[start]), w.rows)
+		}
+		if err := w.pass(m, seqs[start:end], dst[start:end], rows); err != nil {
+			return err
+		}
+		start = end
 	}
+	return nil
+}
+
+func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int) error {
+	g, c := w.g, &m.cfg
 	hs := floats(w.h.Bytes())
 	embedParts := floats(w.embedParts.Bytes())
-	for t, id := range ids {
-		row := hs[t*c.hidden : (t+1)*c.hidden]
-		m.embedRow(id, row)
-		g.hidden.apply(row)
-		embedParts[t] = sumSquares(row)
+	info := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(w.info.Bytes()))), 2*maxTokens)
+	r := 0
+	for _, ids := range seqs {
+		start := r
+		for pos, id := range ids {
+			row := hs[r*c.hidden : (r+1)*c.hidden]
+			m.embedRow(id, row)
+			g.hidden.apply(row)
+			embedParts[r] = sumSquares(row)
+			info[2*r], info[2*r+1] = uint32(pos), uint32(start)
+			r++
+		}
 	}
 	e := &w.enc
 	g.dev.Begin(e, false)
+	if gpuTokenByToken || rows == 1 {
+		if len(seqs) != 1 {
+			panic("qwen3: token-by-token GPU path takes one sequence")
+		}
+		w.encodeTokens(rows)
+	} else {
+		w.encodeBatch(rows)
+	}
+	if err := e.Wait(); err != nil {
+		return err
+	}
+	r = 0
+	for s, ids := range seqs {
+		r += len(ids)
+		out := dst[s]
+		copy(out, hs[(r-1)*c.hidden:r*c.hidden])
+		g.hidden.unapply(out)
+		rmsNorm32(out, out, m.finalNorm, c.eps)
+		for _, v := range out {
+			if !finite32(v) {
+				return errors.New("qwen3: non-finite hidden state")
+			}
+		}
+	}
+	return nil
+}
+
+// mm encodes one batched projection over rows tokens.
+func (w *gpuWorkspace) mmDispatch(kind int, buf *metal.Buffer, wOff, sOff int, x, y, in, out *metal.Buffer,
+	k, n, rows, parts int) {
+	e := &w.enc
+	// Up to 16 tokens use the 16-token tile, which wastes no rows.
+	tile, p := 32, w.g.mm[0][kind]
+	if rows <= 16 {
+		tile, p = 16, w.g.mm[1][kind]
+	}
+	groups := n / mmColumns * ((rows + tile - 1) / tile)
+	// Small grids leave GPU cores idle; split K so at least mmMinGroups
+	// threadgroups stream the weights, and add the splits in mm_finish.
+	splits := 1
+	for splits < 8 && groups*splits < mmMinGroups && k%(2*splits*32) == 0 {
+		splits *= 2
+	}
+	padM := (rows + tile - 1) / tile * tile
+	w.mm = mmArgs{k: uint32(k), n: uint32(n), m: uint32(rows), eps: float32(w.g.cfg.eps), parts: uint32(parts),
+		partsOut: uint32(n / mmColumns), splitK: uint32(k / splits), splits: uint32(splits), padM: uint32(padM)}
+	e.SetPipeline(p)
+	e.SetBuffer(buf, wOff, 0)
+	e.SetBuffer(buf, sOff, 1)
+	e.SetBuffer(x, 0, 2)
+	e.SetBuffer(y, 0, 3)
+	e.SetBuffer(in, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.mm), int(unsafe.Sizeof(w.mm)), 5)
+	e.SetBuffer(out, 0, 6)
+	e.SetBuffer(w.scratch, 0, 7)
+	e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: splits}, metal.Size{X: 8 * tile, Y: 1, Z: 1})
+	if splits > 1 {
+		e.SetPipeline(w.g.finish[[4]int{0, 1, 2, 1}[kind]])
+		e.Dispatch(metal.Size{X: n / mmColumns, Y: rows, Z: 1}, metal.Size{X: mmColumns, Y: 1, Z: 1})
+	}
+}
+
+// encodeBatch encodes a forward pass over rows tokens at positions 0..rows-1
+// with batched projections, reading each weight once per 32 tokens.
+func (w *gpuWorkspace) encodeBatch(rows int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	qdim := c.heads * c.headDim
 	kvBytes := 4 * maxTokens * c.kvDim
-	for t := range ids {
+	parts := c.hidden / mmColumns
+	w.attn.pos = 0
+	w.perRow = uint32(c.intermediate / maxRotationBlock)
+	for i := range g.layers {
+		gl := &g.layers[i]
+		if i == 0 {
+			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.embedParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, 1)
+		} else {
+			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, parts)
+		}
+		e.SetPipeline(g.qkRope)
+		e.SetBuffer(w.qkv, 0, 0)
+		e.SetBuffer(w.kc, i*kvBytes, 1)
+		e.SetBuffer(w.vc, i*kvBytes, 2)
+		e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
+		e.SetBuffer(g.norms, 4*(2*i+1)*c.headDim, 4)
+		e.SetBuffer(g.rope, 0, 5)
+		e.SetBuffer(w.info, 0, 6)
+		e.SetBytes(unsafe.Pointer(&w.attn), 16, 7)
+		e.Dispatch(metal.Size{X: c.heads + 2*c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32, Y: 1, Z: 1})
+
+		e.SetPipeline(g.attendM)
+		e.SetBuffer(w.info, 0, 3)
+		e.SetBuffer(w.ctx, 0, 6)
+		e.Dispatch(metal.Size{X: c.kvHeads, Y: rows, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
+
+		w.mmDispatch(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, qdim, c.hidden, rows, 0)
+		w.mmDispatch(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, c.hidden, 2*c.intermediate, rows, parts)
+
+		e.SetPipeline(g.rotate)
+		e.SetBuffer(w.act, 0, 0)
+		e.SetBuffer(g.signs, 0, 1)
+		e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
+		e.Dispatch(metal.Size{X: rows * int(w.perRow), Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+
+		w.mmDispatch(3, gl.buf, gl.d, gl.dScale, w.act, w.h, w.attnParts, w.attnParts, c.intermediate, c.hidden, rows, 0)
+	}
+}
+
+// encodeTokens encodes the forward pass one token at a time with GEMV
+// kernels, which stream weights fastest for a single token.
+func (w *gpuWorkspace) encodeTokens(n int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	kvBytes := 4 * maxTokens * c.kvDim
+	w.perRow = uint32(c.intermediate / maxRotationBlock)
+	for t := range n {
 		hOff := 4 * t * c.hidden
 		w.attn.pos = uint32(t)
 		for i := range g.layers {
@@ -435,28 +602,16 @@ func (w *gpuWorkspace) sequence(m *Weights, ids []int, dst []float32) error {
 			e.SetPipeline(g.rotate)
 			e.SetBuffer(w.act, 0, 0)
 			e.SetBuffer(g.signs, 0, 1)
+			e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
 			e.Dispatch(metal.Size{X: c.intermediate / maxRotationBlock, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
 
 			w.gemv(g.down, gl.buf, gl.d, gl.dScale, w.act, 0, w.h, hOff, w.attnParts, w.attnParts, 0, &w.dArgs)
 		}
 	}
-	if err := e.Wait(); err != nil {
-		return err
-	}
-	last := hs[(len(ids)-1)*c.hidden : len(ids)*c.hidden]
-	copy(dst, last)
-	g.hidden.unapply(dst)
-	rmsNorm32(dst, dst, m.finalNorm, c.eps)
-	for _, v := range dst {
-		if !finite32(v) {
-			return errors.New("qwen3: non-finite hidden state")
-		}
-	}
-	return nil
 }
 
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.attnParts, w.mlpParts} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts} {
 		b.Release()
 	}
 }

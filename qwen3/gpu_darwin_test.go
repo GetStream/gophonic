@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/GetStream/gophonic/internal/metal"
@@ -170,5 +172,143 @@ func BenchmarkGPUGemvStream(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestOfficialGPUBatchMatchesTokens compares the batched GPU forward pass with
+// the token-by-token one on a real checkpoint.
+func TestOfficialGPUBatchMatchesTokens(t *testing.T) {
+	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
+	if path == "" {
+		t.Skip("set GOPHONIC_QWEN3_MODEL")
+	}
+	for _, format := range []string{WeightsGPU, WeightsGPUQ4} {
+		if only := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); only != "" && only != format {
+			continue
+		}
+		m, err := Open(path, Options{Weights: format, CacheEntries: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, err := m.tokens.EncodeInto("The quick brown fox jumps over the lazy dog while the band plays a slow song about rivers and mountains far away.", make([]int, 0, 256), &m.tokenWS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batch := make([]float32, hiddenSize)
+		tokens := make([]float32, hiddenSize)
+		if err := m.eval.HiddenLastInto(ids, batch, m.ws); err != nil {
+			t.Fatal(err)
+		}
+		gpuTokenByToken = true
+		err = m.eval.HiddenLastInto(ids, tokens, m.ws)
+		gpuTokenByToken = false
+		if err != nil {
+			t.Fatal(err)
+		}
+		cos, maxAbs := vectorParity(batch, tokens)
+		t.Logf("%s: %d tokens, batched vs token-by-token cosine %.7f (max_abs %.3g)", format, len(ids), cos, maxAbs)
+		if cos < 0.99999 {
+			t.Errorf("%s: batched path diverges: cosine %.7f", format, cos)
+		}
+		// Packing several sequences into one pass matches evaluating each.
+		seqs := [][]int{ids[3:9], ids, ids[:1]}
+		packed := [][]float32{make([]float32, hiddenSize), make([]float32, hiddenSize), make([]float32, hiddenSize)}
+		if err := m.eval.HiddenLastBatchInto(seqs, packed, m.ws); err != nil {
+			t.Fatal(err)
+		}
+		for s, seq := range seqs {
+			alone := make([]float32, hiddenSize)
+			if err := m.eval.HiddenLastInto(seq, alone, m.ws); err != nil {
+				t.Fatal(err)
+			}
+			cos, _ := vectorParity(packed[s], alone)
+			if cos < 0.99999 {
+				t.Errorf("%s: packed sequence %d diverges: cosine %.7f", format, s, cos)
+			}
+		}
+		m.Close()
+	}
+}
+
+// BenchmarkGPUMatMul measures the batched projection kernels on a
+// 4096×4096 weight for several token counts.
+func BenchmarkGPUMatMul(b *testing.B) {
+	dev, err := metal.Open()
+	if err != nil {
+		b.Skip(err)
+	}
+	lib, err := dev.Compile(gpuSource)
+	if err != nil {
+		b.Fatal(err)
+	}
+	const k, n, reps = 4096, 4096, 16
+	for _, name := range []string{"mm_o_16", "mm_o", "mm_o_q4"} {
+		p, err := dev.Pipeline(lib, name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		tile := 32
+		if name == "mm_o_16" {
+			tile = 16
+		}
+		for _, rows := range []int{16, 32, 64, 128, 256} {
+			b.Run(fmt.Sprintf("%s/M=%d", name, rows), func(b *testing.B) {
+				w, _ := dev.Buffer(n * k)
+				sc, _ := dev.Buffer(4 * n * k / 32)
+				x, _ := dev.Buffer(4 * rows * k)
+				y, _ := dev.Buffer(4 * rows * n)
+				parts, _ := dev.Buffer(4 * rows * n)
+				args := mmArgs{k: k, n: n, m: uint32(rows), partsOut: n / mmColumns, splitK: k, splits: 1}
+				var e metal.Encoder
+				for b.Loop() {
+					dev.Begin(&e, false)
+					e.SetPipeline(p)
+					e.SetBuffer(w, 0, 0)
+					e.SetBuffer(sc, 0, 1)
+					e.SetBuffer(x, 0, 2)
+					e.SetBuffer(y, 0, 3)
+					e.SetBuffer(parts, 0, 4)
+					e.SetBytes(unsafe.Pointer(&args), int(unsafe.Sizeof(args)), 5)
+					e.SetBuffer(parts, 0, 6)
+					e.SetBuffer(parts, 0, 7)
+					for range reps {
+						e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: 1}, metal.Size{X: 8 * tile, Y: 1, Z: 1})
+					}
+					if err := e.Wait(); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(2*reps*rows*n*k)/(float64(b.Elapsed().Nanoseconds())/float64(b.N))/1e3, "TFLOPS")
+			})
+		}
+	}
+}
+
+func TestOfficialGPUScaling(t *testing.T) {
+	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
+	if path == "" || os.Getenv("GOPHONIC_QWEN3_GPU_SCALING") == "" {
+		t.Skip("set GOPHONIC_QWEN3_MODEL and GOPHONIC_QWEN3_GPU_SCALING")
+	}
+	m, err := Open(path, Options{Weights: os.Getenv("GOPHONIC_QWEN_WEIGHTS"), CacheEntries: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	dst := make([]float32, hiddenSize)
+	for _, n := range []int{1, 12, 16, 17, 32, 64, 128, 192} {
+		ids := make([]int, n)
+		for i := range ids {
+			ids[i] = 1000 + i*37
+		}
+		_ = m.eval.HiddenLastInto(ids, dst, m.ws)
+		best := time.Hour
+		for range 3 {
+			start := time.Now()
+			if err := m.eval.HiddenLastInto(ids, dst, m.ws); err != nil {
+				t.Fatal(err)
+			}
+			best = min(best, time.Since(start))
+		}
+		t.Logf("%4d tokens: %v", n, best.Round(100*time.Microsecond))
 	}
 }

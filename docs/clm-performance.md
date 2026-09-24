@@ -32,7 +32,9 @@ pure-Go Metal binding. One token takes 15.8 ms with int8 weights (cosine
 Q4_K_M (0.942); the llama.cpp 4-bit files were requantized from Q8_0. One
 token must stream every projection weight once, 6.95 GB in int8 and 3.9 GB
 in 4.5 bits, so at the measured ≈440 GB/s the int8 path is at its bandwidth
-floor. Multi-token GPU inputs still run token by token.
+floor. Batched GPU kernels take 12 tokens in 25 ms (llama.cpp Metal Q8_0:
+57 ms; CPU: 90 ms), about 70 tokens in 179 ms, and 16 texts of 12 tokens in
+356 ms.
 
 The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
 with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
