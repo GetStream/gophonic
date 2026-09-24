@@ -14,6 +14,7 @@ type alignmentHead struct{ layer, head int }
 var tinyENAlignmentHeads = [...]alignmentHead{{1, 0}, {2, 0}, {2, 5}, {3, 0}, {3, 1}, {3, 2}, {3, 3}, {3, 4}}
 var baseENAlignmentHeads = [...]alignmentHead{{3, 3}, {4, 7}, {5, 1}, {5, 5}, {5, 7}}
 var smallENAlignmentHeads = [...]alignmentHead{{6, 6}, {7, 0}, {7, 3}, {7, 8}, {8, 2}, {8, 5}, {8, 7}, {9, 0}, {9, 4}, {9, 8}, {9, 10}, {10, 0}, {10, 1}, {10, 2}, {10, 3}, {10, 6}, {10, 11}, {11, 2}, {11, 4}}
+var mediumENAlignmentHeads = [...]alignmentHead{{11, 4}, {14, 1}, {14, 12}, {14, 14}, {15, 4}, {16, 0}, {16, 4}, {16, 9}, {17, 12}, {17, 14}, {18, 7}, {18, 10}, {18, 15}, {20, 0}, {20, 3}, {20, 9}, {20, 14}, {21, 12}}
 
 func alignmentHeadsForDims(d Dims) []alignmentHead {
 	switch {
@@ -23,6 +24,8 @@ func alignmentHeadsForDims(d Dims) []alignmentHead {
 		return baseENAlignmentHeads[:]
 	case d.TextState == 768 && d.TextLayers == 12 && d.TextHeads == 12:
 		return smallENAlignmentHeads[:]
+	case d.TextState == 1024 && d.TextLayers == 24 && d.TextHeads == 16:
+		return mediumENAlignmentHeads[:]
 	default:
 		return nil
 	}

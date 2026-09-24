@@ -413,7 +413,7 @@ func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
 }
 
 func TestEnglishModelWordAlignmentHeads(t *testing.T) {
-	for _, tc := range []struct{ state, layers, heads, count int }{{384, 4, 6, 8}, {512, 6, 8, 5}, {768, 12, 12, 19}} {
+	for _, tc := range []struct{ state, layers, heads, count int }{{384, 4, 6, 8}, {512, 6, 8, 5}, {768, 12, 12, 19}, {1024, 24, 16, 18}} {
 		selected := alignmentHeadsForDims(Dims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
 		if len(selected) != tc.count {
 			t.Fatalf("%dx%d heads=%d, want %d", tc.layers, tc.heads, len(selected), tc.count)

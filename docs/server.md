@@ -50,7 +50,8 @@ Shut down with Ctrl-C; the server drains active requests before closing
 workspaces.
 
 The model currently provides English greedy transcription with segment and
-word timestamps for official tiny.en, base.en, and small.en checkpoints. It
+word timestamps for official tiny.en, base.en, small.en, and medium.en checkpoints.
+The medium.en alignment mask has not been exercised with local weights. It
 does not implement beam search or true incremental decoding. A live WebRTC service
 needs an audio/Opus ingestion loop, buffering and VAD, and a separate contract
 for partial versus committed transcripts. The file endpoint does not pretend
