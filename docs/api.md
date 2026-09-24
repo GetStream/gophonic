@@ -5,6 +5,50 @@ or workspace for every concurrent prediction lane. Built-in models can be
 shared across goroutines because inference reads their weights without
 modifying them.
 
+## Whisper speech-to-text
+
+Import `github.com/GetStream/gophonic/whisper` for the separate English
+Whisper tiny.en runtime. Its text result does not implement the turn-detector
+`AudioSession` interface.
+
+```go
+model, err := whisper.Load("tiny.en.gophonic")
+if err != nil { return err }
+worker, err := whisper.NewTranscriber(model)
+if err != nil { return err }
+defer worker.Close()
+
+text, err := worker.TranscribeInto(mono16kPCM, make([]byte, 0, 4096))
+if err != nil { return err }
+fmt.Println(string(text))
+```
+
+`TranscribeInto` accepts arbitrary-length mono 16 kHz float32 PCM. It computes
+Whisper's full-file log-mel transform, runs successive 30-second encoder and
+decoder windows, carries prior text tokens, applies the no-speech rule, and
+returns text in caller storage. It uses deterministic greedy decoding at
+temperature zero with `without_timestamps=true`; timestamp tokens can still
+control seeking. The API does not return timed segments or implement
+temperature fallback, beam search, multilingual models, or word timestamps.
+`TranscribeWindowInto` handles one right-padded PCM window, so its result can
+differ from the full-file path for short audio. `TranscribeFixedWindowsInto`
+is a simpler independent-window mode.
+`TranscribeInto` preserves the source tokenizer's leading spaces; the CLI
+trims its JSON text field for presentation. The transcriber joins token bytes
+across segments before applying Whisper's UTF-8 replacement rule, so its text
+output is valid UTF-8 even when generation ends within a byte sequence.
+
+Create one transcriber per concurrent lane and share the immutable model.
+Construction and first use prepare scratch and packed weights. Repeated calls
+with the same input and sufficient output capacity allocate no heap objects.
+Other inputs can grow the full-file mel or token-history buffers once. The
+returned bytes alias the caller's `dst`. Do not call a
+transcriber concurrently or race its `Close` with transcription.
+
+For interleaved mono/stereo 8–96 kHz input, use `PCM16kSamples` to size the
+output and `NewPCMWorkspace().Resample16kInto` to produce mono 16 kHz PCM.
+The command-line WAV/Ogg Opus reader performs this conversion automatically.
+
 ## Sessions across architectures
 
 Applications can depend on one small interface:

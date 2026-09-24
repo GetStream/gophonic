@@ -1,10 +1,15 @@
 # Models and weight bundles
 
-Gophonic ships two specialized inference graphs. Each built-in loader accepts
+Gophonic ships two turn-detector graphs and a separate Whisper tiny.en
+speech-to-text graph. Each built-in loader accepts
 the bundle for its corresponding graph. Additional audio turn-detector
 architectures implement [`AudioSession`](api.md#add-an-audio-backend) with their
 own loader and execution code; they can optionally reuse the standalone Whisper
 frontend. The built-in converters do not import arbitrary ONNX graphs.
+
+Whisper transcription lives in `github.com/GetStream/gophonic/whisper` and
+returns text, not a turn-completion probability. It has its own model loader,
+transcriber, frontend, and offline checkpoint converter.
 
 | | Smart Turn v3.2 | TinyMelNet |
 | --- | --- | --- |
@@ -15,6 +20,28 @@ frontend. The built-in converters do not import arbitrary ONNX graphs.
 | Feature input | 64,000 float32 values, row-major `[80,800]` | Same |
 | Output | `Prediction{Probability, Complete}` | Same |
 | Decision | `Probability > 0.5` | `Probability > 0.57` |
+
+## Convert OpenAI Whisper tiny.en
+
+Install NumPy for the offline converter and obtain the official
+[`tiny.en.pt` checkpoint](https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt).
+
+```sh
+python3 -m pip install numpy
+python3 tools/whisper_pt_to_gophonic.py tiny.en.pt tiny.en.gophonic
+```
+
+The converter accepts only SHA-256
+`d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03`.
+It checks the embedded tiny.en dimensions and all 167 named tensor shapes,
+then emits FP32 weights with a payload checksum. The Go loader verifies the
+bundle before inference. The converted bundle is about 144 MB. No PyTorch,
+Python, CGO, or external inference library is needed at runtime.
+
+The current runtime supports this exact English checkpoint and deterministic
+greedy transcription. A different Whisper size or architecture needs its own
+validated converter mapping and corresponding graph parameters; it cannot be
+loaded into the tiny.en graph by changing the filename.
 
 ## Convert Smart Turn
 
@@ -112,6 +139,7 @@ will interrupt or wait in a particular application. Application code can use
 | Gophonic implementation | [BSD-2-Clause](../LICENSE) |
 | Pipecat Smart Turn model | [BSD-2-Clause model metadata](https://huggingface.co/pipecat-ai/smart-turn-v3), [upstream code license](https://github.com/pipecat-ai/smart-turn/blob/main/LICENSE) |
 | TinyMelNet model | [MIT model metadata](https://huggingface.co/deveshu/hinglish-turn-detector); its card states that upstream dataset terms govern redistribution and commercial use of trained weights |
+| OpenAI Whisper source, tokenizer assets, and tiny.en model | [MIT](https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE); copied tokenizer notices are in [`whisper/assets`](../whisper/assets/PROVENANCE.md) |
 | `gopus` dependency | [BSD-3-Clause](https://github.com/thesyncim/gopus/blob/main/LICENSE) |
 
 LiveKit's turn-detector weights are not used. Its
