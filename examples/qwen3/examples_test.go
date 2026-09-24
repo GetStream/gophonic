@@ -23,7 +23,6 @@ func TestOfficialExamples(t *testing.T) {
 	}
 	// want lists each output line's expected first field, in order.
 	for example, want := range map[string][]string{
-		"turn":      {"reply", "wait", "reply", "wait", "reply", "wait"},
 		"intent":    {"payments", "cancellations", "technical", "shipping", "account"},
 		"subtitles": {"horror", "news", "sports", "cooking", "romance", "science"},
 		"sentiment": {"joy", "anger", "sadness", "", "neutral", "anger"}, // "" = not checked
@@ -46,6 +45,25 @@ func TestOfficialExamples(t *testing.T) {
 			}
 		})
 	}
+	t.Run("turn", func(t *testing.T) {
+		out, err := exec.CommandContext(t.Context(), goTool, "run", "./turn").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		t.Logf("\n%s", out)
+		// The last partial of each utterance is the complete sentence.
+		want := []string{"reply", "wait", "reply", "reply"}
+		groups := strings.Split(strings.TrimSpace(string(out)), "\n\n")
+		if len(groups) != len(want) {
+			t.Fatalf("got %d utterances, want %d", len(groups), len(want))
+		}
+		for i, g := range groups {
+			lines := strings.Split(g, "\n")
+			if got := strings.Fields(lines[len(lines)-1])[0]; got != want[i] {
+				t.Errorf("utterance %d ends with %q, want %q", i+1, got, want[i])
+			}
+		}
+	})
 	t.Run("reply", func(t *testing.T) {
 		out, err := exec.CommandContext(t.Context(), goTool, "run", "./reply").CombinedOutput()
 		if err != nil {

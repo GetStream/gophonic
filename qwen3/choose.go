@@ -91,8 +91,8 @@ const (
 )
 
 // Question prepares a multiple-choice question with 2 to 26 options: it
-// tokenizes the prompt and evaluates its prefix once (about 144 KiB of keys
-// and values per prefix token in exact mode). It allocates; reuse the result
+// tokenizes the prompt and evaluates its prefix once (about 288 KiB of keys
+// and values per prefix token). It allocates; reuse the result
 // for every input.
 func (e *Model) Question(question string, options []string) (*Question, error) {
 	if e == nil || e.letters == nil {
@@ -283,4 +283,104 @@ func (q *Question) letterProbs(hidden, probs []float32) {
 	for i := range probs {
 		probs[i] = float32(float64(probs[i]) / sum)
 	}
+}
+
+// Stream answers a Question for a growing input, such as the partial
+// transcripts of a speech recognizer. It keeps the keys and values of the
+// input seen so far, so each Update evaluates only the tokens that changed
+// since the previous one plus the short prompt suffix. Revisions (a partial
+// whose earlier words differ) re-evaluate from the first changed token.
+// A Stream is not safe for concurrent use.
+type Stream struct {
+	q      *Question
+	kv     *PrefixKV // question prefix, then the current input, then scratch
+	input  []int     // token IDs of the current input
+	ids    []int     // tokenized update
+	seq    []int     // new input tokens followed by the suffix
+	hidden []float32
+}
+
+// NewStream starts a stream for inputs of up to maxInputTokens tokens. It
+// copies the question's prefix keys and values (288 KiB per token across all
+// layers) and allocates room for the input and suffix.
+func (q *Question) NewStream(maxInputTokens int) (*Stream, error) {
+	if q == nil {
+		return nil, errors.New("qwen3: nil question")
+	}
+	p := len(q.kv.tokens)
+	if maxInputTokens < 1 || p+maxInputTokens+len(q.suffix) > maxTokens {
+		return nil, fmt.Errorf("qwen3: stream input limit %d outside [1,%d]", maxInputTokens, maxTokens-p-len(q.suffix))
+	}
+	kv, err := q.m.eval.NewPrefixKV(p + maxInputTokens + len(q.suffix))
+	if err != nil {
+		return nil, err
+	}
+	kvDim := q.m.model.cfg.kvDim
+	for l := range kv.keys {
+		copy(kv.keys[l][:p*kvDim], q.kv.keys[l][:p*kvDim])
+		copy(kv.values[l][:p*kvDim], q.kv.values[l][:p*kvDim])
+	}
+	kv.tokens = append(kv.tokens, q.kv.tokens...)
+	return &Stream{
+		q: q, kv: kv,
+		input:  make([]int, 0, maxInputTokens),
+		ids:    make([]int, 0, 4*maxInputTokens),
+		seq:    make([]int, 0, maxInputTokens+len(q.suffix)),
+		hidden: make([]float32, q.m.model.cfg.hidden),
+	}, nil
+}
+
+// Update answers the question for the current full input text, writing the
+// option probabilities to probs. Warmed calls allocate nothing.
+func (s *Stream) Update(ctx context.Context, input string, probs []float32) error {
+	if s == nil {
+		return errors.New("qwen3: nil stream")
+	}
+	input = strings.TrimSpace(input)
+	if len(input) > cap(s.ids) {
+		return fmt.Errorf("qwen3: stream input of %d bytes exceeds its buffer of %d", len(input), cap(s.ids))
+	}
+	ids, err := s.q.m.tokens.EncodeInto(input, s.ids[:0], &s.q.tok)
+	if err != nil {
+		return err
+	}
+	s.ids = ids
+	return s.UpdateTokens(ctx, ids, probs)
+}
+
+// UpdateTokens is Update for an input already tokenized with the model's
+// tokenizer.
+func (s *Stream) UpdateTokens(ctx context.Context, input []int, probs []float32) error {
+	if s == nil {
+		return errors.New("qwen3: nil stream")
+	}
+	q := s.q
+	if len(probs) != q.options {
+		return fmt.Errorf("qwen3: %d probabilities for %d options", len(probs), q.options)
+	}
+	p := len(q.kv.tokens)
+	if len(input) > cap(s.input) {
+		return fmt.Errorf("qwen3: stream input of %d tokens exceeds its limit %d", len(input), cap(s.input))
+	}
+	same := 0
+	for same < len(input) && same < len(s.input) && input[same] == s.input[same] {
+		same++
+	}
+	// Evaluate the changed input tokens and the suffix after the kept part.
+	s.seq = append(append(s.seq[:0], input[same:]...), q.suffix...)
+	e := q.m
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return errors.New("qwen3: model closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := e.eval.HiddenLastExtendInto(s.kv, p+same, s.seq, s.hidden, e.ws); err != nil {
+		return err
+	}
+	s.input = append(s.input[:0], input...)
+	q.letterProbs(s.hidden, probs)
+	return nil
 }
