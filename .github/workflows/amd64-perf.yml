@@ -24,6 +24,8 @@ jobs:
       - name: Native SIMD and executor tests
         run: go test ./internal/whispergemm ./internal/q8gemm ./internal/q8gemv ./whisper -count=5
       - name: Native packed matrix and vector benchmarks
-        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar)$' -benchtime=100ms -count=3 -benchmem
+        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar|BenchmarkAMD64Tile)$' -benchtime=100ms -count=3 -benchmem
       - name: Native int8 vector benchmarks
         run: go test ./internal/q8gemv -run '^$' -bench '^BenchmarkMulInto' -benchtime=100ms -count=3 -benchmem
+      - name: Native Whisper elementwise benchmarks
+        run: go test ./whisper -run '^$' -bench '^(BenchmarkGELU|BenchmarkAudioSoftmax)$' -benchtime=100ms -count=3 -benchmem
