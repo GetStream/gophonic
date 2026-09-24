@@ -13,7 +13,6 @@ type opKind uint8
 
 const (
 	opAddNorm opKind = iota
-	opRotate
 	opRowScale
 	opPack
 	opProject
@@ -42,6 +41,7 @@ type layerOp struct {
 	layerIndex int
 
 	residual, normWeight []float32 // opAddNorm
+	scaleRows            bool      // opAddNorm also rotates and scales for the next projection
 
 	src      []float32 // opRotate, opRowScale, opPack
 	cols     int
@@ -56,8 +56,6 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 	switch o.kind {
 	case opAddNorm:
 		o.addNorm(start, end)
-	case opRotate:
-		o.rotate(start, end)
 	case opRowScale:
 		o.rowScale(start, end)
 	case opPack:
@@ -83,28 +81,34 @@ func (o *layerOp) addNorm(start, end int) {
 		if o.residual != nil {
 			addInto(h, o.residual[r*width:(r+1)*width])
 		}
-		rmsNorm32(o.ws.norm[r*width:(r+1)*width], h, o.normWeight, f.eps)
+		norm := o.ws.norm[r*width : (r+1)*width]
+		rmsNorm32(norm, h, o.normWeight, f.eps)
+		if o.scaleRows {
+			o.scaleRow(r, norm, width)
+		}
 	}
 }
 
-// rotate writes each input row, rotated for int8 projections, to ws.rotated.
-// o.src still points at the unrotated input while this stage runs.
-func (o *layerOp) rotate(start, end int) {
-	for r := start; r < end; r++ {
-		dst := o.ws.rotated[r*o.cols : (r+1)*o.cols]
-		copy(dst, o.src[r*o.cols:(r+1)*o.cols])
-		o.rot.apply(dst)
+// scaleRow sets row r's quantization scale for the next projection,
+// rotating the row into ws.rotated first for int8 weights.
+func (o *layerOp) scaleRow(r int, src []float32, cols int) {
+	tile, row := r/q8gemm.ActivationRows, r%q8gemm.ActivationRows
+	if o.rot == nil {
+		o.ws.tiles[tile].SetRowScale(row, q8gemm.MaxAbs(src))
+		return
 	}
+	dst := o.ws.rotated[r*cols : (r+1)*cols]
+	copy(dst, src)
+	o.rot.apply(dst)
+	o.ws.tilesI8[tile].SetRowScale(row, q8gemm.MaxAbs(dst))
 }
 
+// rowScale sets each input row's quantization scale; for int8 projections
+// it first writes the rotated row to ws.rotated. o.src points at the
+// unrotated input while this stage runs.
 func (o *layerOp) rowScale(start, end int) {
 	for r := start; r < end; r++ {
-		m := q8gemm.MaxAbs(o.src[r*o.cols : (r+1)*o.cols])
-		if o.rot != nil {
-			o.ws.tilesI8[r/q8gemm.ActivationRows].SetRowScale(r%q8gemm.ActivationRows, m)
-		} else {
-			o.ws.tiles[r/q8gemm.ActivationRows].SetRowScale(r%q8gemm.ActivationRows, m)
-		}
+		o.scaleRow(r, o.src[r*o.cols:(r+1)*o.cols], o.cols)
 	}
 }
 
