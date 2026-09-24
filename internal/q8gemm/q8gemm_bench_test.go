@@ -64,14 +64,15 @@ func benchQ8GEMMShape(b *testing.B, m, k, n int) {
 		}
 	})
 	b.Run("scalar_packed", func(b *testing.B) {
-		activation := make([]float32, k*ActivationRows)
 		b.ReportAllocs()
 		b.SetBytes(int64(k * n))
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			w := weights[i%rotations]
-			packActivations(activation, x, m, k)
-			scalarMul(dst, activation, m, w)
+			if err := ws.Pack(x, m, k); err != nil {
+				b.Fatal(err)
+			}
+			scalarMulPanels(dst, w.n, ws, w, 0, w.panels)
 		}
 	})
 	b.Run("expanded_FP32_SME", func(b *testing.B) {
@@ -87,7 +88,7 @@ func benchQ8GEMMShape(b *testing.B, m, k, n int) {
 			expanded := make([]float32, k*n)
 			for row := range n {
 				for kk := range k {
-					expanded[row*k+kk] = float32(w.qAt(row, kk)) * w.scales[row]
+					expanded[row*k+kk] = w.at(row, kk) * w.scales[row]
 				}
 			}
 			packed[rotation], err = whispergemm.NewPackedB(k, n)

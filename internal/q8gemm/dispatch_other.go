@@ -7,4 +7,8 @@ package q8gemm
 
 func usingSME() bool { return false }
 
-func mulSME([]float32, []float32, int, *Weights) bool { return false }
+var _ = forcePortable
+
+func mulPanelsSME([]float32, int, *Workspace, *Weights, int, int) bool { return false }
+
+func retryCount() uint64 { return 0 }

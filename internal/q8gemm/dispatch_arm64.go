@@ -5,16 +5,25 @@
 
 package q8gemm
 
-func usingSME() bool { return smeEnabled }
+func usingSME() bool { return smeEnabled && !forcePortable }
 
-func mulSME(dst, activation []float32, rows int, w *Weights) bool {
-	if !smeEnabled {
+func mulPanelsSME(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int) bool {
+	if !usingSME() {
 		return false
 	}
-	retries := smeMul16x64(&w.q[0], w.k, w.panels, &activation[0], &dst[0], w.n, rows)
+	col := p0 * OutputPanel
+	var retries int
+	if w.h != nil {
+		retries = smeMulF16W(&w.h[p0*w.pairs*2*OutputPanel], w.pairs, p1-p0, &ws.activation[0],
+			&dst[col], w.n-col, ws.rows, 4*stride, &w.scales[col], &ws.rowInverse[0])
+	} else {
+		retries = smeMulF16(&w.q[p0*w.pairs*2*OutputPanel], w.pairs, p1-p0, &ws.activation[0],
+			&dst[col], w.n-col, ws.rows, 4*stride, &w.scales[col], &ws.rowInverse[0])
+	}
 	if retries != 0 {
 		smeRetries.Add(uint64(retries))
 	}
-	applyScales(dst, rows, w)
 	return true
 }
+
+func retryCount() uint64 { return smeRetries.Load() }
