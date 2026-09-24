@@ -766,7 +766,7 @@ func attentionCachedInto(dst, scaledQuery, keys, values []float32, frames, value
 // geluExactInto selects PyTorch's erf-based GELU curve. The shared scalar/SIMD
 // evaluator has the FP32 numerical bound documented with geluNormalTable.
 func geluExactInto(x []float32) {
-	applyGELU(x)
+	applyBiasGELU(x, nil, 1, len(x))
 }
 
 func addInto(dst, src []float32) {

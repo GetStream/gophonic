@@ -11,9 +11,7 @@ type encoderActivation struct {
 }
 
 func (a *encoderActivation) ApplyRows(start, end int) {
-	values := a.values[start*a.width : end*a.width]
-	addRowBias(values, a.bias, end-start, a.width)
-	applyGELU(values)
+	applyBiasGELU(a.values[start*a.width:end*a.width], a.bias, end-start, a.width)
 }
 
 func (w *EncoderWorkspace) activate(values, bias []float32, rows, width int) error {

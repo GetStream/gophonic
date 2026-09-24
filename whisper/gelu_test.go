@@ -30,7 +30,11 @@ func TestGELUAccuracy(t *testing.T) {
 	for _, kernel := range []struct {
 		name string
 		fn   func([]float32)
-	}{{"dispatched", applyGELU}, {"scalar", applyGELUScalar}} {
+	}{{"dispatched", applyGELU}, {"scalar", applyGELUScalar}, {"fused", func(v []float32) {
+		n := len(v) / 4 * 4
+		applyBiasGELU(v[:n], nil, 1, n)
+		applyGELU(v[n:])
+	}}} {
 		t.Run(kernel.name, func(t *testing.T) {
 			got := append([]float32(nil), inputs...)
 			kernel.fn(got)
@@ -96,6 +100,28 @@ func TestGELULengthsAlignmentSpecialAndAllocation(t *testing.T) {
 		applyGELU(buf)
 	}); allocs != 0 {
 		t.Fatalf("GELU allocated %g objects", allocs)
+	}
+}
+
+func TestBiasGELUMatchesSeparatePasses(t *testing.T) {
+	const rows, width = 5, 1536
+	values, bias := make([]float32, rows*width), make([]float32, width)
+	for i := range values {
+		values[i] = float32(math.Sin(float64(i)*0.013)) * 12
+	}
+	for i := range bias {
+		bias[i] = float32(i%9-4) * 0.75
+	}
+	want := append([]float32(nil), values...)
+	addRowBias(want, bias, rows, width)
+	for i, x := range want {
+		want[i] = float32(0.5 * float64(x) * (1 + math.Erf(float64(x)/math.Sqrt2)))
+	}
+	applyBiasGELU(values, bias, rows, width)
+	for i := range values {
+		if d := math.Abs(float64(values[i] - want[i])); d > 2e-7+1e-7*math.Abs(float64(want[i])) {
+			t.Fatalf("index %d: %g != %g", i, values[i], want[i])
+		}
 	}
 }
 
