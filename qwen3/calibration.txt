@@ -1,0 +1,82 @@
+Customer: Hi, I was charged twice for my order last week and nobody has answered my emails.
+Agent: I'm sorry about that. Let me look into the duplicate charge for you right away.
+Customer: It's been seven days. This is really frustrating, and I need the money back before the weekend.
+Agent: I understand. I've refunded the duplicate payment; it will reach your card in three to five business days.
+Customer: Okay, thanks. That's all I needed.
+
+User: my flight got cancelled and I'm stuck in Frankfurt with two kids. what are my options?
+Assistant: I'm so sorry. You can rebook on the next available flight at no extra cost, and because the cancellation was the airline's fault you are entitled to meals and a hotel room while you wait. Ask the transfer desk for vouchers, and keep every receipt.
+
+The build fails with "undefined: slices.Concat" on our CI but works on my laptop. The package was added in Go 1.22, so the CI image is probably older. Update the toolchain line in go.mod or pin the runner to a newer image, then clear the module cache and run the tests again.
+
+func mergeSorted(a, b []int) []int {
+	out := make([]int, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i] <= b[j] {
+			out = append(out, a[i])
+			i++
+		} else {
+			out = append(out, b[j])
+			j++
+		}
+	}
+	out = append(out, a[i:]...)
+	return append(out, b[j:]...)
+}
+
+The tide rises and falls twice a day because the Moon's gravity pulls the oceans toward it, while the Earth's rotation carries each coast through two bulges of water. The Sun adds a smaller pull; when the Sun and Moon line up, at new and full moon, the tides are strongest.
+
+Please summarize the meeting notes below in three bullet points and list the owners of each action item.
+- Launch moves from March 3 to March 10 because the payment provider certification is late.
+- Maria will update the release notes and notify the support team by Friday.
+- The load test found a memory leak in the image resizer; Tom is investigating.
+- Budget for the second quarter is approved, but travel stays frozen until June.
+
+Q: Which planet has the most moons?
+A: Saturn, with more than one hundred confirmed moons, has overtaken Jupiter.
+
+so i was thinking maybe we could
+can you book me a table for two at seven tonight
+what's the weather like in lisbon tomorrow
+no thanks that's everything
+hold on let me check my calendar and
+I want to cancel my subscription, it's too expensive for what I use.
+The app keeps logging me out every time I switch to another tab.
+Where is my package? The tracking page hasn't changed since Monday.
+Do you ship to Canada, and how long does it usually take?
+
+Le train de Paris à Lyon part à huit heures et arrive vers dix heures. Les billets sont moins chers si vous réservez une semaine à l'avance.
+Der Bericht muss bis Freitag fertig sein, sonst verschieben wir die Präsentation auf nächste Woche.
+El restaurante está cerrado los lunes, pero abre el martes a las doce.
+我们明天早上九点在会议室见面，请带上项目的最新进度。
+
+In 1969 the Apollo 11 lunar module landed in the Sea of Tranquility. Neil Armstrong and Buzz Aldrin spent about two and a half hours outside, collecting samples and setting up experiments, while Michael Collins orbited above in the command module.
+
+SELECT customer_id, SUM(amount) AS total
+FROM payments
+WHERE created_at >= '2026-01-01'
+GROUP BY customer_id
+HAVING SUM(amount) > 1000
+ORDER BY total DESC;
+
+The review said the battery life was excellent but the camera struggled in low light, and the price felt high compared with last year's model. Overall it gave the phone three and a half stars.
+
+I waited two hours for nothing. The staff were rude and the food was cold when it finally arrived.
+Honestly the best concert I've been to in years; the band played every song we hoped for.
+The package arrived on time and in good condition. Nothing special, but it works.
+
+To reset your password, open Settings, choose Account, then Security, and tap "Reset password". We will send a six-digit code to the email address on file; the code expires after ten minutes.
+
+He opened the door slowly. The hallway was dark except for a thin line of light under the kitchen door, and somewhere upstairs a radio was playing an old song he half remembered from his childhood.
+
+{"id": 4411, "status": "refunded", "items": [{"sku": "A-17", "qty": 2}], "total": 59.90, "currency": "EUR"}
+
+Error: connection refused (dial tcp 10.0.0.12:5432). Check that the database is running, that the port is open in the firewall, and that the credentials in the environment match the server configuration.
+
+Photosynthesis converts light energy into chemical energy. In the chloroplasts, water is split, oxygen is released, and carbon dioxide is fixed into sugars that the plant uses to grow.
+
+User: what's 15% of 240?
+Assistant: 15% of 240 is 36.
+
+The committee reviewed forty applications and selected six projects for funding. Each team will receive a grant for eighteen months and must publish its results under an open license.

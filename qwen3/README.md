@@ -8,8 +8,9 @@ CPUs use portable kernels (NEON on arm64).
 
 | M4 Max, one text | 1 token | 12 tokens | ~70 tokens | 16 × 12 tokens | cosine vs BF16 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `gpu` (default on Apple silicon) | **15.8 ms** | **25 ms** | **130 ms** | **325 ms** | 0.99933 |
-| `gpu-q4` | **11.0 ms** | 25 ms | 159 ms | 331 ms | 0.953 |
+| `gpu` (default on Apple silicon), GPTQ | **15.8 ms** | **25 ms** | **130 ms** | **325 ms** | **0.99990** |
+| `gpu`, round-to-nearest | 15.8 ms | 25 ms | 130 ms | 325 ms | 0.99933 |
+| `gpu-q4`, GPTQ | **11.0 ms** | 25 ms | 159 ms | 331 ms | 0.99946 |
 | CPU `int8` | 28 ms | 43 ms | 150 ms | 415 ms | 0.99866 |
 | CPU exact (default elsewhere) | 51 ms | 66 ms | 304 ms | 841 ms | **0.99991** |
 | llama.cpp Metal Q8_0 | 19.5 ms | 57 ms | 92 ms (64) | — | 0.99933 |
@@ -121,6 +122,25 @@ Against official BF16 it reaches cosine 0.99866 on `hello` and the pinned
 CLM probabilities within 2.2e-4, and the 31 `Choose` probes give the same
 answers as the exact mode. It runs a 12-token text in 43 ms, one token in
 28 ms, and 16 short texts in 415 ms.
+
+## GPTQ
+
+`go run ./cmd/qwen3-gptq /path/to/Qwen3-8B` rounds the GPU weights once with
+GPTQ (about five minutes on an M4 Max) and stores them next to the
+checkpoint; `Open` then uses them automatically. It runs the model in FP32 on
+built-in calibration text, layer by layer, and rounds each weight column in
+turn while spreading its rounding error over the columns not yet rounded,
+weighted by the inverse Hessian of that projection's inputs. Speed is
+unchanged; fidelity against the exact CPU path on ten varied texts:
+
+| | embedding cosine, min / mean | `Choose` max \|Δp\| |
+| --- | ---: | ---: |
+| `gpu`, GPTQ | **0.99996 / 0.99998** | **0.08** |
+| `gpu`, round-to-nearest | 0.99948 / 0.99981 | 0.16 |
+| `gpu-q4`, GPTQ (`-weights gpu-q4`) | 0.99692 / 0.99836 | 0.15 |
+| CPU `int8` | 0.99882 / 0.99976 | 0.15 |
+
+Without GPTQ, `gpu-q4` reaches cosine 0.953 on `hello`; with it, 0.99946.
 
 ## Backends
 

@@ -23,6 +23,18 @@ none` and its best thread count (8).
 | CLM probability error vs official | 1.0e-3 | — | **7.1e-5** | 2.2e-4 |
 | Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s | 4.3 s |
 
+### GPTQ
+
+`cmd/qwen3-gptq` rounds the GPU weights with GPTQ once (five minutes on the
+M4 Max: FP32 calibration forward passes on SME, blocked Cholesky and
+triangular inversion of each projection's input Hessian, and lazy block
+updates as FP32 matrix products). The GPU int8 path then reaches cosine
+0.99990 against official BF16 on `hello` (round-to-nearest: 0.99933;
+llama.cpp Q8_0: 0.99933; exact CPU: 0.99991), and 0.99996 minimum on ten
+varied texts against the exact CPU path. 4-bit GPTQ reaches 0.99946 on
+`hello` (round-to-nearest: 0.953) but only 0.99692 minimum on the varied
+texts, so it stays opt-in.
+
 ### GPU, one token
 
 With `Options{Weights: "gpu"}` the model runs on the M4 Max GPU through a
