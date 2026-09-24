@@ -21,8 +21,84 @@ const (
 )
 
 // attentionItem is one KV-head group and one query block of one sequence.
+// Rows start at batch row start; past earlier keys come from a PrefixKV.
 type attentionItem struct {
-	start, q0, q1, group int32
+	start, q0, q1, group, past int32
+}
+
+// PrefixKV holds one token sequence's post-RoPE keys and values for every
+// layer, so a later sequence that extends it (a growing conversation state)
+// only evaluates its new tokens. Values are FP32, exactly as computed, so an
+// extension yields the same result as evaluating the whole sequence up to
+// floating-point reassociation. It belongs to one Evaluator; it is not safe for
+// concurrent use.
+type PrefixKV struct {
+	owner        *Evaluator
+	tokens       []int
+	keys, values [][]float32 // per layer, [capacity][kvDim]
+	capacity     int
+}
+
+// NewPrefixKV allocates storage for up to capacity tokens:
+// 8 bytes × layers × KV width per token (144 KiB for Qwen3-8B).
+func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
+	if e == nil || e.m == nil {
+		return nil, errors.New("clmqwen: nil evaluator")
+	}
+	c := &e.m.cfg
+	if capacity < 1 || capacity > c.maxPositions {
+		return nil, fmt.Errorf("clmqwen: prefix capacity %d outside [1,%d]", capacity, c.maxPositions)
+	}
+	kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity,
+		keys: make([][]float32, c.layers), values: make([][]float32, c.layers)}
+	for l := range c.layers {
+		kv.keys[l] = make([]float32, capacity*c.kvDim)
+		kv.values[l] = make([]float32, capacity*c.kvDim)
+	}
+	return kv, nil
+}
+
+// Tokens returns the token sequence whose keys and values kv holds. The slice
+// is owned by kv and changes on the next extension.
+func (kv *PrefixKV) Tokens() []int { return kv.tokens }
+
+// CommonPrefix returns how many leading tokens of ids kv already holds.
+func (kv *PrefixKV) CommonPrefix(ids []int) int {
+	n := 0
+	for n < len(ids) && n < len(kv.tokens) && ids[n] == kv.tokens[n] {
+		n++
+	}
+	return n
+}
+
+// HiddenLastExtendInto evaluates ids as the continuation of the first keep
+// tokens held in kv and writes the last token's post-final-RMSNorm state to
+// dst. Only len(ids) tokens are computed; they attend to the kept prefix.
+// Afterwards kv holds kv.Tokens()[:keep] followed by ids. keep may be zero.
+func (e *Evaluator) HiddenLastExtendInto(kv *PrefixKV, keep int, ids []int, dst []float32, ws *Workspace) error {
+	if kv == nil || kv.owner != e {
+		return errors.New("clmqwen: prefix store belongs to another evaluator")
+	}
+	if keep < 0 || keep > len(kv.tokens) {
+		return fmt.Errorf("clmqwen: keep %d outside the %d stored tokens", keep, len(kv.tokens))
+	}
+	if keep+len(ids) > kv.capacity {
+		return fmt.Errorf("clmqwen: %d tokens exceed prefix capacity %d", keep+len(ids), kv.capacity)
+	}
+	if ws == nil {
+		return errors.New("clmqwen: nil workspace")
+	}
+	kv.tokens = kv.tokens[:keep] // the stored suffix is overwritten below
+	ws.prefix, ws.past = kv, keep
+	ws.oneSeq[0], ws.oneDst[0] = ids, dst
+	err := e.HiddenLastBatchInto(ws.oneSeq[:], ws.oneDst[:], ws)
+	ws.oneSeq[0], ws.oneDst[0] = nil, nil
+	ws.prefix, ws.past = nil, 0
+	if err != nil {
+		return err
+	}
+	kv.tokens = append(kv.tokens, ids...)
+	return nil
 }
 
 // attentionScratch is one participant's blocked-attention storage.
@@ -57,6 +133,8 @@ type Workspace struct {
 	rowStart, rowPos, rowLen        []int32   // each row's sequence start, position, and sequence length
 	attnItems                       []attentionItem
 	attnScratch                     []attentionScratch // per participant
+	prefix                          *PrefixKV          // set only by HiddenLastExtendInto
+	past                            int
 	ropeCos, ropeSin                []float32
 	ropePositions                   int
 	capacity                        int
@@ -141,8 +219,8 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if len(ids) == 0 {
 			return errors.New("clmqwen: empty token sequence")
 		}
-		if len(ids) > c.maxPositions {
-			return fmt.Errorf("clmqwen: %d tokens exceeds Qwen3 context %d", len(ids), c.maxPositions)
+		if ws.past+len(ids) > c.maxPositions {
+			return fmt.Errorf("clmqwen: %d tokens exceeds Qwen3 context %d", ws.past+len(ids), c.maxPositions)
 		}
 		if len(dst[s]) != c.hidden {
 			return fmt.Errorf("clmqwen: destination width %d, want %d", len(dst[s]), c.hidden)
@@ -158,35 +236,44 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		rows += len(ids)
 		longest = max(longest, len(ids))
 	}
-	if err := ws.ensure(c, rows, longest); err != nil {
+	if ws.prefix != nil && len(seqs) != 1 {
+		return errors.New("clmqwen: a prefix extension evaluates exactly one sequence")
+	}
+	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
 		return err
 	}
 	row := 0
 	ws.attnItems = ws.attnItems[:0]
 	for _, ids := range seqs {
 		start := int32(row)
+		// With a prefix, every row takes the blocked path, which reads the
+		// kept keys; the streaming loop sees an out-of-range length and skips.
+		seqLen := int32(len(ids))
+		if ws.prefix != nil {
+			seqLen = math.MaxInt32
+		}
 		for pos, id := range ids {
 			m.embedRow(id, ws.h[row*c.hidden:(row+1)*c.hidden])
-			ws.rowStart[row], ws.rowPos[row], ws.rowLen[row] = start, int32(pos), int32(len(ids))
+			ws.rowStart[row], ws.rowPos[row], ws.rowLen[row] = start, int32(ws.past+pos), seqLen
 			row++
 		}
-		if len(ids) >= gemmAttentionMin {
+		if len(ids) >= gemmAttentionMin || ws.prefix != nil {
 			// Later query blocks attend to more keys; queue them first so the
 			// dynamic scheduler finishes with the cheapest items.
 			for q0 := (len(ids) - 1) / attentionBlock * attentionBlock; q0 >= 0; q0 -= attentionBlock {
 				for g := range c.kvHeads {
-					ws.attnItems = append(ws.attnItems, attentionItem{start, int32(q0), int32(min(q0+attentionBlock, len(ids))), int32(g)})
+					ws.attnItems = append(ws.attnItems, attentionItem{start, int32(q0), int32(min(q0+attentionBlock, len(ids))), int32(g), int32(ws.past)})
 				}
 			}
 		}
 	}
-	ws.prepareRoPE(c, longest)
+	ws.prepareRoPE(c, ws.past+longest)
 
 	op := &ws.op
 	op.rows = rows
 	for layer := range m.layers {
 		l := &m.layers[layer]
-		op.layer = l
+		op.layer, op.layerIndex = l, layer
 		// The previous layer's MLP output waits in attn; fold that residual
 		// add into this layer's attention RMSNorm.
 		residual := ws.attn
@@ -196,6 +283,13 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.addNorm(residual, l.attnNorm)
 		ws.project(ws.norm, c.hidden, projection{l.q, ws.q}, projection{l.k, ws.keys}, projection{l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
+		if kv := ws.prefix; kv != nil {
+			// Store this layer's new keys and values after the kept prefix;
+			// blocked attention then reads the whole causal range from kv.
+			n := rows * c.kvDim
+			copy(kv.keys[layer][ws.past*c.kvDim:ws.past*c.kvDim+n], ws.keys[:n])
+			copy(kv.values[layer][ws.past*c.kvDim:ws.past*c.kvDim+n], ws.values[:n])
+		}
 		ws.run(opAttention, rows*c.kvHeads, 4)
 		if len(ws.attnItems) > 0 {
 			ws.run(opAttentionGEMM, len(ws.attnItems), 1)

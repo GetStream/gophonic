@@ -70,7 +70,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, err := newEncoder(m, nil, 2, 16)
+	enc, err := newEncoder(m, nil, 2, 16, tinyShape.maxPos)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,5 +112,73 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 	}
 	if allocs := testing.AllocsPerRun(20, embed); allocs != 0 {
 		t.Fatalf("cached Embed allocated %.2f times/call", allocs)
+	}
+}
+
+// TestEncoderMixesPrefixAndBatchedInputs checks that long inputs routed
+// through the prefix store and short inputs batched together all land in the
+// caller's destinations in order, and that a growing input reuses its prefix.
+func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
+	ck := writeTinyCheckpoint(t, 7)
+	m, err := LoadModel(ck.dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cacheEntries := range []int{-1, 16} {
+		enc, err := newEncoder(m, nil, 3, cacheEntries, tinyShape.maxPos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conv := make([]int, 200)
+		for i := range conv {
+			conv[i] = (i*3 + i/11) % tinyShape.vocab
+		}
+		ids := [][]int{{1, 2}, conv[:120], {4, 5, 6}, conv[:90:90]}
+		dst := make([][]float32, len(ids))
+		for i := range dst {
+			dst[i] = make([]float32, tinyShape.hidden)
+		}
+		heads := slices.Clone(dst) // the caller's slice headers must not move
+		embed := func(in [][]int) {
+			enc.mu.Lock()
+			defer enc.mu.Unlock()
+			enc.batchIDs = append(enc.batchIDs[:0], in...)
+			if err := enc.embedBatchLocked(context.Background(), enc.batchIDs, dst[:len(in)]); err != nil {
+				panic(err)
+			}
+		}
+		embed(ids)
+		e, _ := NewEvaluator(m)
+		ws, _ := e.NewWorkspace(1)
+		want := make([]float32, tinyShape.hidden)
+		for i, seq := range ids {
+			if &dst[i][0] != &heads[i][0] {
+				t.Fatalf("destination %d was reordered", i)
+			}
+			if err := e.HiddenLastInto(seq, want, ws); err != nil {
+				t.Fatal(err)
+			}
+			if cos, maxAbs := vectorParity(dst[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
+				t.Fatalf("cache=%d input %d: cosine=%.9f max_abs=%g", cacheEntries, i, cos, maxAbs)
+			}
+		}
+		// The stored prefix now holds conv[:90]; growing it reuses 90 tokens.
+		r0, c0 := enc.PrefixStats()
+		embed([][]int{conv[:200]})
+		r1, c1 := enc.PrefixStats()
+		if r1-r0 != 90 || c1-c0 != 110 {
+			t.Fatalf("cache=%d growth reused %d and computed %d tokens, want 90 and 110", cacheEntries, r1-r0, c1-c0)
+		}
+		if err := e.HiddenLastInto(conv[:200], want, ws); err != nil {
+			t.Fatal(err)
+		}
+		if cos, maxAbs := vectorParity(dst[0], want); cos < 0.9999999 || maxAbs > 2e-3 {
+			t.Fatalf("grown conversation: cosine=%.9f max_abs=%g", cos, maxAbs)
+		}
+		if allocs := testing.AllocsPerRun(5, func() { embed(ids) }); allocs != 0 {
+			t.Fatalf("cache=%d: warmed mixed Embed allocated %.2f times", cacheEntries, allocs)
+		}
+		_ = ws.Close()
+		_ = enc.Close()
 	}
 }

@@ -34,10 +34,11 @@ func swigluChunks(cols int) int { return (cols + swigluChunkCols - 1) / swigluCh
 // caller sets kind and the fields that kind reads, then runs it over disjoint
 // item ranges. Every item writes only its own rows, columns, or panels.
 type layerOp struct {
-	ws    *Workspace
-	kind  opKind
-	rows  int
-	layer *modelLayer
+	ws         *Workspace
+	kind       opKind
+	rows       int
+	layer      *modelLayer
+	layerIndex int
 
 	residual, normWeight []float32 // opAddNorm
 
@@ -204,20 +205,23 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 	scale := float32(c.attnScale)
 	for i := start; i < end; i++ {
 		it := ws.attnItems[i]
-		base, q0, q1, g := int(it.start), int(it.q0), int(it.q1), int(it.group)
-		nk, qb := q1, q1-q0
-		kv := base*c.kvDim + g*hd
+		base, q0, q1, g, past := int(it.start), int(it.q0), int(it.q1), int(it.group), int(it.past)
+		nk, qb := past+q1, q1-q0
+		keys, values := ws.keys[base*c.kvDim+g*hd:], ws.values[base*c.kvDim+g*hd:]
+		if kv := ws.prefix; kv != nil {
+			keys, values = kv.keys[o.layerIndex][g*hd:], kv.values[o.layerIndex][g*hd:]
+		}
 		must(sc.keysT.Reshape(hd, nk))
-		must(sc.keysT.Pack(ws.keys[kv:], c.kvDim, true))
+		must(sc.keysT.Pack(keys, c.kvDim, true))
 		must(sc.values.Reshape(nk, hd))
-		must(sc.values.Pack(ws.values[kv:], c.kvDim, false))
+		must(sc.values.Pack(values, c.kvDim, false))
 		scores := sc.scores[:qb*nk]
 		for qh := g * group; qh < (g+1)*group; qh++ {
 			off := (base+q0)*qdim + qh*hd
 			must(sc.keysT.Mul(scores, nk, ws.q[off:], qdim, qb))
 			for r := range qb {
 				row := scores[r*nk : (r+1)*nk]
-				valid := q0 + r + 1
+				valid := past + q0 + r + 1
 				softmaxScaled(row[:valid], scale)
 				clear(row[valid:])
 			}

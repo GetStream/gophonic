@@ -28,6 +28,9 @@ const (
 	defaultMaxThreads = 8
 	// defaultCacheEntries sizes the exact embedding cache (16 KiB each).
 	defaultCacheEntries = 4096
+	// prefixMinTokens is the text length from which inputs are evaluated
+	// through the prefix store instead of the shared short-text batch.
+	prefixMinTokens = 64
 )
 
 // Encoder owns one Qwen3-8B model and one inference workspace, so calls are
@@ -41,7 +44,12 @@ type Encoder struct {
 	batchIDs  [][]int
 	missIDs   [][]int // inputs not served by the cache
 	missDst   [][]float32
+	shortIDs  [][]int // inputs batched together (below prefixMinTokens)
+	shortDst  [][]float32
 	cache     *embeddingCache
+	prefix    *PrefixKV // last long input's keys and values, or nil
+	reused    uint64    // tokens served from prefix
+	computed  uint64    // tokens evaluated for long inputs
 	eval      *Evaluator
 	ws        *Workspace
 	closed    bool
@@ -55,10 +63,16 @@ type Encoder struct {
 // keyed by token IDs (16 KiB per entry): zero selects 4096 entries, and a
 // negative value disables it. A hit returns exactly the vector a fresh
 // evaluation would produce.
+//
+// PrefixCacheTokens sizes a store of the last long input's per-layer keys and
+// values (144 KiB per token): when a later input of at least 64 tokens shares
+// a token prefix with it (a growing conversation state), only the new tokens
+// are evaluated. Zero selects 2048 tokens; a negative value disables it.
 type Options struct {
-	Weights      string
-	Threads      int
-	CacheEntries int
+	Weights           string
+	Threads           int
+	CacheEntries      int
+	PrefixCacheTokens int
 }
 
 func (o Options) threads() int {
@@ -96,10 +110,14 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 	if entries == 0 {
 		entries = defaultCacheEntries
 	}
-	return newEncoder(model, tokens, opts.threads(), entries)
+	prefix := opts.PrefixCacheTokens
+	if prefix == 0 {
+		prefix = maxTokens
+	}
+	return newEncoder(model, tokens, opts.threads(), entries, min(prefix, maxTokens, model.cfg.maxPositions))
 }
 
-func newEncoder(model *Model, tokens *QwenTokenizer, threads, cacheEntries int) (*Encoder, error) {
+func newEncoder(model *Model, tokens *QwenTokenizer, threads, cacheEntries, prefixTokens int) (*Encoder, error) {
 	eval, err := NewEvaluator(model)
 	if err != nil {
 		return nil, err
@@ -108,7 +126,25 @@ func newEncoder(model *Model, tokens *QwenTokenizer, threads, cacheEntries int) 
 	if err != nil {
 		return nil, err
 	}
-	return &Encoder{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.cfg.hidden)}, nil
+	e := &Encoder{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.cfg.hidden)}
+	if prefixTokens > 0 {
+		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
+			_ = ws.Close()
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
+// PrefixStats reports, for inputs of at least 64 tokens, how many tokens were
+// served from the prefix store and how many were evaluated.
+func (e *Encoder) PrefixStats() (reused, computed uint64) {
+	if e == nil {
+		return 0, 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.reused, e.computed
 }
 
 // CacheStats reports embedding-cache hits and lookups since Open.
@@ -239,6 +275,32 @@ func (e *Encoder) embedBatchLocked(ctx context.Context, ids [][]int, dst [][]flo
 }
 
 func (e *Encoder) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) error {
+	if e.prefix != nil {
+		// Long inputs run alone through the prefix store; the rest keep
+		// sharing batched forward passes.
+		e.shortIDs, e.shortDst = e.shortIDs[:0], e.shortDst[:0]
+		defer func() {
+			clear(e.shortIDs)
+			clear(e.shortDst)
+		}()
+		for i, seq := range ids {
+			if len(seq) < prefixMinTokens || len(seq) > e.prefix.capacity {
+				e.shortIDs = append(e.shortIDs, seq)
+				e.shortDst = append(e.shortDst, dst[i])
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			keep := min(e.prefix.CommonPrefix(seq), len(seq)-1)
+			if err := e.eval.HiddenLastExtendInto(e.prefix, keep, seq[keep:], dst[i], e.ws); err != nil {
+				return fmt.Errorf("clmqwen: infer input %d: %w", i, err)
+			}
+			e.reused += uint64(keep)
+			e.computed += uint64(len(seq) - keep)
+		}
+		ids, dst = e.shortIDs, e.shortDst
+	}
 	for start := 0; start < len(ids); {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -272,6 +334,7 @@ func (e *Encoder) Close() error {
 	e.closed = true
 	err := e.ws.Close()
 	e.ws, e.eval, e.model, e.tokens = nil, nil, nil, nil
-	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache = nil, nil, nil, nil, nil
+	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache, e.prefix = nil, nil, nil, nil, nil, nil
+	e.shortIDs, e.shortDst = nil, nil
 	return err
 }
