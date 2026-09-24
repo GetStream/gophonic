@@ -23,9 +23,11 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def run(binary, model, pcm, workers, calls, cpp=False):
+def run(binary, model, pcm, workers, calls, cpp=False, expected=None):
     command = [str(binary.resolve()), str(model.resolve()), str(pcm.resolve()),
                str(workers), str(calls)]
+    if expected:
+        command.append(expected)
     env = os.environ.copy()
     if cpp:
         # Apple's BLAS thread budget is separate from whisper.cpp n_threads.
@@ -61,6 +63,7 @@ def main():
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--blocks", type=int, default=6)
     parser.add_argument("--calls", type=int, default=5)
+    parser.add_argument("--expected", help="expected transcript when it differs from tiny.en's")
     args = parser.parse_args()
     if min(args.workers, args.blocks, args.calls) < 1:
         parser.error("workers, blocks, and calls must be positive")
@@ -72,15 +75,16 @@ def main():
         for runtime in order:
             if runtime == "go":
                 go_blocks.append(run(args.go_binary, args.go_model, args.pcm,
-                                     args.workers, args.calls))
+                                     args.workers, args.calls, expected=args.expected))
             else:
                 cpp_blocks.append(run(args.cpp_binary, args.cpp_model, args.pcm,
-                                      args.workers, args.calls, cpp=True))
+                                      args.workers, args.calls, cpp=True, expected=args.expected))
 
     go = [value for block in go_blocks for value in block]
     cpp = [value for block in cpp_blocks for value in block]
     report = {
-        "boundary": "reused 30-second PCM-to-text window, official tiny.en FP32",
+        "boundary": "reused 30-second PCM-to-text window, official FP32 weights",
+        "expected_transcript": args.expected or "tiny.en JFK oracle",
         "workers": args.workers,
         "cpp_veclib_maximum_threads": args.workers,
         "warm_calls_per_block": 5,

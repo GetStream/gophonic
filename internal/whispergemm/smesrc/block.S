@@ -74,33 +74,56 @@
 	mov x16, x3
 	cmp x16, #4
 	b.lt 8f
-7:
+	// Software pipeline over pairs of K steps. Set 0 is z0-z7, set 1 is
+	// z8-z15: A {k, k+1} x 32 rows, then two 16-column B panels for k, k+1.
 	ld1w {z0.s-z3.s}, pn8/z, [x9]
-	ld1w {z4.s-z7.s}, pn8/z, [x9, #4, mul vl]
-	ld1w {z8.s-z11.s}, pn8/z, [x13]
-	ld1w {z12.s-z15.s}, pn8/z, [x12]
-	fmopa za0.s, p0/m, p0/m, z0.s, z8.s
-	fmopa za1.s, p0/m, p0/m, z0.s, z12.s
-	fmopa za2.s, p0/m, p0/m, z1.s, z8.s
-	fmopa za3.s, p0/m, p0/m, z1.s, z12.s
-	fmopa za0.s, p0/m, p0/m, z2.s, z9.s
-	fmopa za1.s, p0/m, p0/m, z2.s, z13.s
-	fmopa za2.s, p0/m, p0/m, z3.s, z9.s
-	fmopa za3.s, p0/m, p0/m, z3.s, z13.s
-	fmopa za0.s, p0/m, p0/m, z4.s, z10.s
-	fmopa za1.s, p0/m, p0/m, z4.s, z14.s
-	fmopa za2.s, p0/m, p0/m, z5.s, z10.s
-	fmopa za3.s, p0/m, p0/m, z5.s, z14.s
-	fmopa za0.s, p0/m, p0/m, z6.s, z11.s
-	fmopa za1.s, p0/m, p0/m, z6.s, z15.s
-	fmopa za2.s, p0/m, p0/m, z7.s, z11.s
-	fmopa za3.s, p0/m, p0/m, z7.s, z15.s
-	add x9, x9, #512
-	add x13, x13, #256
-	add x12, x12, #256
+	ld1w {z4.s-z5.s}, pn8/z, [x13]
+	ld1w {z6.s-z7.s}, pn8/z, [x12]
+	add x9, x9, #256
+	add x13, x13, #128
+	add x12, x12, #128
+7:
+	ld1w {z8.s-z11.s}, pn8/z, [x9]
+	ld1w {z12.s-z13.s}, pn8/z, [x13]
+	ld1w {z14.s-z15.s}, pn8/z, [x12]
+	add x9, x9, #256
+	add x13, x13, #128
+	add x12, x12, #128
+	fmopa za0.s, p0/m, p0/m, z0.s, z4.s
+	fmopa za1.s, p0/m, p0/m, z0.s, z6.s
+	fmopa za2.s, p0/m, p0/m, z1.s, z4.s
+	fmopa za3.s, p0/m, p0/m, z1.s, z6.s
+	fmopa za0.s, p0/m, p0/m, z2.s, z5.s
+	fmopa za1.s, p0/m, p0/m, z2.s, z7.s
+	fmopa za2.s, p0/m, p0/m, z3.s, z5.s
+	fmopa za3.s, p0/m, p0/m, z3.s, z7.s
 	sub x16, x16, #4
 	cmp x16, #4
-	b.ge 7b
+	b.lt 71f
+	ld1w {z0.s-z3.s}, pn8/z, [x9]
+	ld1w {z4.s-z5.s}, pn8/z, [x13]
+	ld1w {z6.s-z7.s}, pn8/z, [x12]
+	add x9, x9, #256
+	add x13, x13, #128
+	add x12, x12, #128
+	fmopa za0.s, p0/m, p0/m, z8.s, z12.s
+	fmopa za1.s, p0/m, p0/m, z8.s, z14.s
+	fmopa za2.s, p0/m, p0/m, z9.s, z12.s
+	fmopa za3.s, p0/m, p0/m, z9.s, z14.s
+	fmopa za0.s, p0/m, p0/m, z10.s, z13.s
+	fmopa za1.s, p0/m, p0/m, z10.s, z15.s
+	fmopa za2.s, p0/m, p0/m, z11.s, z13.s
+	fmopa za3.s, p0/m, p0/m, z11.s, z15.s
+	b 7b
+71:
+	fmopa za0.s, p0/m, p0/m, z8.s, z12.s
+	fmopa za1.s, p0/m, p0/m, z8.s, z14.s
+	fmopa za2.s, p0/m, p0/m, z9.s, z12.s
+	fmopa za3.s, p0/m, p0/m, z9.s, z14.s
+	fmopa za0.s, p0/m, p0/m, z10.s, z13.s
+	fmopa za1.s, p0/m, p0/m, z10.s, z15.s
+	fmopa za2.s, p0/m, p0/m, z11.s, z13.s
+	fmopa za3.s, p0/m, p0/m, z11.s, z15.s
 8:
 	cbz x16, 9f
 	ld1w {z0.s}, p0/z, [x9]

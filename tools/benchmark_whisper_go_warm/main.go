@@ -23,8 +23,12 @@ import (
 const expected = "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country."
 
 func main() {
-	if len(os.Args) != 5 {
-		fatal("usage: benchmark_whisper_go_warm model pcm-f32le threads iterations")
+	if len(os.Args) != 5 && len(os.Args) != 6 {
+		fatal("usage: benchmark_whisper_go_warm model pcm-f32le threads iterations [expected-text]")
+	}
+	want := expected
+	if len(os.Args) == 6 {
+		want = os.Args[5]
 	}
 	threads, err := strconv.Atoi(os.Args[3])
 	if err != nil || threads < 1 {
@@ -60,8 +64,8 @@ func main() {
 		if err != nil {
 			fatal(err.Error())
 		}
-		if strings.TrimSpace(string(text)) != expected {
-			fatal("transcript differs from official JFK oracle")
+		if strings.TrimSpace(string(text)) != want {
+			fatal("transcript differs from expected text: " + strings.TrimSpace(string(text)))
 		}
 		if i >= 0 {
 			fmt.Println(duration.Nanoseconds())

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Convert the pinned official OpenAI tiny.en.pt checkpoint to Go FP32 weights.
+"""Convert a pinned official OpenAI English checkpoint to Go FP32 weights.
 
 The converter reads only the known PyTorch ZIP tensor format and accepts only
-the exact official SHA-256. Neither PyTorch nor Python is used at inference time.
+the exact official SHA-256 of tiny.en, base.en, small.en, or medium.en.
+tiny.en keeps the original version-1 bundle; larger models write version 2,
+which records their dimensions inside the checksummed payload. Neither
+PyTorch nor Python is used at inference time.
 """
 
 import argparse
@@ -16,12 +19,21 @@ import zipfile
 import numpy as np
 
 
-SOURCE_SHA256 = "d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03"
-DIMS = {
-    "n_mels": 80, "n_vocab": 51864, "n_audio_ctx": 1500,
-    "n_audio_state": 384, "n_audio_head": 6, "n_audio_layer": 4,
-    "n_text_ctx": 448, "n_text_state": 384, "n_text_head": 6,
-    "n_text_layer": 4,
+def english_dims(state, heads, layers):
+    return {
+        "n_mels": 80, "n_vocab": 51864, "n_audio_ctx": 1500,
+        "n_audio_state": state, "n_audio_head": heads, "n_audio_layer": layers,
+        "n_text_ctx": 448, "n_text_state": state, "n_text_head": heads,
+        "n_text_layer": layers,
+    }
+
+
+# Official checkpoints from openai/whisper __init__.py, keyed by SHA-256.
+CHECKPOINTS = {
+    "d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03": ("tiny.en", english_dims(384, 6, 4)),
+    "25a8566e1d0c1e2231d1c762132cd20e0f96a85d16145c3a00adf5d1ac670ead": ("base.en", english_dims(512, 8, 6)),
+    "f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872": ("small.en", english_dims(768, 12, 12)),
+    "d7440d1dc186f76616474e0ff0b3b6b879abc9d1a4926b7adfa41db2d497ab4f": ("medium.en", english_dims(1024, 16, 24)),
 }
 
 
@@ -52,39 +64,42 @@ class RestrictedTorchUnpickler(pickle.Unpickler):
         return ref
 
 
-def expected():
+def expected(dims):
+    a, t = dims["n_audio_state"], dims["n_text_state"]
     specs = {
-        "encoder.conv1.weight": (384, 80, 3),
-        "encoder.conv1.bias": (384,),
-        "encoder.conv2.weight": (384, 384, 3),
-        "encoder.conv2.bias": (384,),
-        "encoder.positional_embedding": (1500, 384),
-        "encoder.ln_post.weight": (384,),
-        "encoder.ln_post.bias": (384,),
-        "decoder.token_embedding.weight": (51864, 384),
-        "decoder.positional_embedding": (448, 384),
-        "decoder.ln.weight": (384,),
-        "decoder.ln.bias": (384,),
+        "encoder.conv1.weight": (a, 80, 3),
+        "encoder.conv1.bias": (a,),
+        "encoder.conv2.weight": (a, a, 3),
+        "encoder.conv2.bias": (a,),
+        "encoder.positional_embedding": (1500, a),
+        "encoder.ln_post.weight": (a,),
+        "encoder.ln_post.bias": (a,),
+        "decoder.token_embedding.weight": (51864, t),
+        "decoder.positional_embedding": (448, t),
+        "decoder.ln.weight": (t,),
+        "decoder.ln.bias": (t,),
     }
     for part in ("encoder", "decoder"):
-        for layer in range(4):
+        state = a if part == "encoder" else t
+        layers = dims["n_audio_layer"] if part == "encoder" else dims["n_text_layer"]
+        for layer in range(layers):
             prefix = f"{part}.blocks.{layer}."
             for attention in ("attn", "cross_attn"):
                 if part == "encoder" and attention == "cross_attn":
                     continue
                 p = prefix + attention + "."
                 for name in ("query", "key", "value", "out"):
-                    specs[p + name + ".weight"] = (384, 384)
+                    specs[p + name + ".weight"] = (state, state)
                     if name != "key":
-                        specs[p + name + ".bias"] = (384,)
+                        specs[p + name + ".bias"] = (state,)
                 for name in ("weight", "bias"):
-                    specs[prefix + attention + "_ln." + name] = (384,)
-            specs[prefix + "mlp.0.weight"] = (1536, 384)
-            specs[prefix + "mlp.0.bias"] = (1536,)
-            specs[prefix + "mlp.2.weight"] = (384, 1536)
-            specs[prefix + "mlp.2.bias"] = (384,)
+                    specs[prefix + attention + "_ln." + name] = (state,)
+            specs[prefix + "mlp.0.weight"] = (4 * state, state)
+            specs[prefix + "mlp.0.bias"] = (4 * state,)
+            specs[prefix + "mlp.2.weight"] = (state, 4 * state)
+            specs[prefix + "mlp.2.bias"] = (state,)
             for name in ("weight", "bias"):
-                specs[prefix + "mlp_ln." + name] = (384,)
+                specs[prefix + "mlp_ln." + name] = (state,)
     return specs
 
 
@@ -93,19 +108,26 @@ def convert(source, output):
     with open(source, "rb") as src:
         for block in iter(lambda: src.read(1024 * 1024), b""):
             digest.update(block)
-    if digest.hexdigest() != SOURCE_SHA256:
+    if digest.hexdigest() not in CHECKPOINTS:
         raise ValueError(f"unsupported checkpoint SHA-256: {digest.hexdigest()}")
-    specs = expected()
+    model, dims = CHECKPOINTS[digest.hexdigest()]
+    specs = expected(dims)
     with zipfile.ZipFile(source) as archive:
-        metadata = RestrictedTorchUnpickler(io.BytesIO(archive.read("archive/data.pkl"))).load()
-        if metadata.get("dims") != DIMS:
-            raise ValueError("unexpected tiny.en dimensions")
+        names = archive.namelist()
+        root = names[0].split("/")[0]
+        metadata = RestrictedTorchUnpickler(io.BytesIO(archive.read(f"{root}/data.pkl"))).load()
+        if metadata.get("dims") != dims:
+            raise ValueError(f"unexpected {model} dimensions: {metadata.get('dims')}")
         weights = metadata["model_state_dict"]
         if set(weights) != set(specs):
             raise ValueError(f"tensor set differs: missing={set(specs)-set(weights)}, extra={set(weights)-set(specs)}")
         with open(output, "wb") as dst:
             dst.write(b"WHISPER1")
-            dst.write(struct.pack("<II", 1, len(specs)))
+            version = 1 if model == "tiny.en" else 2
+            dst.write(struct.pack("<II", version, len(specs)))
+            if version == 2:
+                dst.write(struct.pack("<6I", dims["n_audio_state"], dims["n_audio_head"], dims["n_audio_layer"],
+                                      dims["n_text_state"], dims["n_text_head"], dims["n_text_layer"]))
             for name, shape in specs.items():
                 tensor = weights[name]
                 if not isinstance(tensor, Tensor) or tensor.shape != shape:
@@ -118,7 +140,7 @@ def convert(source, output):
                     (dim - 1) * step for dim, step in zip(shape, tensor.strides)
                 ) >= count:
                     raise ValueError(f"tensor {name} exceeds its storage")
-                raw = archive.read(f"archive/data/{key}")
+                raw = archive.read(f"{root}/data/{key}")
                 values = np.frombuffer(raw, dtype="<f2" if dtype == "f2" else "<f4")
                 if values.size != count:
                     raise ValueError(f"tensor {name} has truncated storage")
@@ -146,7 +168,7 @@ def convert(source, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("checkpoint", help="official tiny.en.pt")
+    parser.add_argument("checkpoint", help="official tiny.en.pt, base.en.pt, small.en.pt, or medium.en.pt")
     parser.add_argument("output", help="output FP32 .gophonic bundle")
     args = parser.parse_args()
     convert(args.checkpoint, args.output)

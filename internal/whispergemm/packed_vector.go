@@ -65,9 +65,23 @@ func (p *PackedVector) size() int {
 // Repack replaces FP32 contents from rows-by-K data with the given stride.
 // The dimensions must match NewPackedVectorFP32.
 func (p *PackedVector) Repack(weights []float32, stride int) error {
-	if p.w32 == nil || !validMatrix(weights, p.n, p.k, stride) {
+	return p.RepackShape(weights, stride, p.n, p.k)
+}
+
+// RepackShape replaces FP32 contents with a rows-by-K matrix that may be
+// smaller than the allocated shape, such as attention caches for a shorter
+// audio sequence. It allocates nothing.
+func (p *PackedVector) RepackShape(weights []float32, stride, rows, k int) error {
+	if p.w32 == nil || rows < 0 || k < 0 || !validMatrix(weights, rows, k, stride) {
 		return ErrShape
 	}
+	kp := (k + 3) &^ 3
+	groups := (rows + vectorGroup - 1) / vectorGroup
+	if groups*vectorGroup*kp > cap(p.w32) {
+		return ErrShape
+	}
+	p.n, p.k, p.kp = rows, k, kp
+	p.w32 = p.w32[:cap(p.w32)]
 	p.fill32(weights, stride)
 	return nil
 }

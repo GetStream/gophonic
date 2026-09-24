@@ -51,7 +51,11 @@ func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) 
 	if model == nil {
 		return nil, ErrDecoderNilModel
 	}
-	encoder, err := NewEncoderWorkspaceWithWorkers(workers)
+	dims := model.dims
+	if dims == (Dims{}) {
+		dims = TinyENDims // an unloaded model fails later with a weight error
+	}
+	encoder, err := newEncoderWorkspace(dims, workers)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +74,11 @@ func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) 
 		frontend:     NewFeatureWorkspace(),
 		fullFrontend: NewFullFeatureWorkspace(),
 		encoder:      encoder,
-		decoder:      NewDecoderScratch(),
+		decoder:      newDecoderScratch(dims),
 		tokenizer:    tokenizer,
 		policy:       policy,
 		mel:          make([]float32, MelBins*MelFrames),
-		audio:        make([]float32, AudioFrames*AudioState),
+		audio:        make([]float32, AudioFrames*dims.AudioState),
 		logits:       make([]float32, VocabSize),
 		tokens:       make([]int, 0, TextContext+1),
 		history:      make([]int, 0, TextContext),

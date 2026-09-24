@@ -5,8 +5,8 @@
 
 package whisper
 
-// softmaxExpRow replaces x with exp(x-max(x)) and returns 1/sum.
-func softmaxExpRow(x []float32) float32 {
+// softmaxExpRowFallback replaces x with exp(x-max(x)) and returns 1/sum.
+func softmaxExpRowFallback(x []float32) float32 {
 	maxValue := x[0]
 	for _, value := range x[1:] {
 		maxValue = max(maxValue, value)

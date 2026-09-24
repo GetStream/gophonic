@@ -147,6 +147,33 @@ func TestPackedVectorRepack(t *testing.T) {
 	}
 }
 
+func TestPackedVectorRepackShape(t *testing.T) {
+	p, err := NewPackedVectorFP32(1500, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shape := range [][2]int{{1500, 64}, {7, 64}, {64, 1500}, {3, 1}, {1500, 64}} {
+		rows, k := shape[0], shape[1]
+		weights, x, stride := vectorCase(rows, k, false, uint32(rows+k))
+		if err := p.RepackShape(weights, stride, rows, k); err != nil {
+			t.Fatal(err)
+		}
+		want := vectorReference(weights, stride, rows, k, x)
+		got := make([]float32, rows)
+		if err := p.Mul(got, x); err != nil {
+			t.Fatal(err)
+		}
+		for i := range got {
+			if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+				t.Fatalf("rows=%d k=%d index %d", rows, k, i)
+			}
+		}
+	}
+	if err := p.RepackShape(make([]float32, 1600*65), 65, 1600, 65); err == nil {
+		t.Fatal("accepted a shape larger than the allocation")
+	}
+}
+
 func TestPackedVectorSignalStorm(t *testing.T) {
 	if !PackedVectorAccelerated() || testing.Short() {
 		t.Skip("SME signal stress")

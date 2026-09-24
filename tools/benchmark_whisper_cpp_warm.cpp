@@ -22,8 +22,8 @@ static std::string trim(std::string s) {
 }
 
 int main(int argc, char ** argv) {
-    if (argc != 5) {
-        std::fprintf(stderr, "usage: %s model pcm-f32le threads iterations\n", argv[0]);
+    if (argc != 5 && argc != 6) {
+        std::fprintf(stderr, "usage: %s model pcm-f32le threads iterations [expected-text]\n", argv[0]);
         return 2;
     }
     const int threads = std::atoi(argv[3]);
@@ -53,7 +53,8 @@ int main(int argc, char ** argv) {
     params.print_progress = false;
     params.print_timestamps = false;
     params.print_special = false;
-    const std::string expected = "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.";
+    const std::string expected = argc == 6 ? std::string(argv[5]) :
+        "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.";
     for (int i = -5; i < iterations; ++i) {
         auto start = std::chrono::steady_clock::now();
         const int rc = whisper_full(ctx, params, pcm.data(), static_cast<int>(pcm.size()));

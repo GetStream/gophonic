@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # Copyright 2026 The gophonic authors
 # SPDX-License-Identifier: BSD-2-Clause
-"""Repackage a verified official tiny.en FP32 Go bundle as ggml for CPU comparison.
+"""Repackage a verified official English FP32 Go bundle as ggml for CPU comparison.
 
-The template supplies only standard Whisper mel filters and tokenizer bytes.
-Every weight is replaced with the SHA-verified FP32 bundle's corresponding
-tensor. Pin the template's SHA-256 in the benchmark record.
+The ggml tiny.en template supplies only the standard Whisper mel filters and
+tokenizer bytes, which every English checkpoint shares. Hyperparameters come
+from the bundle, and every weight is replaced with the SHA-verified FP32
+bundle's corresponding tensor. Pin the template's SHA-256 in the benchmark
+record.
 """
 
 import hashlib
@@ -18,7 +20,7 @@ def u32(data, pos):
     return struct.unpack_from("<I", data, pos)[0], pos + 4
 
 
-def read_ggml_prefix(path):
+def read_ggml_prefix(path, dims):
     data = Path(path).read_bytes()
     pos = 0
     magic, pos = u32(data, pos)
@@ -39,7 +41,11 @@ def read_ggml_prefix(path):
         raise ValueError("unexpected ggml tiny.en header")
     # The final hparam is model-wide ftype; every tensor also has its own ftype.
     prefix = bytearray(data[:pos])
-    struct.pack_into("<I", prefix, 4 + 10 * 4, 0)
+    # hparams: vocab, audio ctx/state/head/layer, text ctx/state/head/layer, mels, ftype.
+    audio_state, audio_heads, audio_layers, text_state, text_heads, text_layers = dims
+    for index, value in ((2, audio_state), (3, audio_heads), (4, audio_layers),
+                         (6, text_state), (7, text_heads), (8, text_layers), (10, 0)):
+        struct.pack_into("<I", prefix, 4 + index * 4, value)
     return prefix
 
 
@@ -48,13 +54,18 @@ def convert(go_bundle, ggml_template, output):
     if raw[:8] != b"WHISPER1":
         raise ValueError("not a Whisper Go bundle")
     version, count = struct.unpack_from("<II", raw, 8)
-    if version != 1 or count != 167:
-        raise ValueError("unexpected Go bundle version or tensor count")
     if hashlib.sha256(raw[16:-32]).digest() != raw[-32:]:
         raise ValueError("Go bundle checksum mismatch")
     pos = 16
+    if version == 1 and count == 167:
+        dims = (384, 6, 4, 384, 6, 4)
+    elif version == 2:
+        dims = struct.unpack_from("<6I", raw, pos)
+        pos += 24
+    else:
+        raise ValueError("unexpected Go bundle version or tensor count")
     with Path(output).open("wb") as dst:
-        dst.write(read_ggml_prefix(ggml_template))
+        dst.write(read_ggml_prefix(ggml_template, dims))
         for _ in range(count):
             name_len = struct.unpack_from("<H", raw, pos)[0]
             pos += 2
