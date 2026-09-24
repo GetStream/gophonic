@@ -428,12 +428,18 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 		s.x[d] = weights.tokenEmbedding[embedStart+d] + weights.position[posStart+d]
 	}
 
+	var pending []float32 // MLP output awaiting a fused add+norm.
 	for layer := 0; layer < textLayers; layer++ {
 		lw := &weights.layers[layer]
 
 		// Residual self attention: x += attn(attn_ln(x)). Projected K/V are
 		// stored at this position before causal attention reads the cache.
-		layerNorm(s.normalized, s.x, lw.selfNorm.weight, lw.selfNorm.bias)
+		if pending == nil {
+			layerNormInto(s.normalized, s.x, lw.selfNorm.weight, lw.selfNorm.bias)
+		} else {
+			// Fuse the previous MLP block's residual add with this norm.
+			residualNormInto(s.x, s.normalized, pending, lw.selfNorm.weight, lw.selfNorm.bias)
+		}
 		linearInto(s.query, s.normalized, &lw.selfQ, state, state)
 		linearInto(s.key, s.normalized, &lw.selfK, state, state)
 		linearInto(s.value, s.normalized, &lw.selfV, state, state)
@@ -450,10 +456,10 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 			return err
 		}
 		linearInto(s.projected, s.context, &lw.selfOut, state, state)
-		addInto(s.x, s.projected)
 
 		// Residual cross attention: x += cross_attn(cross_attn_ln(x), audio).
-		layerNorm(s.normalized, s.x, lw.crossNorm.weight, lw.crossNorm.bias)
+		// The self-attention residual add is fused with this norm.
+		residualNormInto(s.x, s.normalized, s.projected, lw.crossNorm.weight, lw.crossNorm.bias)
 		linearInto(s.query, s.normalized, &lw.crossQ, state, state)
 		crossBase := layer * AudioFrames * audioState
 		crossEnd := crossBase + s.audioFrames*audioState
@@ -468,17 +474,18 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 			return err
 		}
 		linearInto(s.projected, s.context, &lw.crossOut, state, state)
-		addInto(s.x, s.projected)
 
 		// Residual MLP: x += mlp(mlp_ln(x)); PyTorch nn.GELU uses the exact erf form.
-		layerNorm(s.normalized, s.x, lw.mlpNorm.weight, lw.mlpNorm.bias)
+		// The cross-attention residual add is fused with this norm.
+		residualNormInto(s.x, s.normalized, s.projected, lw.mlpNorm.weight, lw.mlpNorm.bias)
 		linearInto(s.mlp, s.normalized, &lw.mlpIn, state, 4*state)
 		geluExactInto(s.mlp)
 		linearInto(s.projected, s.mlp, &lw.mlpOut, 4*state, state)
-		addInto(s.x, s.projected)
+		pending = s.projected
 	}
 
-	layerNorm(s.normalized, s.x, weights.finalNorm.weight, weights.finalNorm.bias)
+	// Fuse the last MLP block's residual add with the final norm.
+	residualNormInto(s.x, s.normalized, pending, weights.finalNorm.weight, weights.finalNorm.bias)
 	if weights.vocabulary != nil {
 		if s.gemm == nil || s.gemm.Workers() < 2 {
 			if err := weights.vocabulary.Mul(logits, s.normalized); err != nil {
@@ -684,6 +691,30 @@ func linearInto(dst, x []float32, l *decoderLinear, in, out int) {
 	}
 }
 
+// layerNormInto normalizes x into dst, using the NEON kernel when the row
+// qualifies. Without acceleration it keeps the scalar float32 order exactly.
+func layerNormInto(dst, x, weight, bias []float32) {
+	n := len(x)
+	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(weight) >= n && len(bias) >= n {
+		layerNormNEON(&x[0], &dst[0], &weight[0], &bias[0], n)
+		return
+	}
+	layerNorm(dst, x, weight, bias)
+}
+
+// residualNormInto fuses x += projected with the following LayerNorm(x),
+// matching the scalar addition order. Without the NEON kernel it performs
+// the same two operations separately.
+func residualNormInto(x, dst, projected, weight, bias []float32) {
+	n := len(x)
+	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(projected) >= n && len(weight) >= n && len(bias) >= n {
+		residualNormNEON(&x[0], &dst[0], &weight[0], &bias[0], n, &projected[0], nil)
+		return
+	}
+	addInto(x, projected)
+	layerNorm(dst, x, weight, bias)
+}
+
 func layerNorm(dst, x, weight, bias []float32) {
 	var mean float32
 	for _, v := range x {
@@ -792,24 +823,17 @@ func attentionCachedInto(dst, scaledQuery, keys, values []float32, frames, value
 		if err := whispergemm.MulVector(probabilities, keys[start:], state, scaledQuery[start:end], frames); err != nil {
 			panic(err)
 		}
-		maxScore := float32(math.Inf(-1))
-		for _, score := range probabilities {
-			if score > maxScore {
-				maxScore = score
-			}
+		if frames == 0 {
+			clear(dst[start:end])
+			continue
 		}
-		var sum float32
-		for frame, score := range probabilities {
-			p := float32(math.Exp(float64(score - maxScore)))
-			probabilities[frame] = p
-			sum += p
-		}
-		invSum := float32(1 / sum)
-		for frame := range probabilities {
-			probabilities[frame] *= invSum
-		}
-		if err := whispergemm.MulVector(dst[start:end], values[start*valueStride:], valueStride, probabilities, headSize); err != nil {
+		inverse := softmaxExpRow(probabilities)
+		out := dst[start:end]
+		if err := whispergemm.MulVector(out, values[start*valueStride:], valueStride, probabilities, headSize); err != nil {
 			panic(err)
+		}
+		for i := range out {
+			out[i] *= inverse
 		}
 	}
 }
