@@ -42,7 +42,7 @@ flowchart LR
 The decoder borrows the encoder workspace's persistent worker executor.
 Matrix and row operations publish a generation to each helper, use atomic
 completion, and write disjoint output ranges. No worker pool is created per
-token. `internal/whispergemm` holds scalar and Go 1.27 ARM64 SIMD kernels;
+token. `internal/whispergemm` holds Apple SME, Go 1.27 ARM64 SIMD, and scalar kernels;
 model loading and first weight packing occur outside warm inference.
 
 An external backend can reuse `WhisperFeatureWorkspace` when its model expects
@@ -154,8 +154,8 @@ where it affects quantization or recurrence.
 | Recurrent math | `tinymel_gru*` |
 | Offline conversion | `tools/onnx_to_gophonic.py`, `tools/tinymel_to_gophonic.py` |
 | File decoding and JSON CLI | `cmd/gophonic/` |
-| Whisper tiny.en bundle, audio, encoder, decoder, tokenizer, transcription | `whisper/` |
-| Whisper scalar/SIMD GEMM, GEMV, worker executor | `internal/whispergemm/` |
+| Whisper bundles, audio, encoder, decoder, tokenizer, transcription | `whisper/` |
+| Whisper SME, NEON, and scalar GEMM/GEMV kernels, worker executor | `internal/whispergemm/` |
 | Whisper checkpoint and oracle tools | `tools/whisper_pt_to_gophonic.py`, `tools/whisper_oracle.py` |
 
 `internal/int8probe` is an isolated Smart Turn GEMM experiment. It is not called

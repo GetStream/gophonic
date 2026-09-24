@@ -18,10 +18,10 @@ import (
 func main() {
 	modelPath := flag.String("model", "", "converted Pipecat Smart Turn v3.2 .gophonic bundle")
 	tinyModelPath := flag.String("tiny-model", "", "converted TinyMelNet .gophonic bundle (uses its own threshold)")
-	whisperModelPath := flag.String("whisper-model", "", "converted OpenAI Whisper tiny.en .gophonic bundle for transcription")
+	whisperModelPath := flag.String("whisper-model", "", "converted OpenAI Whisper English .gophonic bundle (tiny.en, base.en, small.en) for transcription")
 	tinyWorkers := flag.Int("tiny-workers", 0, "TinyMelNet persistent CPU helpers (0=serial, max 7; only with -tiny-model)")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: gophonic (-model smart-turn.gophonic | -tiny-model tinymel.gophonic [-tiny-workers 0..7] | -whisper-model tiny.en.gophonic) audio.wav|audio.ogg|audio.opus\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: gophonic (-model smart-turn.gophonic | -tiny-model tinymel.gophonic [-tiny-workers 0..7] | -whisper-model whisper.gophonic) audio.wav|audio.ogg|audio.opus\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
