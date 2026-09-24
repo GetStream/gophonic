@@ -122,17 +122,22 @@ rotation are folded into the weights at load, and each projection is stored
 as per-row int8 while activations stay in FP32. A layer is six dispatches,
 and weight streaming runs at the measured memory bandwidth (≈440 GB/s).
 
-| One token, M4 Max | cosine vs BF16 (`hello`) | latency |
-| --- | ---: | ---: |
-| `gpu` (int8 weights) | 0.99933 | **15.8 ms** |
-| `gpu-q4` (4.5-bit weights) | 0.953 | **10.9 ms** |
-| llama.cpp Metal Q8_0 | 0.99933 | 19.5 ms |
-| llama.cpp Metal Q4_0 / Q4_K_M | 0.863 / 0.942 | 12.0 / 12.5 ms |
+| M4 Max | cosine vs BF16 (`hello`) | 1 token | 12 tokens | 16 × 12 tokens |
+| --- | ---: | ---: | ---: | ---: |
+| `gpu` (int8 weights) | 0.99933 | **15.8 ms** | **24.6 ms** | **449 ms** |
+| `gpu-q4` (4.5-bit weights) | 0.953 | **11.0 ms** | 25.3 ms | 404 ms |
+| llama.cpp Metal Q8_0 | 0.99933 | 19.5 ms | 57 ms | — |
+| llama.cpp Metal Q4_0 / Q4_K_M | 0.863 / 0.942 | 12.0 / 12.5 ms | 53 / 57 ms | — |
+| llama.cpp CPU Q8_0 | 0.99929 | 31.8 ms | 90 ms | — |
+
+A single token streams every weight once through GEMV kernels. Longer
+inputs, and several texts packed into one pass, run batched simdgroup-matrix
+kernels that read each weight once per 16 or 32 tokens, splitting K across
+threadgroups when a projection alone would leave GPU cores idle.
 
 `gpu-q4` stores blocks of 32 weights as 4-bit codes with one FP16 scale,
-chosen per block to minimize rounding error. Longer inputs currently run one
-token at a time (a batched kernel is in progress), and prefix stores
-(`Question`, `Context`, `Stream`) are not yet supported on the GPU.
+chosen per block to minimize rounding error. Prefix stores (`Question`,
+`Context`, `Stream`) are not yet supported on the GPU.
 
 ## Performance
 

@@ -19,7 +19,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	return nil, errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 
-func (w *gpuWorkspace) sequence(*Weights, []int, []float32) error {
+func (w *gpuWorkspace) batch(*Weights, [][]int, [][]float32) error {
 	return errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 

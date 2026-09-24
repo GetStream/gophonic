@@ -292,12 +292,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if ws.prefix != nil {
 			return errors.New("qwen3: prefix stores are not yet supported on the GPU")
 		}
-		for s, ids := range seqs {
-			if err := ws.gpu.sequence(m, ids, dst[s]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return ws.gpu.batch(m, seqs, dst)
 	}
 	if ws.prefix != nil && !ws.shared && len(seqs) != 1 {
 		return errors.New("qwen3: a prefix extension evaluates exactly one sequence")
