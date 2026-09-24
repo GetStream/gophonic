@@ -22,7 +22,8 @@ transcripts.
 [Whisper performance](docs/whisper-performance.md) ·
 [Whisper design](docs/whisper-design.md) · [Models](docs/models.md) ·
 [Go API](docs/api.md) · [Architecture](docs/architecture.md) ·
-[Benchmarks](docs/benchmarks.md) · [Validation](docs/validation.md)
+[Benchmarks](docs/benchmarks.md) · [Validation](docs/validation.md) ·
+[Stream WebRTC example](examples/webrtc/README.md)
 
 ## Whisper transcription
 
