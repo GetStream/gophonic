@@ -9,6 +9,7 @@ import "simd/archsimd"
 
 // fmaPanel retains the existing packed weight layout and reduction order.
 // Eight adjacent output columns share one AVX2/FMA operation.
+//go:nosplit
 func fmaPanel(acc, w *[OutputPanel]float32, a float32) {
 	s := archsimd.BroadcastFloat32x8(a)
 	for c := 0; c < OutputPanel; c += 8 {

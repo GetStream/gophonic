@@ -22,10 +22,29 @@ jobs:
       - name: CPU
         run: lscpu | grep -E 'Model name|Architecture|Flags'
       - name: Native SIMD and executor tests
-        run: go test ./internal/whispergemm ./internal/q8gemm ./internal/q8gemv ./whisper -count=5
+        run: go test ./internal/whispergemm ./internal/q8gemm ./internal/q8gemv ./whisper -count=1
       - name: Native packed matrix and vector benchmarks
         run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar|BenchmarkAMD64Tile)$' -benchtime=100ms -count=3 -benchmem
       - name: Native int8 vector benchmarks
         run: go test ./internal/q8gemv -run '^$' -bench '^BenchmarkMulInto' -benchtime=100ms -count=3 -benchmem
       - name: Native Whisper elementwise benchmarks
-        run: go test ./whisper -run '^$' -bench '^(BenchmarkGELU|BenchmarkAudioSoftmax|BenchmarkAMD64LayerNorm)$' -benchtime=100ms -count=3 -benchmem
+        run: go test ./whisper -run '^$' -bench '^(BenchmarkGELU|BenchmarkAudioSoftmax|BenchmarkAudioSoftmaxScalar|BenchmarkAMD64LayerNorm)$' -benchtime=100ms -count=3 -benchmem
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Prepare official tiny.en model
+        run: |
+          python3 -m pip install numpy
+          curl -fL --retry 3 --output "$RUNNER_TEMP/tiny.en.pt" https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt
+          python3 tools/whisper_pt_to_gophonic.py "$RUNNER_TEMP/tiny.en.pt" "$RUNNER_TEMP/tiny.en.gophonic"
+      - name: Native full Whisper parity and SIMD timing
+        env:
+          GOPHONIC_WHISPER_MODEL: ${{ runner.temp }}/tiny.en.gophonic
+        run: |
+          go test ./whisper -run 'TestOfficialTinyENBundle|TestTranscriberOfficialJFK|TestOfficialJFKSegmentTimestamps|TestOfficialJFKWordTimestamps' -count=1
+          go test ./whisper -run '^$' -bench '^BenchmarkOfficialTinyENTranscribe$' -benchtime=1x -count=3 -benchmem
+      - name: Native full Whisper scalar timing
+        env:
+          GOEXPERIMENT: ""
+          GOPHONIC_WHISPER_MODEL: ${{ runner.temp }}/tiny.en.gophonic
+        run: go test ./whisper -run '^$' -bench '^BenchmarkOfficialTinyENTranscribe$' -benchtime=1x -count=3 -benchmem

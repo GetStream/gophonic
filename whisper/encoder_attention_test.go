@@ -87,3 +87,21 @@ func BenchmarkAudioSoftmax(b *testing.B) {
 	}
 	encoderBenchmarkSink = values[len(values)-1]
 }
+
+// BenchmarkAudioSoftmaxScalar provides a same-process baseline for the
+// architecture-dispatched four-row attention softmax.
+func BenchmarkAudioSoftmaxScalar(b *testing.B) {
+	const rows, columns = attentionTileRows, AudioFrames
+	src, values := make([]float32, rows*columns), make([]float32, rows*columns)
+	for i := range src {
+		src[i] = float32(math.Sin(float64(i)*0.07)*8 + math.Cos(float64(i)*0.013)*4)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		copy(values, src)
+		for row := 0; row < rows; row++ {
+			softmaxRow(values[row*columns : (row+1)*columns])
+		}
+	}
+	encoderBenchmarkSink = values[len(values)-1]
+}
