@@ -27,6 +27,9 @@ as the dominant Go cost. The accepted 2×32 GEMM ablation is in
 [gemm2x32-REPORT.md](gemm2x32-REPORT.md). Rejected long-K and compact-vocabulary experiments
 are recorded in [longk-REPORT.md](longk-REPORT.md) and
 [vocab16-REPORT.md](vocab16-REPORT.md).
+The later [full-context one-core kernel and toolchain study](onecore-ceiling/README.md)
+records rejected exact kernel variants, the measured NEON FMA ceiling,
+experimental Strassen results, and the Go 1.27.1 comparison.
 
 These ratios describe the pinned reference and this machine. The optimized C
 runtime uses default FP16 key/value caches and flash attention despite FP32
