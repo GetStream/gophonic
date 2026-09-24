@@ -12,25 +12,32 @@ separately from timing.
 | --- | ---: | ---: | --- |
 | GoInfer weight-only int8, existing `HiddenLast` | 959 ms | ~1.8 MB, 2,418 allocs | Same pretokenized input, `GOMAXPROCS=1` |
 | gophonic fused Q8 evaluator | 436 ms | 0 B, 0 allocs | Same loaded int8 weights and token ID, pretokenized workspace path |
+| gophonic packed Q8 SME, owned encoder | 337.80 ms | 0 B, 0 allocs | One token, isolated 30-call run; packed weights also serve prefill |
 | llama.cpp Q8_0 CPU, `llama-bench` | 111.5 ms | not measured | `-p 1 -n 0 -embd 1 -t 1 -ngl 0 -dev none -r 5` |
 
 For the 12-token text `The Moon causes tides by pulling on Earth's oceans.`,
 the original token-major evaluator took 5.251 s/op; layer-batched Q8 prefill
-then took 3.880 s/op. The current 16×64 SME Q8 matrix path averaged 392.27 ms
-and 398.42 ms in two isolated 15-call public-API runs, each with 0 B/op and
-0 allocs/op after warmup. A prior 15-call run averaged 501.94 ms, so the
-sub-500 ms result has between-process variance and is not a deterministic
-guarantee. llama.cpp Q8_0 CPU prefill measured 0.778 s/op (`-p 12 -n 0
+then took 3.880 s/op. The 16×64 SME Q8 matrix path averaged 392.27 ms
+and 398.42 ms in two isolated 15-call public-API runs. With an owned encoder
+using only packed projections, a separate 30-call run measured 382.05 ms
+for 12 tokens and 337.80 ms for one token, both with 0 B/op and 0 allocs/op.
+A prior 15-call run averaged 501.94 ms, so sub-500 ms has between-process
+variance and is not a deterministic guarantee. llama.cpp Q8_0 CPU prefill measured 0.778 s/op (`-p 12 -n 0
 -embd 1 -t 1 -ngl 0 -dev none -r 5`). Its benchmark uses different prompt
 tokens and its GGUF has a different quantized weight format. The local
 12-token SME hidden vector matches the previous int8 decoder with cosine
 1.000000000, maximum absolute difference 1.56e-4, and RMS difference 5.73e-6.
 The pinned CLM state-and-three-candidates ranking is unchanged.
 
-SME weight packing takes 5.4–8.4 s once and adds 6,629 MiB of packed projection
-storage alongside the decoder's original weights. Warm Go heap was 14.12 GiB;
-sampled process RSS was about 13 GiB. Inference reads the packed copy, but
-retaining both layouts remains a memory-cost issue to resolve.
+SME weight packing takes about 5–8 s once. An encoder that owns its newly loaded
+decoder discards the canonical Q8 projections after validating that all seven
+projections in every layer have packed replacements. In a checkpoint test,
+Go heap fell from 14,457 to 7,828 MiB after collection, releasing 6,629 MiB.
+External callers constructing a prefill evaluator from their own decoder keep
+their canonical weights. Peak loading memory still includes both layouts. A sampled Darwin process held
+14,815 MiB RSS before and after compaction, even after `runtime.GC` and
+`debug.FreeOSMemory`; the Go heap reduction has not yet translated to a
+measured resident-memory reduction.
 
 The public text API includes tokenization. The new Qwen3 tokenizer matches
 official token IDs for the tested Unicode and special-token cases, and uses
@@ -62,6 +69,21 @@ application and exponential evaluation. The current 100 ms stretch target
 would require over 3× more projection throughput than the measured standalone
 kernels, and over 69 GB/s of packed weight reads for this independent request.
 The full latency and quality gates remain open for that target.
+
+An experimental SME2 `SMOPA` integer tile passed its exact int32 oracle and
+warmed zero-allocation tests. Five cache-rotating runs at each 12-token Qwen
+projection shape gave a 139 ms estimate for the 36 layers of matrix work alone.
+That excludes activation quantization, scaling, normalization, attention, and
+KV work. Streaming the roughly 6.95 GB of Q8 matrix bytes in 100 ms requires
+at least 69.5 GB/s, versus about 50 GB/s observed in this prototype. This
+measurement does not rule out a better kernel, but the current prototype cannot
+meet 100 ms end to end. The kernel remains outside the production decoder.
+
+At sampled real Qwen projection inputs, one int8 scale per 32 activation
+values had up to 1.36% projection-output relative NRMSE across all 12 positions.
+A second int8 residual stream reduced sampled errors to roughly 5e-6–5e-5.
+These samples justify a full-model hidden-state and CLM ranking experiment;
+they do not establish that integer activation quantization preserves quality.
 
 The Qwen3-8B transformer has about 6.946 billion matrix weights per forward
 pass, excluding the LM head skipped by last-hidden inference. A cold independent

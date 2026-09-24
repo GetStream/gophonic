@@ -38,9 +38,10 @@ Supply the exact [`Qwen/Qwen3-8B`](https://huggingface.co/Qwen/Qwen3-8B)
 checkpoint for the published CLM head. `Open` uses full FP32 weights.
 `OpenWithOptions(path, Options{Quant: "int8"})` reduces the safetensors weight
 footprint at the cost of altered embeddings. Int8 uses gophonic's reusable
-Qwen3 workspace and direct weight-only Q8 matvec for one token. On Apple M4
-CPUs with 512-bit SME, prompts of 2–16 tokens use a packed Q8 matrix kernel;
-other platforms retain the portable batched path. FP32 continues to use
+Qwen3 workspace. On Apple M4 CPUs with 512-bit SME, all input lengths use
+a packed Q8 matrix kernel, processing prompts longer than 16 tokens in tiles.
+The owning encoder releases its original Q8 projection arrays after packing
+all layers. Other platforms retain the portable batched path. FP32 continues to use
 GoInfer's reference forward path. Quantized weights and GGUF checkpoints need
 a separate ranking-accuracy gate against the reference.
 
@@ -56,15 +57,16 @@ perform zero heap allocations after their workspaces have warmed to the
 longest input. The GGUF tokenizer uses its existing allocation behavior.
 Calls on one encoder are serialized; use a separate encoder per concurrent lane.
 
-On an Apple M4 Max with `GOMAXPROCS=1`, one-token int8 inference took 435 ms
-versus 959 ms for the bundled GoInfer path. Two isolated 15-call runs of the
-12-token public text API with SME averaged 392 ms and 398 ms, with 0 B/op and
-0 allocs/op; a prior run averaged 502 ms, so latency varies between processes.
+On an Apple M4 Max with `GOMAXPROCS=1`, an isolated 30-call run of the
+owned packed encoder measured 338 ms for one token and 382 ms for 12 tokens,
+with 0 B/op and 0 allocs/op. Earlier 15-call public text runs averaged 392 ms
+and 398 ms; a prior run averaged 502 ms, so latency varies between processes.
 The pinned CLM ranking matches the existing int8 path. A llama.cpp Q8_0 CPU
 prefill benchmark measured 778 ms for 12 random tokens, using a different
 quantized weight format and token contents. The SME path repacks weights once
-(about 5.4–8.4 s) and retains an additional 6,629 MiB; warm Go heap was about
-14.12 GiB. See [the performance report](../../docs/clm-performance.md) for the measurement details. The
+(about 5–8 s). Releasing the owning decoder's original Q8 projections lowered
+Go heap from 14,457 to 7,828 MiB after collection. Peak loading memory
+remains high, and sampled process RSS did not decrease after collection. See [the performance report](../../docs/clm-performance.md) for the measurement details. The
 100 ms single-core target remains open.
 
 ## Reference gates

@@ -86,6 +86,12 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 			return nil, fmt.Errorf("clmqwen: initialize Qwen3 prefill evaluator: %w", e.prefill.setupErr)
 		}
 		e.prefillWS = e.prefill.NewWorkspace()
+		// The decoder was loaded for this Encoder and has no external owner.
+		// On the SME path, release the canonical per-row Q8 projections only
+		// after every projection has a complete packed replacement. All Encoder
+		// inference then goes through PrefillEvaluator, including one-token
+		// requests and prompts larger than one SME tile.
+		e.prefill.compactOwnedWeights()
 	}
 	return e, nil
 }
@@ -190,7 +196,7 @@ func (e *Encoder) embedIDsLocked(ctx context.Context, index int, ids []int, dst 
 		ids = ids[len(ids)-maxTokens:]
 	}
 	if e.fast != nil {
-		if len(ids) > 1 && e.prefill != nil {
+		if e.prefill != nil && (len(ids) > 1 || e.prefill.weightsCompacted) {
 			if err := e.prefill.HiddenLastInto(ids, dst, e.prefillWS); err != nil {
 				return fmt.Errorf("clmqwen: infer input %d: %w", index, err)
 			}

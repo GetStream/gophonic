@@ -17,16 +17,18 @@ import (
 // PrefillEvaluator runs a Qwen3 prompt a layer at a time. All prompt tokens
 // pass through each projection together, so quantized projection rows are
 // loaded once and reused across the prompt instead of reread once per token.
-// It shares immutable weights and geometry with a FastEvaluator.
+// It shares model weights and geometry with a FastEvaluator; an owning Encoder
+// may discard canonical projection matrices after their packed copies validate.
 type PrefillEvaluator struct {
-	fast      *FastEvaluator
-	packed    []packedQ8Layer
-	setupErr  error
-	useQ8GEMM bool
+	fast             *FastEvaluator
+	packed           []packedQ8Layer
+	setupErr         error
+	useQ8GEMM        bool
+	weightsCompacted bool // true only when an owning Encoder dropped every canonical Q8 projection
 }
 
-// packedQ8Layer keeps SME-friendly copies of the seven projection matrices.
-// The decoder remains immutable and caller-owned; packing never rewrites it.
+// packedQ8Layer holds the SME-friendly layout for each Qwen projection.
+// NewPrefillEvaluator leaves the caller's canonical decoder weights untouched.
 type packedQ8Layer struct {
 	q, k, v, o, gate, up, down *q8gemm.Weights
 }
@@ -78,6 +80,60 @@ func newPrefillEvaluator(fast *FastEvaluator) *PrefillEvaluator {
 	return p
 }
 
+// compactOwnedWeights drops the decoder's original per-row Q8 projection
+// buffers only after the packed layout contains every Qwen projection. This
+// method is called only by OpenWithOptions, whose decoder was just loaded and
+// is owned by its Encoder. The exported NewPrefillEvaluator never calls it.
+// A false result leaves every canonical WeightMat intact.
+func (p *PrefillEvaluator) compactOwnedWeights() bool {
+	if p == nil || p.fast == nil || !p.useQ8GEMM || p.weightsCompacted {
+		return false
+	}
+	if !compactQ8ProjectionWeights(p.fast.w, p.packed) {
+		return false
+	}
+	p.weightsCompacted = true
+	return true
+}
+
+func compactQ8ProjectionWeights(weights *decoder.Weights, packed []packedQ8Layer) bool {
+	if weights == nil || len(weights.Layers) == 0 || len(weights.Layers) != len(packed) {
+		return false
+	}
+	// Validate the complete replacement set before zeroing any canonical value.
+	for i := range weights.Layers {
+		mats := layerProjectionMats(&weights.Layers[i])
+		packedMats := packedLayerWeights(&packed[i])
+		for j, mat := range mats {
+			if mat == nil || packedMats[j] == nil || mat.Kind() != "int8" {
+				return false
+			}
+			q, scales, w8a8, ok := mat.Int8()
+			k, n := packedMats[j].Dims()
+			if !ok || w8a8 || k != mat.Cols() || n != mat.Rows() || len(q) != k*n || len(scales) != n {
+				return false
+			}
+		}
+	}
+	for i := range weights.Layers {
+		for _, mat := range layerProjectionMats(&weights.Layers[i]) {
+			*mat = linalg.WeightMat{}
+		}
+	}
+	return true
+}
+
+func layerProjectionMats(layer *decoder.LayerWeights) [7]*linalg.WeightMat {
+	return [7]*linalg.WeightMat{
+		&layer.QProj, &layer.KProj, &layer.VProj, &layer.OProj,
+		&layer.GateProj, &layer.UpProj, &layer.DownProj,
+	}
+}
+
+func packedLayerWeights(layer *packedQ8Layer) [7]*q8gemm.Weights {
+	return [7]*q8gemm.Weights{layer.q, layer.k, layer.v, layer.o, layer.gate, layer.up, layer.down}
+}
+
 func packQ8Layers(weights *decoder.Weights) ([]packedQ8Layer, error) {
 	if weights == nil {
 		return nil, errors.New("clmqwen: cannot pack nil Qwen3 weights")
@@ -85,10 +141,7 @@ func packQ8Layers(weights *decoder.Weights) ([]packedQ8Layer, error) {
 	out := make([]packedQ8Layer, len(weights.Layers))
 	for i := range weights.Layers {
 		layer := &weights.Layers[i]
-		mats := [...]*linalg.WeightMat{
-			&layer.QProj, &layer.KProj, &layer.VProj, &layer.OProj,
-			&layer.GateProj, &layer.UpProj, &layer.DownProj,
-		}
+		mats := layerProjectionMats(layer)
 		packed := [...]**q8gemm.Weights{
 			&out[i].q, &out[i].k, &out[i].v, &out[i].o,
 			&out[i].gate, &out[i].up, &out[i].down,
@@ -290,15 +343,19 @@ func (ws *PrefillWorkspace) prepareRoPE(f *FastEvaluator, n int) {
 }
 
 func projectBatch(ws *PrefillWorkspace, w *linalg.WeightMat, packed *q8gemm.Weights, src, dst []float32, rows, cols int) error {
+	if packed != nil {
+		if ws.q8gemm == nil {
+			return errors.New("clmqwen: SME projection workspace is not initialized")
+		}
+		k, outputs := packed.Dims()
+		if k != cols {
+			return fmt.Errorf("clmqwen: packed projection K=%d, input K=%d", k, cols)
+		}
+		return projectPackedBatch(ws, packed, src, dst, rows, cols, outputs)
+	}
 	if q, scales, w8a8, ok := w.Int8(); ok {
 		if w8a8 {
 			return projectW8A8Batch(ws, q, scales, src, dst, rows, cols, w.Rows())
-		}
-		if packed != nil && rows > 1 && rows <= q8gemm.ActivationRows {
-			if ws.q8gemm == nil {
-				return errors.New("clmqwen: SME projection workspace is not initialized")
-			}
-			return q8gemm.MulInto(dst, src, rows, packed, ws.q8gemm)
 		}
 		if rows == 1 {
 			q8gemv.MulInto(src[:cols], q, scales, dst[:w.Rows()], cols, w.Rows())
@@ -319,6 +376,22 @@ func projectBatch(ws *PrefillWorkspace, w *linalg.WeightMat, packed *q8gemm.Weig
 		return nil
 	}
 	return errors.New("clmqwen: unsupported Qwen3 projection storage")
+}
+
+func projectPackedBatch(ws *PrefillWorkspace, packed *q8gemm.Weights, src, dst []float32, rows, cols, outputs int) error {
+	if rows < 0 || cols < 0 || outputs < 0 || len(src) < rows*cols || len(dst) < rows*outputs {
+		return errors.New("clmqwen: invalid packed projection dimensions")
+	}
+	for row := 0; row < rows; row += q8gemm.ActivationRows {
+		count := min(q8gemm.ActivationRows, rows-row)
+		if err := q8gemm.MulInto(
+			dst[row*outputs:(row+count)*outputs],
+			src[row*cols:(row+count)*cols], count, packed, ws.q8gemm,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func projectF32Batch(src, weights, dst []float32, rows, cols, outputs int) {
