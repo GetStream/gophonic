@@ -19,6 +19,8 @@ const (
 	// rowsLowerChannel and rowsLowerTime build the stem convolution columns.
 	rowsLowerChannel
 	rowsLowerTime
+	// rowsTransposeMel writes time-major rows from the channel-major mel.
+	rowsTransposeMel
 )
 
 // encoderRows is stored in the workspace so dispatch does not allocate. Every
@@ -73,6 +75,13 @@ func (op *encoderRows) ApplyRows(start, end int) {
 		addPositionEmbedding(op.dst[start*w:end*w], op.src[start*w:end*w])
 	case rowsLowerChannel:
 		lowerChannelMajor3Rows(op.src, op.dst, op.frames, w, start, end)
+	case rowsTransposeMel:
+		for t := start; t < end; t++ {
+			row := op.dst[t*w : (t+1)*w]
+			for c := range row {
+				row[c] = op.src[c*op.frames+t]
+			}
+		}
 	case rowsLowerTime:
 		lowerTimeMajor3Stride2Rows(op.src, op.dst, op.frames, op.outRows, w, start, end)
 	}

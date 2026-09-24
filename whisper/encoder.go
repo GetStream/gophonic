@@ -29,7 +29,8 @@ var (
 // Allocate one workspace per concurrent caller and reuse it between calls.
 type EncoderWorkspace struct {
 	conv1       []float32
-	convColumns []float32
+	convColumns []float32 // time-major mel with a zero row at each end
+	conv1Pad    []float32 // conv1 output after one zero row of left padding
 	normalized  []float32
 	q           []float32
 	k           []float32
@@ -81,8 +82,8 @@ func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
 	state := d.AudioState
 	w := &EncoderWorkspace{
 		dims:        d,
-		conv1:       make([]float32, MelFrames*state),
-		convColumns: make([]float32, AudioFrames*state*3),
+		conv1Pad:    make([]float32, (MelFrames+1)*state),
+		convColumns: make([]float32, (MelFrames+2)*MelBins),
 		normalized:  make([]float32, AudioFrames*state),
 		q:           make([]float32, AudioFrames*state),
 		k:           make([]float32, AudioFrames*state),
@@ -92,6 +93,7 @@ func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
 		gemm:        gemm,
 	}
 	// Validated dimensions are small and positive, so these cannot fail.
+	w.conv1 = w.conv1Pad[state:]
 	w.conv1Weight, _ = whispergemm.NewPackedB(MelBins*3, state)
 	w.conv2Weight, _ = whispergemm.NewPackedB(state*3, state)
 	w.attention, err = newAudioAttention(AudioFrames, state, d.AudioHeads, workers)
@@ -109,6 +111,7 @@ func (w *EncoderWorkspace) Close() {
 	}
 	w.closed = true
 	w.conv1 = nil
+	w.conv1Pad = nil
 	w.convColumns = nil
 	w.normalized = nil
 	w.q = nil
@@ -169,10 +172,17 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 
 	// Whisper's audio stem is Conv1d -> exact GELU -> Conv1d (stride 2) ->
 	// exact GELU -> fixed sinusoidal positions.
-	if err := w.rows(encoderRows{kind: rowsLowerChannel, src: mel, dst: w.convColumns, frames: MelFrames, width: MelBins}, MelFrames); err != nil {
+	// Both stem convolutions are single GEMMs over overlapping input rows:
+	// row t of the time-major mel starting at padded row t-1 holds the three
+	// taps [x(t-1), x(t), x(t+1)] contiguously, as does row 2t-1 of conv1's
+	// output for the stride-two conv2. Weights are packed tap-major to match.
+	melT := w.convColumns[:(MelFrames+2)*MelBins]
+	clear(melT[:MelBins])
+	clear(melT[(MelFrames+1)*MelBins:])
+	if err := w.rows(encoderRows{kind: rowsTransposeMel, src: mel, dst: melT[MelBins:], frames: MelFrames, width: MelBins}, MelFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(w.conv1Weight, w.conv1, state, w.convColumns, MelBins*3, MelFrames); err != nil {
+	if err := w.gemm.Mul(w.conv1Weight, w.conv1, state, melT, MelBins, MelFrames); err != nil {
 		return err
 	}
 	if trace != nil {
@@ -184,10 +194,7 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 	} else if err := w.activate(w.conv1, weights.conv1B, MelFrames, state); err != nil {
 		return err
 	}
-	if err := w.rows(encoderRows{kind: rowsLowerTime, src: w.conv1, dst: w.convColumns, frames: MelFrames, outRows: AudioFrames, width: state}, AudioFrames); err != nil {
-		return err
-	}
-	if err := w.gemm.Mul(w.conv2Weight, dst, state, w.convColumns, state*3, AudioFrames); err != nil {
+	if err := w.gemm.Mul(w.conv2Weight, dst, state, w.conv1Pad, 2*state, AudioFrames); err != nil {
 		return err
 	}
 	if trace != nil {
@@ -274,8 +281,8 @@ func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) e
 	if w.gemm == nil {
 		return errEncoderGEMM
 	}
-	if w.conv1Weight.Pack(weights.conv1W, MelBins*3, true) != nil ||
-		w.conv2Weight.Pack(weights.conv2W, state*3, true) != nil {
+	if w.conv1Weight.Pack(tapMajor(weights.conv1W, state, MelBins), MelBins*3, true) != nil ||
+		w.conv2Weight.Pack(tapMajor(weights.conv2W, state, state), state*3, true) != nil {
 		return errEncoderGEMM
 	}
 	for i, block := range weights.blocks {
@@ -312,6 +319,21 @@ func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) e
 	}
 	w.packedModel = model
 	return nil
+}
+
+// tapMajor reorders PyTorch Conv1d weights [out][in][3] into [out][3][in],
+// matching the contiguous three-row input windows. It allocates once per
+// model binding.
+func tapMajor(weights []float32, out, in int) []float32 {
+	reordered := make([]float32, len(weights))
+	for o := 0; o < out; o++ {
+		for c := 0; c < in; c++ {
+			for j := 0; j < 3; j++ {
+				reordered[o*in*3+j*in+c] = weights[o*in*3+c*3+j]
+			}
+		}
+	}
+	return reordered
 }
 
 func addRowBias(values, bias []float32, rows, width int) {
@@ -421,8 +443,8 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 
 func (w *EncoderWorkspace) valid() bool {
 	state := w.dims.AudioState
-	return state > 0 && len(w.conv1) >= MelFrames*state &&
-		len(w.convColumns) >= AudioFrames*state*3 &&
+	return state > 0 && len(w.conv1) >= MelFrames*state && len(w.conv1Pad) >= (MelFrames+1)*state &&
+		len(w.convColumns) >= (MelFrames+2)*MelBins &&
 		len(w.normalized) >= AudioFrames*state &&
 		len(w.q) >= AudioFrames*state &&
 		len(w.k) >= AudioFrames*state && len(w.v) >= AudioFrames*state &&
