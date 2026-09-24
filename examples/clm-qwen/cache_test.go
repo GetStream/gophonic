@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"slices"
 	"testing"
-
 )
 
 // TestEmbeddingCacheMatchesModel drives random inserts, hits, and evictions

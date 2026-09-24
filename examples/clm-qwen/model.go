@@ -54,21 +54,21 @@ type modelConfig struct {
 }
 
 type hfConfig struct {
-	ModelType         string          `json:"model_type"`
-	HiddenSize        int             `json:"hidden_size"`
-	Layers            int             `json:"num_hidden_layers"`
-	Heads             int             `json:"num_attention_heads"`
-	KVHeads           int             `json:"num_key_value_heads"`
-	HeadDim           int             `json:"head_dim"`
-	Intermediate      int             `json:"intermediate_size"`
-	Vocab             int             `json:"vocab_size"`
-	MaxPositions      int             `json:"max_position_embeddings"`
-	RMSNormEps        float64         `json:"rms_norm_eps"`
-	RopeTheta         float64         `json:"rope_theta"`
-	RopeScaling       any             `json:"rope_scaling"`
-	AttentionBias     bool            `json:"attention_bias"`
-	HiddenAct         string          `json:"hidden_act"`
-	UseSlidingWindow  bool            `json:"use_sliding_window"`
+	ModelType        string  `json:"model_type"`
+	HiddenSize       int     `json:"hidden_size"`
+	Layers           int     `json:"num_hidden_layers"`
+	Heads            int     `json:"num_attention_heads"`
+	KVHeads          int     `json:"num_key_value_heads"`
+	HeadDim          int     `json:"head_dim"`
+	Intermediate     int     `json:"intermediate_size"`
+	Vocab            int     `json:"vocab_size"`
+	MaxPositions     int     `json:"max_position_embeddings"`
+	RMSNormEps       float64 `json:"rms_norm_eps"`
+	RopeTheta        float64 `json:"rope_theta"`
+	RopeScaling      any     `json:"rope_scaling"`
+	AttentionBias    bool    `json:"attention_bias"`
+	HiddenAct        string  `json:"hidden_act"`
+	UseSlidingWindow bool    `json:"use_sliding_window"`
 }
 
 // LoadModel reads an official Qwen3 safetensors snapshot directory
