@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GetStream/gophonic/internal/whispergemm"
 	"io"
 	"math"
 	"os"
@@ -72,8 +73,11 @@ type bundleManifest struct {
 	Tensors    []tensorRecord `json:"tensors"`
 }
 
+// linear holds torch.nn.Linear weights packed once for batched GEMM. The
+// row-major [out,in] checkpoint tensor is packed as the transposed right
+// matrix, so each call multiplies all rows of a batch against one weight read.
 type linear struct {
-	weight []float32 // row-major [out,in], matching torch.nn.Linear.weight
+	packed *whispergemm.PackedB // K=in, N=out
 	bias   []float32
 	in     int
 	out    int
@@ -161,14 +165,14 @@ func ReadWeights(r io.Reader) (*HeadPair, error) {
 		if dst.in, err = readLinear(r, &manifest, &recordIndex, name+".inp", manifest.Config.EncoderDim, manifest.Config.Width); err != nil {
 			return err
 		}
-		seenParams += int64(len(dst.in.weight) + len(dst.in.bias))
+		seenParams += int64(dst.in.in*dst.in.out + len(dst.in.bias))
 		dst.hidden = make([]block, manifest.Config.Depth-2)
 		for i := range dst.hidden {
 			p := fmt.Sprintf("%s.hidden.%d", name, i)
 			if dst.hidden[i].linear, err = readLinear(r, &manifest, &recordIndex, p, manifest.Config.Width, manifest.Config.Width); err != nil {
 				return err
 			}
-			seenParams += int64(len(dst.hidden[i].linear.weight) + len(dst.hidden[i].linear.bias))
+			seenParams += int64(dst.hidden[i].linear.in*dst.hidden[i].linear.out + len(dst.hidden[i].linear.bias))
 			if manifest.Config.LayerNorm {
 				if dst.hidden[i].normW, err = readTensor(r, &manifest, &recordIndex, p+".norm.weight", []int{manifest.Config.Width}); err != nil {
 					return err
@@ -182,7 +186,7 @@ func ReadWeights(r io.Reader) (*HeadPair, error) {
 		if dst.out, err = readLinear(r, &manifest, &recordIndex, name+".out", manifest.Config.Width, manifest.Config.ProjectionDim); err != nil {
 			return err
 		}
-		seenParams += int64(len(dst.out.weight) + len(dst.out.bias))
+		seenParams += int64(dst.out.in*dst.out.out + len(dst.out.bias))
 		return nil
 	}
 	if err := readHead("state_head", &state); err != nil {
@@ -298,7 +302,14 @@ func readLinear(r io.Reader, m *bundleManifest, index *int, prefix string, in, o
 	if err != nil {
 		return linear{}, err
 	}
-	return linear{weight: w, bias: b, in: in, out: out}, nil
+	packed, err := whispergemm.NewPackedB(in, out)
+	if err != nil {
+		return linear{}, fmt.Errorf("clm: %s: %w", prefix, err)
+	}
+	if err := packed.Pack(w, in, true); err != nil {
+		return linear{}, fmt.Errorf("clm: %s: %w", prefix, err)
+	}
+	return linear{packed: packed, bias: b, in: in, out: out}, nil
 }
 
 func readTensor(r io.Reader, m *bundleManifest, index *int, name string, shape []int) ([]float32, error) {
@@ -381,19 +392,38 @@ func (h *HeadPair) Provenance() Provenance {
 
 // NewWorkspace allocates reusable scratch for one caller. A workspace must not
 // be used by concurrent calls; the immutable HeadPair can be shared freely.
+// Batch buffers grow to the largest candidate count seen; warmed calls up to
+// that count allocate nothing.
 func (h *HeadPair) NewWorkspace() *Workspace {
 	if h == nil {
 		return nil
 	}
-	return &Workspace{head: h, input: make([]float32, h.config.EncoderDim), hiddenA: make([]float32, h.config.Width), hiddenB: make([]float32, h.config.Width), stateProjection: make([]float32, h.config.ProjectionDim), actionProjection: make([]float32, h.config.ProjectionDim)}
+	ws := &Workspace{head: h, stateProjection: make([]float32, h.config.ProjectionDim)}
+	ws.grow(1)
+	return ws
 }
 
 // Workspace is caller-owned scratch for allocation-free head projection and
 // scoring after construction. It is tied to the HeadPair that created it.
 type Workspace struct {
-	head                              *HeadPair
-	input, hiddenA, hiddenB           []float32
-	stateProjection, actionProjection []float32
+	head                    *HeadPair
+	rows                    int
+	input, hiddenA, hiddenB []float32 // [rows][dim]
+	projected               []float32 // [rows][ProjectionDim]
+	stateProjection         []float32
+	one                     [1][]float32
+}
+
+func (ws *Workspace) grow(rows int) {
+	if rows <= ws.rows {
+		return
+	}
+	c := ws.head.config
+	ws.rows = rows
+	ws.input = make([]float32, rows*c.EncoderDim)
+	ws.hiddenA = make([]float32, rows*c.Width)
+	ws.hiddenB = make([]float32, rows*c.Width)
+	ws.projected = make([]float32, rows*c.ProjectionDim)
 }
 
 // ProjectStateInto applies the state MLP to one raw encoder embedding, L2
@@ -403,7 +433,7 @@ func (h *HeadPair) ProjectStateInto(embedding, dst []float32, ws *Workspace) err
 	if err := h.checkWorkspace(embedding, dst, ws); err != nil {
 		return err
 	}
-	return h.projectInto(&h.state, embedding, dst, ws)
+	return h.projectOne(&h.state, embedding, dst, ws)
 }
 
 // ProjectActionInto is the action-head counterpart to ProjectStateInto.
@@ -411,7 +441,7 @@ func (h *HeadPair) ProjectActionInto(embedding, dst []float32, ws *Workspace) er
 	if err := h.checkWorkspace(embedding, dst, ws); err != nil {
 		return err
 	}
-	return h.projectInto(&h.action, embedding, dst, ws)
+	return h.projectOne(&h.action, embedding, dst, ws)
 }
 
 // ScoreInto computes scale*cosine(state, action)/temperature for every raw
@@ -436,11 +466,23 @@ func (h *HeadPair) ScoreInto(stateEmbedding []float32, actionEmbeddings [][]floa
 		return err
 	}
 	for i, a := range actionEmbeddings {
-		if err := h.ProjectActionInto(a, ws.actionProjection, ws); err != nil {
-			return fmt.Errorf("clm: action embedding %d: %w", i, err)
+		if len(a) != h.config.EncoderDim {
+			return fmt.Errorf("clm: action embedding %d has %d values, want %d", i, len(a), h.config.EncoderDim)
 		}
-		cos := dot32(ws.stateProjection, ws.actionProjection)
-		scores[i] = (h.scale * cos) / temperature
+	}
+	// All candidates pass through each head layer together, so every packed
+	// weight matrix is read once per call rather than once per candidate.
+	const chunk = 64
+	p := h.config.ProjectionDim
+	for start := 0; start < len(actionEmbeddings); start += chunk {
+		batch := actionEmbeddings[start:min(start+chunk, len(actionEmbeddings))]
+		if err := h.projectRows(&h.action, batch, ws); err != nil {
+			return fmt.Errorf("clm: action embeddings %d-%d: %w", start, start+len(batch)-1, err)
+		}
+		for i := range batch {
+			cos := dot32(ws.stateProjection, ws.projected[i*p:(i+1)*p])
+			scores[start+i] = (h.scale * cos) / temperature
+		}
 	}
 	return nil
 }
@@ -461,39 +503,69 @@ func (h *HeadPair) checkWorkspace(input, dst []float32, ws *Workspace) error {
 	return nil
 }
 
-func (h *HeadPair) projectInto(head *projectionHead, embedding, dst []float32, ws *Workspace) error {
-	if err := normalizeEncoderInto(embedding, ws.input); err != nil {
-		return err
+func (h *HeadPair) projectOne(head *projectionHead, embedding, dst []float32, ws *Workspace) error {
+	ws.one[0] = embedding
+	err := h.projectRows(head, ws.one[:], ws)
+	ws.one[0] = nil
+	if err == nil {
+		copy(dst, ws.projected[:h.config.ProjectionDim])
 	}
-	linearVector(&head.in, ws.input, ws.hiddenA)
-	activateInPlace(head.activation, ws.hiddenA)
-	cur, next := ws.hiddenA, ws.hiddenB
-	for i := range head.hidden {
-		layer := &head.hidden[i]
-		linearVector(&layer.linear, cur, next)
-		if head.layerNorm {
-			layerNormInPlace(next, layer.normW, layer.normB)
+	return err
+}
+
+// projectRows applies head to every embedding and leaves the L2-normalized
+// projections in ws.projected, one ProjectionDim row per embedding.
+func (h *HeadPair) projectRows(head *projectionHead, embeddings [][]float32, ws *Workspace) error {
+	n := len(embeddings)
+	ws.grow(n)
+	c := h.config
+	for i, e := range embeddings {
+		if err := normalizeEncoderInto(e, ws.input[i*c.EncoderDim:(i+1)*c.EncoderDim]); err != nil {
+			return err
 		}
-		activateInPlace(head.activation, next)
-		if head.residual {
-			for j := range next {
-				next[j] += cur[j]
+	}
+	linearRows(&head.in, ws.input, ws.hiddenA, n)
+	for i := range n {
+		activateInPlace(head.activation, ws.hiddenA[i*c.Width:(i+1)*c.Width])
+	}
+	cur, next := ws.hiddenA, ws.hiddenB
+	for l := range head.hidden {
+		layer := &head.hidden[l]
+		linearRows(&layer.linear, cur, next, n)
+		for i := range n {
+			row := next[i*c.Width : (i+1)*c.Width]
+			if head.layerNorm {
+				layerNormInPlace(row, layer.normW, layer.normB)
+			}
+			activateInPlace(head.activation, row)
+			if head.residual {
+				for j, v := range cur[i*c.Width : (i+1)*c.Width] {
+					row[j] += v
+				}
 			}
 		}
 		cur, next = next, cur
 	}
-	linearVector(&head.out, cur, dst)
-	return normalizeProjectedInPlace(dst)
+	linearRows(&head.out, cur, ws.projected, n)
+	for i := range n {
+		if err := normalizeProjectedInPlace(ws.projected[i*c.ProjectionDim : (i+1)*c.ProjectionDim]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func linearVector(l *linear, input, output []float32) {
-	for row := 0; row < l.out; row++ {
-		weights := l.weight[row*l.in : (row+1)*l.in]
-		var sum float32 = l.bias[row]
-		for i, x := range input {
-			sum += weights[i] * x
+// linearRows computes output[r] = input[r] · Wᵀ + bias for rows packed at
+// the layer's input and output widths.
+func linearRows(l *linear, input, output []float32, rows int) {
+	if err := l.packed.Mul(output, l.out, input, l.in, rows); err != nil {
+		panic("clm: head GEMM: " + err.Error())
+	}
+	for r := range rows {
+		out := output[r*l.out : (r+1)*l.out]
+		for i, b := range l.bias {
+			out[i] += b
 		}
-		output[row] = sum
 	}
 }
 

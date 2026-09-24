@@ -7,8 +7,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/townsendmerino/goinfer/tokenizer"
 )
 
 var qwenTokenizerBenchIDs []int
@@ -19,10 +17,6 @@ func BenchmarkQwenTokenizerEncodeInto(b *testing.B) {
 		b.Skip("set GOPHONIC_QWEN3_TOKENIZER to a local Qwen3 tokenizer directory")
 	}
 	tk, err := LoadQwenTokenizer(dir)
-	if err != nil {
-		b.Fatal(err)
-	}
-	baseline, err := tokenizer.Load(dir)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -52,18 +46,6 @@ func BenchmarkQwenTokenizerEncodeInto(b *testing.B) {
 					}
 				}
 				qwenTokenizerBenchIDs = dst
-			})
-			b.Run("goinfer_encode", func(b *testing.B) {
-				b.ReportAllocs()
-				b.SetBytes(int64(len(tc.text)))
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					ids, err := baseline.Encode(tc.text, false)
-					if err != nil {
-						b.Fatal(err)
-					}
-					qwenTokenizerBenchIDs = ids
-				}
 			})
 		})
 	}

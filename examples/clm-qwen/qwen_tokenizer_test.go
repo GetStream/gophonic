@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/townsendmerino/goinfer/tokenizer"
+	"github.com/thesyncim/vibejson"
 )
 
 func TestQwenTokenizerHFTokenIDGoldens(t *testing.T) {
@@ -44,41 +44,39 @@ func TestQwenTokenizerHFTokenIDGoldens(t *testing.T) {
 	}
 }
 
-func TestQwenTokenizerParityWithGoInfer(t *testing.T) {
+// TestQwenTokenizerOfficialGoldens compares Unicode, whitespace, special-token,
+// and long inputs with IDs produced by the official Hugging Face tokenizer
+// (testdata/qwen3_tokenizer_goldens.json records the exact source version).
+func TestQwenTokenizerOfficialGoldens(t *testing.T) {
 	dir := qwenTokenizerDir(t)
 	ours, err := LoadQwenTokenizer(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reference, err := tokenizer.Load(dir)
+	raw, err := os.ReadFile("testdata/qwen3_tokenizer_goldens.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := []string{
-		"",
-		"hello",
-		"we're READY, I'M here!",
-		"e\u0301 cafe\u0301 — 你好，世界🙂",
-		"ASCII\tspace  \r\n line\n12345 ١٢٣ Ⅷ",
-		" punctuation!!!\n\nNext\rEND",
-		"A<|im_start|>user\nHi<|im_end|>",
-		"<|vision_start|>hello<|vision_end|> <|audio|>",
-		"literal <|im_start|x> and partial <|im_",
-		strings.Repeat("Qwen3 state/action 2026!\r\n", 500),
-		strings.Repeat("x", 4097),
+	var goldens struct {
+		Cases []struct {
+			Text string `json:"text"`
+			IDs  []int  `json:"ids"`
+		} `json:"cases"`
+	}
+	if err := vibejson.Unmarshal(raw, &goldens); err != nil {
+		t.Fatal(err)
+	}
+	if len(goldens.Cases) == 0 {
+		t.Fatal("no golden cases")
 	}
 	var ws TokenizerWorkspace
-	for _, text := range cases {
-		got, err := ours.EncodeInto(text, make([]int, 0, len(text)*4+32), &ws)
+	for _, tc := range goldens.Cases {
+		got, err := ours.EncodeInto(tc.Text, make([]int, 0, len(tc.Text)*4+32), &ws)
 		if err != nil {
-			t.Fatalf("EncodeInto(%q): %v", shortText(text), err)
+			t.Fatalf("EncodeInto(%q): %v", shortText(tc.Text), err)
 		}
-		want, err := reference.Encode(text, false)
-		if err != nil {
-			t.Fatalf("GoInfer Encode(%q): %v", shortText(text), err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("token ids differ for %q: got %v, want %v", shortText(text), got[:min(len(got), 24)], want[:min(len(want), 24)])
+		if len(got) != len(tc.IDs) || (len(got) != 0 && !reflect.DeepEqual(got, tc.IDs)) {
+			t.Fatalf("token ids differ for %q: got %v, want %v", shortText(tc.Text), got[:min(len(got), 24)], tc.IDs[:min(len(tc.IDs), 24)])
 		}
 	}
 }

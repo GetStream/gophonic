@@ -24,19 +24,20 @@ func main() {
 }
 
 func run() error {
-	qwenPath := flag.String("qwen", "", "official Qwen3-8B safetensors directory or GGUF path")
+	qwenPath := flag.String("qwen", "", "official Qwen3-8B safetensors directory")
 	headPath := flag.String("head", "", "converted CLM .gclm head bundle")
 	state := flag.String("state", "", "state text to rank candidate actions against")
-	quant := flag.String("quant", "", "Qwen CPU quantization: empty (FP32) or int8")
+	weights := flag.String("weights", "", "projection weights: f16 (exact BF16, default) or int8")
+	threads := flag.Int("threads", 0, "worker threads (0 selects a default)")
 	flag.Parse()
 	if *qwenPath == "" || *headPath == "" || *state == "" || flag.NArg() == 0 {
-		return errors.New("usage: rank -qwen PATH -head PATH -state TEXT [-quant int8] CANDIDATE...")
+		return errors.New("usage: rank -qwen PATH -head PATH -state TEXT [-weights int8] CANDIDATE...")
 	}
 	head, err := clm.Load(*headPath)
 	if err != nil {
 		return fmt.Errorf("load CLM head: %w", err)
 	}
-	encoder, err := clmqwen.OpenWithOptions(*qwenPath, clmqwen.Options{Quant: *quant})
+	encoder, err := clmqwen.OpenWithOptions(*qwenPath, clmqwen.Options{Weights: *weights, Threads: *threads})
 	if err != nil {
 		return fmt.Errorf("load Qwen3: %w", err)
 	}

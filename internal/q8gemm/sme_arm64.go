@@ -7,8 +7,18 @@ package q8gemm
 
 import "sync/atomic"
 
+// smeMulF16 accumulates panels 64-column panels of packed int8 weights against
+// up to 16 packed FP16 activation rows in FP32, multiplies each output by its
+// column scale and row scale, and stores cols valid columns per row at
+// strideBytes intervals.
+//
 //go:noescape
-func smeMul16x64(q *int8, k, panels int, activation *float32, dst *float32, n, rows int) (retries int)
+func smeMulF16(q *int8, kPairs, panels int, activation *uint16, dst *float32, cols, rows, strideBytes int, colScales, rowScales *float32) (retries int)
+
+// smeMulF16W is smeMulF16 for FP16 weights in the same panel layout.
+//
+//go:noescape
+func smeMulF16W(w *uint16, kPairs, panels int, activation *uint16, dst *float32, cols, rows, strideBytes int, colScales, rowScales *float32) (retries int)
 
 //go:noescape
 func smeVectorBytes() int

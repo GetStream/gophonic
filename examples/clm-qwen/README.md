@@ -1,13 +1,16 @@
 # Local Qwen3-8B embeddings for CLM
 
-This optional nested module connects `gophonic/clm` to a pure-Go CPU Qwen3
-runtime. It keeps the large text-decoder dependency out of gophonic's core
-module. `Open` loads an official Qwen3-8B safetensors snapshot directory or a
-GGUF with matching geometry; `Embed` tokenizes text, keeps the final 2048
-tokens, runs Qwen3's final hidden state at the last token, then writes
-the raw 4096-value hidden vector. The CLM head normalizes it once. Both state
-and action roles use the same encoder. The CLM heads and scoring remain inside
-gophonic.
+This optional nested module connects `gophonic/clm` to a pure-Go CPU Qwen3-8B
+encoder. `Open` loads an official Qwen3-8B safetensors snapshot directory;
+`Embed` tokenizes text, keeps the final 2048 tokens, runs Qwen3 to the
+post-final-norm hidden state of the last token, and writes the raw
+4096-value vector. The CLM head normalizes it once. Both state and action
+roles use the same encoder.
+
+There is no cgo and no third-party inference runtime: the safetensors loader,
+tokenizer, transformer, and matrix kernels are local. The only dependencies are
+gophonic, `golang.org/x/text` (NFC normalization), and
+[`vibejson`](https://github.com/thesyncim/vibejson) for JSON.
 
 ## Run a local ranking
 
@@ -23,91 +26,63 @@ CGO_ENABLED=0 GOEXPERIMENT=simd go run ./cmd/rank \
   'Photosynthesis in plants.'
 ```
 
-The command prints candidates in descending probability order. `-quant int8`
-is an opt-in weight-only quantized mode. On the current 64 GB development
-machine, the full FP32 Qwen load is refused by the decoder's memory-fit guard.
-The int8 model loads and runs locally, but its ranking accuracy still needs a
-corpus gate.
+The command prints candidates in descending probability order.
+`-weights int8` halves weight memory at a measurable accuracy cost, and
+`-threads N` overrides the worker count.
 
-This adapter is built against a pinned commit of
-[`townsendmerino/goinfer`](https://github.com/townsendmerino/goinfer), whose
-[`HiddenLast`](https://github.com/townsendmerino/goinfer/blob/2f2b429898b2819434c08c51f06b01b0be391ba2/decoder/embed.go)
-returns the post-final-norm last-token state before the language-model head.
-The adapter checks Qwen3-8B's hidden size and layer/head geometry at load.
-Supply the exact [`Qwen/Qwen3-8B`](https://huggingface.co/Qwen/Qwen3-8B)
-checkpoint for the published CLM head. `Open` uses full FP32 weights.
-`OpenWithOptions(path, Options{Quant: "int8"})` reduces the safetensors weight
-footprint at the cost of altered embeddings. Int8 uses gophonic's reusable
-Qwen3 workspace. On Apple M4 CPUs with 512-bit SME, all input lengths use
-a packed Q8 matrix kernel, processing prompts longer than 16 tokens in tiles.
-The owning encoder releases its original Q8 projection arrays after packing
-all layers. Other platforms retain the portable batched path. FP32 continues to use
-GoInfer's reference forward path. Quantized weights and GGUF checkpoints need
-a separate ranking-accuracy gate against the reference.
+## Precision
 
-CLM's upstream reference uses vLLM pooling. Token IDs, 4096-value embeddings,
-and final rankings must be compared with that reference before claiming parity.
-The int8 fast-path gate compares one-token and 12-token outputs to GoInfer on the
-official checkpoint. The FP32 CLM-ranking gate covers one short input; a
-corpus-level ranking evaluation is still needed.
+By default every BF16 checkpoint weight is stored exactly (FP16 with a
+power-of-two row scale, 12.9 GiB). Activations entering each projection are
+rounded to FP16 after an exact per-row power-of-two scale, and all products
+accumulate in FP32. Against the official BF16 PyTorch hidden state for
+`hello`, the default path reaches cosine 0.99991 (llama.cpp Q8_0: 0.99929),
+and the pinned CLM ranking matches the official BF16 probabilities within
+7.1e-5. `Options{Weights: "int8"}` (6.5 GiB) reaches cosine 0.99737 and
+probabilities within 1.0e-3.
 
-`Encoder.EmbedTokensInto` accepts pretokenized IDs and caller-owned output.
-For a Hugging Face Qwen3 tokenizer, both it and public text `Encoder.Embed`
-perform zero heap allocations after their workspaces have warmed to the
-longest input. The GGUF tokenizer uses its existing allocation behavior.
-Calls on one encoder are serialized; use a separate encoder per concurrent lane.
+## Performance
 
-On an Apple M4 Max with `GOMAXPROCS=1`, an isolated 30-call run of the
-owned packed encoder measured 338 ms for one token and 382 ms for 12 tokens,
-with 0 B/op and 0 allocs/op. Earlier 15-call public text runs averaged 392 ms
-and 398 ms; a prior run averaged 502 ms, so latency varies between processes.
-The pinned CLM ranking matches the existing int8 path. A llama.cpp Q8_0 CPU
-prefill benchmark measured 778 ms for 12 random tokens, using a different
-quantized weight format and token contents. The SME path repacks weights once
-(about 5–8 s). Releasing the owning decoder's original Q8 projections lowered
-Go heap from 14,457 to 7,828 MiB after collection. Peak loading memory
-remains high, and sampled process RSS did not decrease after collection. See [the performance report](../../docs/clm-performance.md) for the measurement details. The
-100 ms single-core target remains open.
+On an Apple M4 Max CPU, one 12-token text embeds in 69 ms, a 70-token text in
+342 ms, and 16 short texts in 1.08 s, all with zero warmed allocations; the
+model loads in about 3 s. llama.cpp's best CPU run takes 90 ms for 12 tokens
+and 487 ms for 64. Repeated texts are served from an exact embedding cache:
+re-ranking 16 cached candidates takes 1.65 ms. See
+[the performance report](../../docs/clm-performance.md).
+
+- **Kernels.** On CPUs with 512-bit SME (Apple M4), projections run a
+  16-row × 64-column FP16 `FMOPA` tile. Other CPUs use a portable panel kernel
+  (NEON on arm64 with `GOEXPERIMENT=simd`); it is correct but much slower.
+- **Threads.** `Options.Threads` defaults to min(performance cores,
+  `GOMAXPROCS`, 8). Workers persist for the encoder's lifetime and spin for
+  1 ms between operations before parking; call `Close` to stop them.
+- **Batching.** Texts in one `Embed` call share 16-row tiles, up to 512
+  tokens per forward pass, so many short candidates cost far less than
+  separate calls.
+- **Cache.** `Options.CacheEntries` sizes the exact embedding cache (default
+  4096 entries, 16 KiB each; negative disables). `CacheStats` reports hits.
+
+Calls on one `Encoder` are serialized; use one encoder per concurrent lane.
+For lower-level use, `LoadModel`, `NewEvaluator`, and
+`Evaluator.HiddenLastBatchInto` evaluate caller-tokenized batches directly.
+`Encoder.EmbedTokensInto` accepts pretokenized IDs.
 
 ## Reference gates
 
-Run the int8 fast evaluator's official-checkpoint parity and allocation gates with:
+The unit tests build a small random Qwen3 checkpoint, load it through the
+real safetensors loader, and compare every path (both weight formats, SME and
+portable kernels, 1–8 workers, packed batches) with a float64 reference
+implementation. The official-checkpoint gates are opt-in:
 
 ```sh
-GOPHONIC_QWEN3_FAST_MODEL=/path/to/Qwen3-8B \
-CGO_ENABLED=0 GOEXPERIMENT=simd go test -run '^TestFastQwenOfficialParity$' -v
-```
-
-
-The SME gates use the same official snapshot and the converted CLM head:
-
-```sh
-GOPHONIC_QWEN3_FAST_MODEL=/path/to/Qwen3-8B \
-GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm \
-CGO_ENABLED=0 GOEXPERIMENT=simd go test \
-  -run '^TestOfficialSME' \
-  -bench '^BenchmarkOfficialQwenSMEPublicTwelveTokens$' \
-  -benchtime=15x -count=1 -v
-```
-
-The tests assert real SME dispatch, agreement with the existing int8 decoder
-on the official Qwen checkpoint, CLM ranking order and probabilities, and zero
-warmed allocations. On a CPU without 512-bit SME, they skip and the existing
-batched CPU path remains available.
-
-The opt-in `TestOfficialCLMRanking` runs the full Go FP32 Qwen decoder and
-converted head against the official BF16 Qwen + PyTorch head output. Regenerate
-the three golden probabilities with `tools/reference_rank.py`. On the development
-Mac, the full Go FP32 path needed `GOINFER_NO_FIT_GUARD=1` because the runtime
-prices a maximum-length KV cache at load even though this test uses short text.
-That override was used only for this measured test. The reference test passes
-with probabilities within 0.001 and identical candidate order. One short
-example cannot establish corpus-level ranking accuracy.
-
-```sh
-GOINFER_NO_FIT_GUARD=1 \
-GOPHONIC_QWEN3_TOKENIZER=/path/to/Qwen3-8B \
 GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B \
+GOPHONIC_QWEN3_TOKENIZER=/path/to/Qwen3-8B \
+GOPHONIC_QWEN3_HELLO_REFERENCE=/path/to/hello.f32 \
 GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm \
-CGO_ENABLED=0 GOEXPERIMENT=simd go test -run TestOfficial -v ./...
+CGO_ENABLED=0 GOEXPERIMENT=simd go test -run 'TestOfficial|TestQwenTokenizer' -v
 ```
+
+`tools/reference_hidden.py MODEL hello.f32` writes the BF16 reference vector,
+and `tools/reference_rank.py` regenerates the golden CLM probabilities. The
+tokenizer goldens in `testdata/` were produced by the official Hugging Face
+tokenizer. One short ranking cannot establish corpus-level accuracy.

@@ -53,12 +53,15 @@ if err := head.ScoreInto(stateEmbedding, actionEmbeddings, 1, scores, workspace)
 ```
 
 `ScoreInto` returns scaled cosine logits divided by the supplied temperature.
+All candidates pass through each head layer as one batched matrix product
+(SME FP32 on Apple M4), so the 75 MB head is read once per call rather than
+once per candidate.
 `Engine.RankInto` also accepts an `Embedder` implementation, calls it once for
 the state and once for the action batch, then returns candidates sorted by
 softmax probability. The callback receives caller-owned output buffers, and
 `RankInto` reuses workspace storage without allocations after setup. Workspace
 allocation is capped at 256 MiB. Allocations made inside a concrete embedder are
-separate; the local GoInfer adapter is maintained in [`examples/clm-qwen`](../examples/clm-qwen).
+separate; the local Qwen3-8B encoder is maintained in [`examples/clm-qwen`](../examples/clm-qwen).
 
 The reference API's HTTP embedder sends `truncate_prompt_tokens` to vLLM and
 normalizes the returned vectors. vLLM's default truncation keeps the last

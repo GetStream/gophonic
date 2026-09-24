@@ -3,31 +3,18 @@
 
 package q8gemm
 
-func scalarMul(dst, activation []float32, rows int, w *Weights) {
-	for panel := range w.panels {
-		panelBase := panel * w.k * OutputPanel
-		for colBase := 0; colBase < OutputPanel; colBase += 16 {
-			col := panel*OutputPanel + colBase
-			if col >= w.n {
-				break
+// scalarMulPanels is the portable oracle for panels [p0, p1): it widens the
+// packed FP16 activations and weights exactly, accumulates in FP32, and
+// applies the column and row scales like the SME kernel.
+func scalarMulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int) {
+	for col := p0 * OutputPanel; col < min(p1*OutputPanel, w.n); col++ {
+		for row := range ws.rows {
+			var sum float32
+			for k := range w.k {
+				a := f16ToF32(ws.activation[(k/2)*2*ActivationRows+row*2+k%2])
+				sum += a * w.at(col, k)
 			}
-			var sums [ActivationRows][16]float32
-			for kk := range w.k {
-				weights := w.q[panelBase+kk*OutputPanel+colBase : panelBase+kk*OutputPanel+colBase+16]
-				acts := activation[kk*ActivationRows : (kk+1)*ActivationRows]
-				for lane, q := range weights {
-					weight := float32(q)
-					for row := range ActivationRows {
-						sums[row][lane] += acts[row] * weight
-					}
-				}
-			}
-			for row := range rows {
-				out := dst[row*w.n+col : row*w.n+col+min(16, w.n-col)]
-				for lane := range out {
-					out[lane] = sums[row][lane] * w.scales[col+lane]
-				}
-			}
+			dst[row*stride+col] = sum * w.scales[col] * ws.rowInverse[row]
 		}
 	}
 }

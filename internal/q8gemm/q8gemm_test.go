@@ -53,10 +53,9 @@ func TestSMEKernelMatchesScalarOracle(t *testing.T) {
 			if err := MulInto(got, x, rows, w, ws); err != nil {
 				t.Fatal(err)
 			}
-			activation := make([]float32, k*ActivationRows)
-			packActivations(activation, x, rows, k)
-			scalarMul(want, activation, rows, w)
-			assertClose(t, got, want, 5e-5)
+			scalarMulPanels(want, n, ws, w, 0, w.panels)
+			// Same exact products, different FP32 summation order.
+			assertClose(t, got, want, 2e-5*math.Sqrt(float64(k)))
 		})
 	}
 }
@@ -71,13 +70,15 @@ func checkShape(t *testing.T, rows, k, n int) {
 		for col := range n {
 			var sum, sumAbs float64
 			for kk := range k {
-				v := float64(x[row*k+kk]) * float64(w.qAt(col, kk))
+				v := float64(x[row*k+kk]) * float64(w.at(col, kk))
 				sum += v
 				sumAbs += math.Abs(v)
 			}
 			want := float32(sum * float64(w.scales[col]))
 			delta := math.Abs(float64(got[row*n+col] - want))
-			bound := 5e-5 * math.Max(1, sumAbs*math.Abs(float64(w.scales[col])))
+			// FP16 activation rounding contributes at most 2^-11 of each
+			// product's magnitude, plus FP32 accumulation error.
+			bound := 1e-6 + (1.0/2048+1e-5)*sumAbs*math.Abs(float64(w.scales[col]))
 			if delta > bound {
 				t.Fatalf("rows=%d K=%d N=%d at [%d,%d]: got %.9g, want %.9g, error %.3g > %.3g", rows, k, n, row, col, got[row*n+col], want, delta, bound)
 			}
@@ -114,9 +115,6 @@ func fixture(t *testing.T, rows, k, n int, seed int64) (*Weights, *Workspace, []
 	return w, ws, x, make([]float32, rows*n)
 }
 
-func (w *Weights) qAt(row, k int) int8 {
-	return w.q[(row/OutputPanel)*w.k*OutputPanel+k*OutputPanel+row%OutputPanel]
-}
 
 func assertClose(t *testing.T, got, want []float32, relativeTolerance float64) {
 	t.Helper()
@@ -146,4 +144,262 @@ func itoa(v int) string {
 		v /= 10
 	}
 	return string(buf[i:])
+}
+
+func TestMulPanelsRangesAndStride(t *testing.T) {
+	const rows, k, n, stride = 11, 257, 197, 211
+	w, ws, x, full := fixture(t, rows, k, n, 7)
+	scaleRows := func() {
+		for row := range rows {
+			ws.SetRowScale(row, MaxAbs(x[row*k:(row+1)*k]))
+		}
+	}
+	if err := MulInto(full, x, rows, w, ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Prepare(rows, k); err != nil {
+		t.Fatal(err)
+	}
+	scaleRows()
+	for k0 := 0; k0 < k; k0 += 50 {
+		if err := ws.PackRange(x, k, k0, min(k, k0+50)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := make([]float32, (rows-1)*stride+n)
+	for i := range got {
+		got[i] = -7
+	}
+	for p := 0; p < w.Panels(); p++ {
+		if err := MulPanels(got, stride, ws, w, p, p+1, NewScratch(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for row := range rows {
+		assertClose(t, got[row*stride:row*stride+n], full[row*n:(row+1)*n], 1e-6)
+		if row+1 < rows {
+			for _, v := range got[row*stride+n : (row+1)*stride] {
+				if v != -7 {
+					t.Fatalf("row %d padding overwritten: %g", row, v)
+				}
+			}
+		}
+	}
+}
+
+func TestF16Conversion(t *testing.T) {
+	// Every FP16 value round-trips, and conversion rounds to nearest even.
+	for h := range 1 << 16 {
+		f := f16ToF32(uint16(h))
+		if f != f {
+			continue
+		}
+		if got := f32ToF16(f); got != uint16(h) && !(f == 0 && got&0x7fff == 0) {
+			t.Fatalf("f16 %#04x -> %g -> %#04x", h, f, got)
+		}
+	}
+	rng := rand.New(rand.NewSource(3))
+	for range 200000 {
+		f := float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(40)-25)))
+		h := f32ToF16(f)
+		got := float64(f16ToF32(h))
+		// No other FP16 value is closer.
+		for _, other := range []uint16{h - 1, h + 1} {
+			if o := float64(f16ToF32(other)); o == o && math.Abs(o-float64(f)) < math.Abs(got-float64(f)) {
+				t.Fatalf("%g rounded to %g, but %g is closer", f, got, o)
+			}
+		}
+	}
+}
+
+func TestRowScalingHandlesLargeAndTinyRows(t *testing.T) {
+	const k, n = 96, 64
+	w, ws, x, got := fixture(t, 3, k, n, 11)
+	for i := range k {
+		x[i] *= 1e6     // would overflow FP16 unscaled
+		x[k+i] *= 1e-7  // would be FP16 subnormal or zero unscaled
+		x[2*k+i] *= 0.5 // ordinary
+	}
+	if err := MulInto(got, x, 3, w, ws); err != nil {
+		t.Fatal(err)
+	}
+	for row := range 3 {
+		for col := range n {
+			var sum, sumAbs float64
+			for kk := range k {
+				v := float64(x[row*k+kk]) * float64(w.at(col, kk))
+				sum += v
+				sumAbs += math.Abs(v)
+			}
+			want := sum * float64(w.scales[col])
+			if d := math.Abs(float64(got[row*n+col]) - want); d > (1.0/2048)*sumAbs*float64(w.scales[col]) {
+				t.Fatalf("row %d col %d: got %g want %g", row, col, got[row*n+col], want)
+			}
+		}
+	}
+}
+
+func TestNEONPackMatchesScalarConversion(t *testing.T) {
+	rng := rand.New(rand.NewSource(5))
+	for _, k := range []int{1, 2, 7, 8, 9, 16, 31, 33, 100, 4096} {
+		for _, rows := range []int{1, 5, 16} {
+			x := make([]float32, rows*k)
+			for i := range x {
+				x[i] = float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(30)-15)))
+			}
+			x[rng.Intn(len(x))] = 7e5 // force a downscaled row
+			ws, _ := NewWorkspace(k)
+			if err := ws.Pack(x, rows, k); err != nil {
+				t.Fatal(err)
+			}
+			for row := range rows {
+				var want float32
+				for _, v := range x[row*k : (row+1)*k] {
+					want = max(want, float32(math.Abs(float64(v))))
+				}
+				if got := MaxAbs(x[row*k : (row+1)*k]); got != want {
+					t.Fatalf("k=%d row %d MaxAbs=%g want %g", k, row, got, want)
+				}
+				for kk := range k {
+					got := ws.activation[(kk/2)*2*ActivationRows+row*2+kk%2]
+					if want := f32ToF16(x[row*k+kk] * ws.rowScale[row]); got != want {
+						t.Fatalf("k=%d row %d col %d: packed %#04x want %#04x", k, row, kk, got, want)
+					}
+				}
+			}
+			for pair := range (k + 1) / 2 {
+				for _, v := range ws.activation[pair*2*ActivationRows+rows*2 : (pair+1)*2*ActivationRows] {
+					if v != 0 {
+						t.Fatalf("k=%d rows=%d pair %d has nonzero padding", k, rows, pair)
+					}
+				}
+			}
+			if k%2 == 1 {
+				for row := range rows {
+					if v := ws.activation[(k/2)*2*ActivationRows+row*2+1]; v != 0 {
+						t.Fatalf("odd K padding not zero: %#04x", v)
+					}
+				}
+			}
+		}
+	}
+	if !math.IsNaN(float64(MaxAbs([]float32{1, 2, float32(math.NaN()), 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}))) {
+		t.Fatal("MaxAbs dropped a NaN")
+	}
+}
+
+func TestF16WeightsExactBF16(t *testing.T) {
+	for _, shape := range [][3]int{{1, 7, 5}, {12, 65, 129}, {16, 256, 64}, {12, 4096, 1024}} {
+		rows, k, n := shape[0], shape[1], shape[2]
+		t.Run(shapeName(rows, k, n), func(t *testing.T) {
+			rng := rand.New(rand.NewSource(int64(k + n)))
+			bf := make([]uint16, k*n)
+			for i := range bf {
+				// Typical checkpoint magnitudes, with one large outlier per row.
+				v := float32(rng.NormFloat64() * 0.02)
+				if i%k == 3%k {
+					v = 1.5
+				}
+				bf[i] = uint16(math.Float32bits(v) >> 16)
+			}
+			w, err := NewWeightsF16(k, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rounded, err := w.PackBF16(bf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rounded != 0 {
+				t.Fatalf("%d BF16 weights were rounded", rounded)
+			}
+			for row := range n {
+				for kk := range k {
+					if got, want := w.at(row, kk)*w.scales[row], BF16ToF32(bf[row*k+kk]); got != want {
+						t.Fatalf("weight [%d,%d] = %g, want exact %g", row, kk, got, want)
+					}
+				}
+			}
+			ws, _ := NewWorkspace(k)
+			x := make([]float32, rows*k)
+			for i := range x {
+				x[i] = rng.Float32()*2 - 1
+			}
+			got := make([]float32, rows*n)
+			if err := MulInto(got, x, rows, w, ws); err != nil {
+				t.Fatal(err)
+			}
+			want := make([]float32, rows*n)
+			scalarMulPanels(want, n, ws, w, 0, w.panels)
+			for row := range rows {
+				for col := range n {
+					var exact, sumAbs float64
+					for kk := range k {
+						v := float64(x[row*k+kk]) * float64(BF16ToF32(bf[col*k+kk]))
+						exact += v
+						sumAbs += math.Abs(v)
+					}
+					i := row*n + col
+					if d := math.Abs(float64(got[i]) - exact); d > 1e-6+(1.0/2048+1e-5)*sumAbs {
+						t.Fatalf("[%d,%d] got %g, exact %g", row, col, got[i], exact)
+					}
+					if d := math.Abs(float64(got[i] - want[i])); d > 1e-5*math.Max(1, sumAbs) {
+						t.Fatalf("[%d,%d] SME %g differs from scalar %g", row, col, got[i], want[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestPortableKernelMatchesSME runs the no-SME path on this machine and
+// checks it against the exact oracle for both weight formats.
+func TestPortableKernelMatchesSME(t *testing.T) {
+	forcePortable = true
+	defer func() { forcePortable = false }()
+	for _, f16 := range []bool{false, true} {
+		for _, shape := range [][3]int{{1, 7, 5}, {12, 65, 129}, {16, 256, 200}} {
+			rows, k, n := shape[0], shape[1], shape[2]
+			rng := rand.New(rand.NewSource(int64(k * n)))
+			var w *Weights
+			if f16 {
+				bf := make([]uint16, k*n)
+				for i := range bf {
+					bf[i] = uint16(math.Float32bits(float32(rng.NormFloat64()*0.05)) >> 16)
+				}
+				w, _ = NewWeightsF16(k, n)
+				if _, err := w.PackBF16(bf); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				w, _, _, _ = fixture(t, rows, k, n, int64(k+n))
+			}
+			ws, _ := NewWorkspace(k)
+			if ws.act32 == nil || NewScratch(k) == nil {
+				t.Fatal("portable buffers were not allocated")
+			}
+			x := make([]float32, rows*k)
+			for i := range x {
+				x[i] = rng.Float32()*2 - 1
+			}
+			got := make([]float32, rows*n)
+			if err := MulInto(got, x, rows, w, ws); err != nil {
+				t.Fatal(err)
+			}
+			want := make([]float32, rows*n)
+			scalarMulPanels(want, n, ws, w, 0, w.panels)
+			for i := range got {
+				if d := math.Abs(float64(got[i] - want[i])); d > 1e-5*math.Max(1, math.Abs(float64(want[i]))*float64(k)) {
+					t.Fatalf("f16=%v %v: [%d] portable %g, oracle %g", f16, shape, i, got[i], want[i])
+				}
+			}
+			if allocs := testing.AllocsPerRun(5, func() {
+				if err := MulInto(got, x, rows, w, ws); err != nil {
+					panic(err)
+				}
+			}); allocs != 0 {
+				t.Fatalf("portable MulInto allocated %.1f times", allocs)
+			}
+		}
+	}
 }
