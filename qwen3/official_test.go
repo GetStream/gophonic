@@ -38,6 +38,14 @@ type officialEncoder struct {
 	err  error
 }
 
+// officialFormat is GOPHONIC_QWEN_WEIGHTS, or the exact format.
+func officialFormat() string {
+	if f := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); f != "" {
+		return f
+	}
+	return WeightsF16
+}
+
 func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	tb.Helper()
 	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
@@ -282,7 +290,7 @@ func BenchmarkOfficialEmbed(b *testing.B) {
 // embedding cache never hits. The fresh-state sub-benchmark disables the
 // prefix store for comparison.
 func BenchmarkOfficialConversationTurn(b *testing.B) {
-	base, _ := loadOfficialEncoder(b, WeightsF16)
+	base, _ := loadOfficialEncoder(b, officialFormat())
 	history := make([]int, 1800)
 	for i := range history {
 		history[i] = 1000 + (i*7919)%50000
@@ -338,7 +346,7 @@ func clmEmbedder(m *Model) clm.Embedder {
 // prompt tokenization equals tokenizing the whole prompt, and that warmed
 // calls do not allocate.
 func TestOfficialQuestion(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, officialFormat())
 	options := []string{"payments", "cancellations", "technical support", "shipping", "account login"}
 	const text = "Which support team should handle this customer message?"
 	q, err := m.Question(text, options)
@@ -446,7 +454,11 @@ func BenchmarkOfficialChooseBatch(b *testing.B) {
 	if path == "" {
 		b.Skip("set GOPHONIC_QWEN3_MODEL")
 	}
-	for _, format := range []string{WeightsF16, WeightsInt8} {
+	formats := []string{WeightsF16, WeightsInt8}
+	if f := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); f != "" {
+		formats = []string{f}
+	}
+	for _, format := range formats {
 		b.Run(format, func(b *testing.B) {
 			m, _ := loadOfficialEncoder(b, format)
 			q, err := m.Question("Which support team should handle this customer message?",
@@ -486,7 +498,7 @@ func BenchmarkOfficialQuestion(b *testing.B) {
 	if path == "" {
 		b.Skip("set GOPHONIC_QWEN3_MODEL")
 	}
-	m, err := Open(path, Options{})
+	m, err := Open(path, Options{Weights: os.Getenv("GOPHONIC_QWEN_WEIGHTS")})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -514,7 +526,7 @@ func BenchmarkOfficialQuestion(b *testing.B) {
 // TestOfficialStream feeds growing and revised partial transcripts to a
 // Stream and checks each answer against a fresh Choose on the same text.
 func TestOfficialStream(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, officialFormat())
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -556,7 +568,7 @@ func TestOfficialStream(t *testing.T) {
 // BenchmarkOfficialStream measures one stream update that adds three words
 // to a 20-word partial transcript.
 func BenchmarkOfficialStream(b *testing.B) {
-	m, _ := loadOfficialEncoder(b, WeightsF16)
+	m, _ := loadOfficialEncoder(b, officialFormat())
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -615,7 +627,7 @@ func contextQuestions(tb testing.TB, m *Model) ([]*ContextQuestion, [][]string) 
 // TestOfficialContext asks several questions about a growing conversation
 // and checks tokenization, answers, incremental updates, and allocations.
 func TestOfficialContext(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, officialFormat())
 	c, err := m.NewContext(1024)
 	if err != nil {
 		t.Fatal(err)
@@ -683,7 +695,7 @@ func TestOfficialContext(t *testing.T) {
 // asked with Context (context evaluated once) against three Question.Choose
 // calls on the whole conversation.
 func BenchmarkOfficialContext(b *testing.B) {
-	m, _ := loadOfficialEncoder(b, WeightsF16)
+	m, _ := loadOfficialEncoder(b, officialFormat())
 	text := strings.Join(contextConversation, "\n")
 	qs, _ := contextQuestions(b, m)
 	probs := [][]float32{make([]float32, 3), make([]float32, 4), make([]float32, 2)}

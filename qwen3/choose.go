@@ -318,12 +318,7 @@ func (q *Question) NewStream(maxInputTokens int) (*Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	kvDim := q.m.model.cfg.kvDim
-	for l := range kv.keys {
-		copy(kv.keys[l][:p*kvDim], q.kv.keys[l][:p*kvDim])
-		copy(kv.values[l][:p*kvDim], q.kv.values[l][:p*kvDim])
-	}
-	kv.tokens = append(kv.tokens, q.kv.tokens...)
+	kv.copyPrefix(q.kv, p)
 	return &Stream{
 		q: q, kv: kv,
 		input:  make([]int, 0, maxInputTokens),
