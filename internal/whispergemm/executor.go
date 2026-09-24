@@ -138,7 +138,7 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 	if b == nil {
 		return ErrNilMatrix
 	}
-	if !validMatrix(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
+	if !validInput(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
 		return ErrShape
 	}
 	parts := e.partitions(m, b.k, b.n)
@@ -252,6 +252,14 @@ func (e *Executor) mulShard(index int) {
 // Close waits for any active operation and stops the workers. Repeated
 // Close calls, including on a nil receiver, succeed. Subsequent Mul and Rows calls
 // return ErrExecutorClosed.
+// Workers returns the configured worker limit, including the caller.
+func (e *Executor) Workers() int {
+	if e == nil {
+		return 1
+	}
+	return len(e.workers) + 1
+}
+
 func (e *Executor) Close() error {
 	if e == nil {
 		return nil

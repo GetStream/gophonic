@@ -42,7 +42,7 @@ def main():
     if commit != "a664346ea5c6dddff3e61a2b7b32dd4514613f50":
         raise RuntimeError(f"unexpected whisper.cpp commit {commit}")
     cache = (args.cli.resolve().parents[1] / "CMakeCache.txt").read_text()
-    flags = {"GGML_METAL": "OFF", "GGML_ACCELERATE": "OFF", "GGML_BLAS": "OFF", "WHISPER_COREML": "OFF"}
+    flags = {"GGML_METAL": "OFF", "GGML_ACCELERATE": "OFF", "GGML_BLAS": "OFF", "WHISPER_COREML": "OFF", "GGML_CPU_KLEIDIAI": "OFF"}
     for name, value in flags.items():
         if not re.search(rf"^{name}:BOOL={value}$", cache, flags=re.MULTILINE):
             raise RuntimeError(f"whisper.cpp build does not verify {name}={value}")
@@ -61,6 +61,7 @@ def main():
             raise RuntimeError("whisper.cpp timing fields missing")
         if result.stdout.strip() != expected_transcript:
             raise RuntimeError("whisper.cpp transcript differs from JFK oracle")
+        values["total_minus_load"] = values["total"] - values["load"]
         runs.append(values)
     report = {
         "whisper_cpp_commit": commit,

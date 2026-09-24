@@ -38,7 +38,7 @@ func TestDecoderAttentionCacheLayoutAndWorkers(t *testing.T) {
 				transposed[d*frames+frame] = values[frame*TextState+d]
 			}
 		}
-		s := &DecoderScratch{query: query, context: make([]float32, TextState), scaledQuery: make([]float32, TextState), scores: make([]float32, TextHeads*AudioFrames)}
+		s := &DecoderScratch{dims: TinyENDims, query: query, context: make([]float32, TextState), scaledQuery: make([]float32, TextState), scores: make([]float32, TextHeads*AudioFrames)}
 		if err := s.attend(keys, transposed, frames, frames); err != nil {
 			t.Fatal(err)
 		}

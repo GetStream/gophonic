@@ -1,214 +1,162 @@
 # gophonic
 
-**CPU speech inference in Go: turn detection and Whisper transcription.**
+**Speech inference in pure Go: Whisper transcription and turn detection.**
 
-`gophonic` runs audio turn detectors inside your Go process. Its built-in models
-estimate whether a speaker has finished their turn from the last eight seconds
-of audio. Other architectures can implement the same PCM session interface.
-The separate `whisper` package runs the official OpenAI Whisper `tiny.en`
-checkpoint for English speech-to-text, including its encoder, incremental
-decoder, and tokenizer.
+gophonic runs OpenAI Whisper and audio turn-detection models inside your Go
+process. There is no cgo, no ONNX Runtime, and no Python at inference time.
+On Apple Silicon with SME (M4 and later), Whisper runs **about 3× faster than
+whisper.cpp on one core**, with the same FP32 weights and identical
+transcripts.
 
-- **CPU inference in Go.** Build with `CGO_ENABLED=0`; optional Go 1.27
-  `simd/archsimd` accelerates FP32 work on ARM64 and AMD64, with additional
-  TinyMelNet integer kernels on ARM64 NEON.
-- **Zero allocations during warm prediction.** Built-in models share immutable
-  weights; each concurrent prediction owns its scratch and persistent workers.
-- **Two explicit model choices.** Pipecat Smart Turn v3.2 FP32 and the smaller
-  TinyMelNet INT8 graph have separate loaders and completion thresholds.
-- **An open audio interface.** Implement `AudioSession` for another turn detector
-  with its own loader, preprocessing, and inference graph.
-- **Full Whisper tiny.en transcription.** An offline converter checks the
-  official checkpoint hash and exports FP32 weights. A reusable transcriber
-  handles arbitrary-length mono 16 kHz PCM with whole-file mel features,
-  previous-window context, and silence skipping.
-- **PCM in your application; WAV or Opus at the command line.** Ogg Opus decoding
-  uses [`gopus`](https://github.com/thesyncim/gopus).
+- **Whisper speech-to-text:** official English checkpoints `tiny.en`,
+  `base.en` and `small.en`, with an encoder, incremental decoder, tokenizer,
+  and long-audio transcription.
+- **Turn detection:** Pipecat Smart Turn v3.2 and TinyMelNet estimate whether
+  a speaker has finished talking.
+- **Built for servers:** a loaded model is shared and immutable. Each
+  concurrent lane reuses its own scratch, and warm calls allocate nothing.
+- **Pure Go toolchain:** builds with `CGO_ENABLED=0`. Hand-written ARM64
+  kernels are plain Go assembly, and every accelerated path has a portable
+  fallback.
 
-Inference, feature extraction, and resampling run in Go. Python is used once to
-convert a supported ONNX checkpoint into a weight bundle. Built-in execution
-remains specialized for each model. External backends plug in through Go code;
-there is no model registry or general ONNX graph loader.
-
-[Models](docs/models.md) · [Go API](docs/api.md) ·
-[Whisper design](docs/whisper-plan.md) ·
-[Architecture](docs/architecture.md) · [Benchmarks](docs/benchmarks.md) ·
-[Validation](docs/validation.md)
+[Whisper performance](docs/whisper-performance.md) ·
+[Whisper design](docs/whisper-design.md) · [Models](docs/models.md) ·
+[Go API](docs/api.md) · [Architecture](docs/architecture.md) ·
+[Benchmarks](docs/benchmarks.md) · [Validation](docs/validation.md)
 
 ## Whisper transcription
 
-Convert the [official tiny.en checkpoint](https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt)
-once with Python and NumPy installed:
+Download an official English checkpoint and convert it once. The converter
+accepts only the pinned OpenAI SHA-256 for each model and needs Python with
+NumPy:
 
 ```sh
-python3 tools/whisper_pt_to_gophonic.py tiny.en.pt tiny.en.gophonic
+curl -fLO https://openaipublic.azureedge.net/main/whisper/models/25a8566e1d0c1e2231d1c762132cd20e0f96a85d16145c3a00adf5d1ac670ead/base.en.pt
+python3 tools/whisper_pt_to_gophonic.py base.en.pt base.en.gophonic
+
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
-./gophonic -whisper-model tiny.en.gophonic speech.wav
+./gophonic -whisper-model base.en.gophonic speech.wav   # {"text":"..."}
 ```
 
-The CLI also accepts Ogg Opus. It emits `{"text":"..."}`. For Go callers,
-share a loaded `*whisper.Model` and create one `*whisper.Transcriber` per
-concurrent lane:
+| Model | Parameters | Checkpoint |
+| --- | ---: | --- |
+| `tiny.en` | 39 M | [tiny.en.pt](https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt) |
+| `base.en` | 74 M | [base.en.pt](https://openaipublic.azureedge.net/main/whisper/models/25a8566e1d0c1e2231d1c762132cd20e0f96a85d16145c3a00adf5d1ac670ead/base.en.pt) |
+| `small.en` | 244 M | [small.en.pt](https://openaipublic.azureedge.net/main/whisper/models/f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872/small.en.pt) |
+
+The converter also accepts `medium.en`, which has not been benchmarked. The CLI
+reads WAV and Ogg Opus. From Go, share one `*whisper.Model` and create one
+`*whisper.Transcriber` per concurrent caller:
 
 ```go
-model, err := whisper.Load("tiny.en.gophonic")
+model, err := whisper.Load("base.en.gophonic")
 if err != nil { return err }
 worker, err := whisper.NewTranscriber(model)
 if err != nil { return err }
 defer worker.Close()
 
 text, err := worker.TranscribeInto(mono16kPCM, make([]byte, 0, 4096))
-if err != nil { return err }
-fmt.Println(string(text))
 ```
 
-`TranscribeInto` uses whole-file mel normalization, greedy decoding at
-temperature zero, timestamp token seeking, and the pinned no-speech rule.
-It does not implement temperature fallback, beam search, multilingual models,
-or word timestamps. Repeated calls with the same audio and sufficient output
-capacity perform no heap allocations after warmup. The model bundle is not
-checked in; the converter verifies the official checkpoint SHA-256 before
-conversion.
+Transcription is greedy at temperature zero. It uses whole-file mel
+normalization, previous-window context, timestamp seeking, and the reference
+no-speech rule. It does not include temperature fallback, beam search,
+multilingual models, or word timestamps.
 
-## Quick start
+### Performance
 
-You need Go 1.27 and Python 3 with NumPy and ONNX for the one-time conversion.
-Run the following from a checkout of this repository:
+Warm latency for one 30-second window, PCM to text, on an Apple M4 Max. The
+comparison uses whisper.cpp with its fastest CPU backend (Accelerate/BLAS),
+the same FP32 weights, the same audio, and the same thread budget. Every call
+checks the exact transcript.
 
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install numpy onnx
+| Model | Threads | gophonic | whisper.cpp | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| tiny.en | 1 | 100.3 ms | 298.0 ms | **2.97×** |
+| base.en | 1 | 198.2 ms | 565.0 ms | **2.85×** |
+| small.en | 1 | 646.1 ms | 1,734 ms | **2.68×** |
+| tiny.en | 8 | 57.3 ms | 73.0 ms | **1.27×** |
+| base.en | 8 | 117.5 ms | 129.0 ms | **1.10×** |
 
-curl -fL \
-  https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-gpu.onnx \
-  -o smart-turn-v3.2-gpu.onnx
-.venv/bin/python tools/onnx_to_gophonic.py \
-  smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gophonic
+[Whisper performance](docs/whisper-performance.md) covers the method, raw
+samples, per-stage costs, and remaining limits.
 
-CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
-./gophonic -model smart-turn-v3.2.gophonic speech.wav
-```
+The speed comes from Apple's **SME** matrix unit, driven from Go assembly:
 
-The `-gpu` suffix is the upstream FP32 checkpoint's filename. Gophonic executes
-it on the CPU. The converter verifies the checkpoint's SHA-256 before reading
-its weights. No model download occurs during prediction or tests.
+- **Matrix products:** encoder projections, attention, convolutions, and the
+  STFT run as 32×32 outer-product tiles at about 90% of the unit's measured
+  FP32 peak.
+- **Matrix-vector products:** the decoder's projections accumulate in the matrix
+  unit, reading FP16 copies of weights that convert back to FP32 exactly. This
+  halves memory traffic without changing a single weight.
+- **Elementwise work:** softmax, GELU, LayerNorm, and argmax are hand-written
+  NEON, with fused passes wherever data would otherwise be read twice.
 
-The command writes one JSON object:
+SME is detected at run time. Other CPUs use portable NEON or scalar Go kernels.
 
-```json
-{"probability":0.91,"complete":true}
-```
+### Accuracy
 
-This is an example result. Smart Turn uses `probability > 0.5` for `complete`.
-Replace `speech.wav` with `speech.ogg` or `speech.opus` to decode Ogg Opus. Omit
-`GOEXPERIMENT=simd` to build the scalar Go kernels.
+All arithmetic is FP32. FP16 appears only as lossless weight storage, and only
+when every value round-trips bit-exactly. Tests check the encoder against
+PyTorch activations stage by stage and require exact reference token
+sequences. The SME kernels are bit-exact against a sequential fused
+multiply-add oracle.
 
-## Choose a model
+## Turn detection
 
-| Model | Runtime graph | Load / CLI | Completion threshold |
+Both detectors look at the last eight seconds of speech and return the
+probability that the turn is complete.
+
+| Model | Runtime graph | Load / CLI | Complete when |
 | --- | --- | --- | ---: |
 | [Pipecat Smart Turn v3.2](https://huggingface.co/pipecat-ai/smart-turn-v3) | Whisper encoder, FP32 | `Load` / `-model` | `> 0.5` |
-| [TinyMelNet](https://huggingface.co/deveshu/hinglish-turn-detector) | Quantized convolutions, bidirectional GRU | `LoadTinyMel` / `-tiny-model` | `> 0.57` |
+| [TinyMelNet](https://huggingface.co/deveshu/hinglish-turn-detector) | INT8 convolutions, bidirectional GRU | `LoadTinyMel` / `-tiny-model` | `> 0.57` |
 
-TinyMelNet trades model quality for lower compute cost. Its published evaluation
-focuses on English, Hindi, and Hinglish; model quality and weight licensing are
-covered in [Models](docs/models.md). Choosing it is explicit:
+Convert a checkpoint once (Python with NumPy and ONNX), then run it:
 
 ```sh
-curl -fL \
-  https://huggingface.co/deveshu/hinglish-turn-detector/resolve/main/model_tinymel_int8.onnx \
-  -o model_tinymel_int8.onnx
-.venv/bin/python tools/tinymel_to_gophonic.py \
-  model_tinymel_int8.onnx --bundle tinymel.gophonic
-
-GOMAXPROCS=8 ./gophonic \
-  -tiny-model tinymel.gophonic -tiny-workers 7 speech.wav
+curl -fLO https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-gpu.onnx
+python3 tools/onnx_to_gophonic.py smart-turn-v3.2-gpu.onnx smart-turn-v3.2.gophonic
+./gophonic -model smart-turn-v3.2.gophonic speech.wav   # {"probability":0.91,"complete":true}
 ```
 
-`-tiny-workers` counts helper goroutines; the caller also does work. The default
-is serial. A request for seven helpers is capped at `GOMAXPROCS-1`.
-
-## Use it from Go
-
-Load a model at startup. Reuse one session for each concurrent prediction lane;
-share the model between sessions. In the following excerpt, `pcm` is the
-application's mono 16 kHz `[]float32` audio:
+For TinyMelNet, convert `model_tinymel_int8.onnx` with
+`tools/tinymel_to_gophonic.py` and pass `-tiny-model`; `-tiny-workers` adds
+helper goroutines. From Go:
 
 ```go
-import "github.com/GetStream/gophonic"
-
 model, err := gophonic.LoadTinyMel("tinymel.gophonic")
-if err != nil {
-	return err
-}
-
-session, err := gophonic.NewTinyMelSession(model, 7)
-if err != nil {
-	return err
-}
+if err != nil { return err }
+session, err := gophonic.NewTinyMelSession(model, 7) // 7 helper goroutines
+if err != nil { return err }
 defer session.Close()
 
-// Repeat this call whenever your VAD detects a pause.
-prediction, err := session.PredictInto(pcm, 16000, 1)
-if err != nil {
-	return err
-}
-// prediction.Probability is P(turn complete).
-// prediction.Complete applies this model's threshold.
+prediction, err := session.PredictInto(pcm, 16000, 1) // call on each VAD pause
 ```
 
-Pass zero helpers for serial TinyMelNet execution. For Smart Turn, use `Load`
-with `NewSmartTurnSession`. Both implement `AudioSession`, which accepts PCM and
-returns `Prediction`. A custom backend implements those same two methods:
+Sessions accept mono or stereo PCM at 8–96 kHz. Both detectors implement
+`AudioSession`, which is also the interface for plugging in another backend
+([example](docs/api.md#add-an-audio-backend)). With seven helpers, TinyMelNet
+takes **3.6 ms** from PCM to prediction on an M4 Max, with no allocations
+([details](docs/benchmarks.md)).
 
-```go
-type AudioSession interface {
-	PredictInto(pcm []float32, sampleRate, channels int) (Prediction, error)
-	Close() error
-}
-```
-
-See [adding an audio backend](docs/api.md#add-an-audio-backend) for an adapter
-example and optional reuse of the standalone Whisper frontend. The direct
-model/workspace APIs remain available, including `PredictFeaturesInto` for
-normalized `[80,800]` log-mel input. Sessions delegate to those specialized
-implementations.
-
-Built-in sessions accept mono/stereo PCM at 8–96 kHz. Short input is left-padded;
-long input keeps the most recent eight seconds.
-Call from a VAD-gated pause decision and apply your application's turn policy
-to the result. The library does not contain a streaming VAD or dialogue policy.
-
-## Performance and correctness
-
-On the development Apple M4 Max, Go 1.27 SIMD TinyMelNet measured **2.090 ms**
-for the model and **3.553 ms** from mono 16 kHz PCM to a prediction, using seven
-helpers at `GOMAXPROCS=8`. Both measured **0 B/op and 0 allocs/op**. These are
-medians of three warm, 200-iteration run means; file decoding and setup are
-excluded. See [benchmarks and the ONNX Runtime CPU comparison](docs/benchmarks.md)
-for conditions and reproduction commands.
-
-The allocation contract covers successful calls with a reused workspace and a
-warmed sample-rate configuration. Model loading, workspace construction,
-resampler growth, file decoding, and JSON output are outside that boundary.
-
-Tests compare the frontend with saved Whisper features, model probabilities
-with ONNX Runtime outputs, and SIMD kernels with scalar references. Gophonic is
-under active development; these parity checks establish numerical behavior on
-the covered fixtures, not application-level accuracy. See
-[validation coverage and limits](docs/validation.md).
+## Testing
 
 ```sh
 CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 GOEXPERIMENT=simd go test ./...
 
+# With converted models, add the reference-parity suites:
+GOPHONIC_WHISPER_MODEL=tiny.en.gophonic \
 GOPHONIC_TEST_MODEL=smart-turn-v3.2.gophonic \
 GOPHONIC_TEST_TINYMEL_MODEL=tinymel.gophonic \
 GOEXPERIMENT=simd go test ./...
 ```
 
+Parity tests establish numerical behavior on the covered fixtures, not
+application-level accuracy; see [validation](docs/validation.md).
+
 ## License
 
-Gophonic code is [BSD-2-Clause](LICENSE). Model weights and `gopus` retain their
-own licenses. Weights are downloaded separately; see
-[model provenance and terms](docs/models.md#provenance-and-licenses).
+gophonic is [BSD-2-Clause](LICENSE). Model weights and `gopus` keep their own
+licenses; see [model provenance](docs/models.md#provenance-and-licenses).

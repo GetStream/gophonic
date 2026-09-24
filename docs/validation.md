@@ -52,7 +52,7 @@ built with `CGO_ENABLED=0`.
 | SIMD kernels | Scalar comparisons, tails/ranges, quantization rounding and saturation |
 | Reused workspaces | Warm public prediction allocation assertions and benchmark allocation reports |
 | Built-in session adapters | Direct-call prediction parity, nil/closed lifecycle checks, warm allocations through `AudioSession` |
-| Whisper tiny.en bundle | Official checkpoint SHA-256, exact 167-tensor manifest and shapes, bundle checksum and finite FP32 validation |
+| Whisper bundles | Official checkpoint SHA-256, exact tensor manifest and shapes for the model's dimensions, bundle checksum, finite FP32 validation |
 | Whisper whole-file frontend | Pinned PyTorch JFK and long-file mel samples; separate single-window full-array oracle |
 | Whisper encoder and decoder | Pinned PyTorch stem, all four encoder blocks, final encoder, prefix/next-token logits, cache reset, and JFK token sequence; scalar/SIMD worker parity |
 | Whisper full transcription | Pinned OpenAI JFK, silence, and JFK plus 35 seconds of silence transcripts; warm allocation checks |

@@ -7,7 +7,11 @@ package whisper
 // input into contiguous rows. The columns retain PyTorch's [channel,kernel]
 // weight order, allowing the same packed GEMM as the transformer projections.
 func lowerChannelMajor3(src, dst []float32, frames, channels int) {
-	for t := 0; t < frames; t++ {
+	lowerChannelMajor3Rows(src, dst, frames, channels, 0, frames)
+}
+
+func lowerChannelMajor3Rows(src, dst []float32, frames, channels, first, last int) {
+	for t := first; t < last; t++ {
 		row := dst[t*channels*3 : (t+1)*channels*3]
 		for channel := 0; channel < channels; channel++ {
 			in := src[channel*frames : (channel+1)*frames]
@@ -28,7 +32,12 @@ func lowerChannelMajor3(src, dst []float32, frames, channels int) {
 // lowerTimeMajor3Stride2 gathers the second stem convolution's time-major
 // input. Zero padding is written on every call, including after scratch reuse.
 func lowerTimeMajor3Stride2(src, dst []float32, inputFrames, outputFrames, channels int) {
-	for t := 0; t < outputFrames; t++ {
+	lowerTimeMajor3Stride2Rows(src, dst, inputFrames, outputFrames, channels, 0, outputFrames)
+}
+
+func lowerTimeMajor3Stride2Rows(src, dst []float32, inputFrames, outputFrames, channels, first, last int) {
+	_ = outputFrames
+	for t := first; t < last; t++ {
 		center := t * 2
 		row := dst[t*channels*3 : (t+1)*channels*3]
 		for channel := 0; channel < channels; channel++ {

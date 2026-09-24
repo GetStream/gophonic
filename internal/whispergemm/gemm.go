@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 // Package whispergemm provides reusable FP32 right-matrix packing and GEMM for
-// Whisper projections and attention. It has no cgo or assembly dependency.
+// Whisper projections and attention. It has no cgo dependency; on Apple
+// silicon with SME it uses a streaming-mode outer-product kernel written in
+// Go assembly.
 package whispergemm
 
 import "errors"
@@ -63,6 +65,11 @@ func (b *PackedB) Pack(src []float32, stride int, transposed bool) error {
 	if b.k == 0 || b.n == 0 {
 		return nil
 	}
+	if transposed && smeEnabled {
+		// ZA transposes 16x16 blocks; padding columns come out zero.
+		smeTransposePack(&src[0], stride*4, b.n, b.k, &b.data[0])
+		return nil
+	}
 	for n := 0; n < b.n; n += panelColumns {
 		width := min(panelColumns, b.n-n)
 		panel := b.data[n*b.k : (n+panelColumns)*b.k]
@@ -86,6 +93,9 @@ func (b *PackedB) Pack(src []float32, stride int, transposed bool) error {
 // The input and output must not overlap. No alignment beyond float32 is
 // required. M=0 or N=0 does nothing; K=0 writes positive zero.
 //
+// Rows of A may overlap (aStride < K), which reads a sliding window such as
+// STFT frames directly from a signal.
+//
 // Mul is single-threaded and allocates no memory. Callers can partition rows
 // across their existing workers by passing row-sliced A and C. ARM64 SIMD uses
 // FP32 fused multiply-add; results need not be bit-identical to scalar builds
@@ -94,7 +104,7 @@ func (b *PackedB) Mul(dst []float32, dstStride int, a []float32, aStride int, m 
 	if b == nil {
 		return ErrNilMatrix
 	}
-	if !validMatrix(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
+	if !validInput(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) {
 		return ErrShape
 	}
 	b.mul(dst, dstStride, a, aStride, m)
@@ -112,7 +122,24 @@ func (b *PackedB) mul(dst []float32, dstStride int, a []float32, aStride int, m 
 		}
 		return
 	}
+	if mulSME(dst, dstStride, a, aStride, b.data, m, b.k, b.n) {
+		return
+	}
 	mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)
+}
+
+// validInput accepts read-only matrices whose rows may overlap.
+func validInput(values []float32, rows, cols, stride int) bool {
+	if rows < 0 || cols < 0 || stride < 0 {
+		return false
+	}
+	if rows == 0 || cols == 0 {
+		return true
+	}
+	if len(values) < cols || (rows > 1 && stride == 0) {
+		return false
+	}
+	return rows == 1 || rows-1 <= (len(values)-cols)/stride
 }
 
 func validMatrix(values []float32, rows, cols, stride int) bool {

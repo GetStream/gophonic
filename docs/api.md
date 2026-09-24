@@ -8,7 +8,7 @@ modifying them.
 ## Whisper speech-to-text
 
 Import `github.com/GetStream/gophonic/whisper` for the separate English
-Whisper tiny.en runtime. Its text result does not implement the turn-detector
+Whisper runtime (tiny.en, base.en, small.en). Its text result does not implement the turn-detector
 `AudioSession` interface.
 
 ```go

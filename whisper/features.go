@@ -6,6 +6,8 @@ package whisper
 import (
 	"errors"
 	"math"
+
+	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
 const (
@@ -26,11 +28,12 @@ var (
 // FeatureWorkspace owns reusable scratch for one concurrent audio frontend.
 // It must not be used by more than one call at a time.
 type FeatureWorkspace struct {
-	padded []float32
-	power  []float32
-	real   [featureFFTSize]float32
-	imag   [featureFFTSize]float32
-	closed bool
+	padded   []float32
+	power    []float32
+	lanes    []featureLane
+	spectrum []float32 // SME path: [frame, re/im bin], then [frame, mel]
+	op       featureOperation
+	closed   bool
 }
 
 // NewFeatureWorkspace allocates scratch for allocation-free FeaturesInto calls.
@@ -66,6 +69,120 @@ func (w *FeatureWorkspace) Close() {
 // dropped final STFT frame, 1e-10 log floor, max-minus-8 dynamic floor, and
 // (log10(mel)+4)/4 output scaling.
 func FeaturesInto(pcm []float32, dst []float32, w *FeatureWorkspace) error {
+	return featuresInto(pcm, dst, w, nil)
+}
+
+// maxFeatureShards bounds frontend parallelism; each shard owns FFT scratch.
+const maxFeatureShards = 64
+
+type featureLane struct {
+	real, imag [featureFFTSize]float32
+}
+
+// featureOperation runs the frontend in three barrier-separated phases over
+// disjoint ranges: STFT frames, mel rows with log10, then the dynamic floor.
+// Each value is computed by the same operations as a serial pass, so results
+// do not depend on the shard count.
+type featureOperation struct {
+	w             *FeatureWorkspace
+	dst           []float32
+	phase, shards int
+	floor         float32
+	maxes         [maxFeatureShards]float32
+}
+
+// Phases 0-2 are the FFT path; the SME path uses power, log, then floor.
+const (
+	featurePhaseFloor = 2
+	featurePhasePower = 3
+	featurePhaseLog   = 4
+)
+
+func (op *featureOperation) ApplyRows(first, last int) {
+	w, dst := op.w, op.dst
+	for shard := first; shard < last; shard++ {
+		switch op.phase {
+		case featurePhasePower:
+			for frame := shard * MelFrames / op.shards; frame < (shard+1)*MelFrames/op.shards; frame++ {
+				spectrum := w.spectrum[frame*featureSpectrumWidth : (frame+1)*featureSpectrumWidth]
+				power := w.power[frame*featureFFTBins : (frame+1)*featureFFTBins]
+				for bin := range power {
+					re, im := spectrum[2*bin], spectrum[2*bin+1]
+					power[bin] = re*re + im*im
+				}
+			}
+		case featurePhaseLog:
+			mel := w.spectrum[:MelFrames*MelBins]
+			maxLog := float32(math.Inf(-1))
+			for m := shard * MelBins / op.shards; m < (shard+1)*MelBins/op.shards; m++ {
+				row := dst[m*MelFrames : (m+1)*MelFrames]
+				for frame := range row {
+					value := mel[frame*MelBins+m]
+					if value < 1e-10 {
+						value = 1e-10
+					}
+					logMel := float32(math.Log10(float64(value)))
+					row[frame] = logMel
+					maxLog = max(maxLog, logMel)
+				}
+			}
+			op.maxes[shard] = maxLog
+		case 0:
+			lane := &w.lanes[shard]
+			for frame := shard * MelFrames / op.shards; frame < (shard+1)*MelFrames/op.shards; frame++ {
+				start := frame * featureHopLength
+				for n, index := range featureFFTOrder {
+					lane.real[index] = w.padded[start+n] * featureHann[n]
+					lane.imag[index] = 0
+				}
+				fftFeature400(&lane.real, &lane.imag)
+				for bin := 0; bin < featureFFTBins; bin++ {
+					re, im := lane.real[bin], lane.imag[bin]
+					w.power[bin*MelFrames+frame] = re*re + im*im
+				}
+			}
+		case 1:
+			// Match the [mel,frequency] @ [frequency,time] layout in Whisper.
+			// Writing directly into dst lets it serve as mel scratch as well.
+			maxLog := float32(math.Inf(-1))
+			for mel := shard * MelBins / op.shards; mel < (shard+1)*MelBins/op.shards; mel++ {
+				row := dst[mel*MelFrames : (mel+1)*MelFrames]
+				clear(row)
+				for bin, weight := range featureMelBank[mel] {
+					if weight == 0 {
+						continue
+					}
+					power := w.power[bin*MelFrames : (bin+1)*MelFrames]
+					for frame, p := range power {
+						row[frame] += p * weight
+					}
+				}
+				for i, value := range row {
+					if value < 1e-10 {
+						value = 1e-10
+					}
+					logMel := float32(math.Log10(float64(value)))
+					row[i] = logMel
+					maxLog = max(maxLog, logMel)
+				}
+			}
+			op.maxes[shard] = maxLog
+			if op.shards == 1 {
+				op.floor = maxLog - 8
+			}
+		case 2:
+			for i := shard * len(dst) / op.shards; i < (shard+1)*len(dst)/op.shards; i++ {
+				value := dst[i]
+				if value < op.floor {
+					value = op.floor
+				}
+				dst[i] = (value + 4) / 4
+			}
+		}
+	}
+}
+
+func featuresInto(pcm []float32, dst []float32, w *FeatureWorkspace, executor *whispergemm.Executor) error {
 	if w == nil || w.closed {
 		return errNilFeatureWorkspace
 	}
@@ -97,52 +214,35 @@ func FeaturesInto(pcm []float32, dst []float32, w *FeatureWorkspace) error {
 		w.padded[featurePad+featureSamples+i] = center[featureSamples-2-i]
 	}
 
-	for frame := 0; frame < MelFrames; frame++ {
-		start := frame * featureHopLength
-		for n, index := range featureFFTOrder {
-			w.real[index] = w.padded[start+n] * featureHann[n]
-			w.imag[index] = 0
-		}
-		fftFeature400(&w.real, &w.imag)
-		for bin := 0; bin < featureFFTBins; bin++ {
-			re, im := w.real[bin], w.imag[bin]
-			w.power[bin*MelFrames+frame] = re*re + im*im
-		}
+	if whispergemm.PackedVectorAccelerated() {
+		return featuresGEMM(dst, w, executor)
 	}
-
-	// Match the [mel,frequency] @ [frequency,time] layout in Whisper. Writing
-	// directly into dst lets the output buffer serve as mel scratch as well.
-	for mel := 0; mel < MelBins; mel++ {
-		row := dst[mel*MelFrames : (mel+1)*MelFrames]
-		clear(row)
-		for bin, weight := range featureMelBank[mel] {
-			if weight == 0 {
-				continue
+	shards := 1
+	if executor != nil {
+		shards = min(executor.Workers(), maxFeatureShards)
+	}
+	if len(w.lanes) < shards {
+		w.lanes = make([]featureLane, shards) // first parallel call only
+	}
+	w.op = featureOperation{w: w, dst: dst, shards: shards}
+	defer func() { w.op = featureOperation{} }()
+	for phase := 0; phase < 3; phase++ {
+		w.op.phase = phase
+		if shards == 1 {
+			w.op.ApplyRows(0, 1)
+			continue
+		}
+		if err := executor.Rows(&w.op, shards, 1); err != nil {
+			return err
+		}
+		if phase == 1 {
+			// Every shard has written its log values and maximum.
+			maxLog := float32(math.Inf(-1))
+			for _, m := range w.op.maxes[:shards] {
+				maxLog = max(maxLog, m)
 			}
-			power := w.power[bin*MelFrames : (bin+1)*MelFrames]
-			for frame, p := range power {
-				row[frame] += p * weight
-			}
+			w.op.floor = maxLog - 8
 		}
-	}
-
-	maxLog := float32(math.Inf(-1))
-	for i, mel := range dst {
-		if mel < 1e-10 {
-			mel = 1e-10
-		}
-		logMel := float32(math.Log10(float64(mel)))
-		dst[i] = logMel
-		if logMel > maxLog {
-			maxLog = logMel
-		}
-	}
-	floor := maxLog - 8
-	for i, value := range dst {
-		if value < floor {
-			value = floor
-		}
-		dst[i] = (value + 4) / 4
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ package whisper
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"runtime"
 
@@ -28,18 +29,22 @@ var (
 // Allocate one workspace per concurrent caller and reuse it between calls.
 type EncoderWorkspace struct {
 	conv1       []float32
-	convColumns []float32
+	convColumns []float32 // time-major mel with a zero row at each end
+	conv1Pad    []float32 // conv1 output after one zero row of left padding
 	normalized  []float32
 	q           []float32
 	k           []float32
 	v           []float32
 	feedForward []float32
+	dims        Dims
 	packedModel *Model
-	packed      [AudioLayers]packedEncoderBlock
+	weights     encoderWeights
+	packed      []packedEncoderBlock
 	conv1Weight *whispergemm.PackedB
 	conv2Weight *whispergemm.PackedB
 	attention   *audioAttention
 	activation  encoderActivation
+	rowOp       encoderRows
 	gemm        *whispergemm.Executor
 	closed      bool
 }
@@ -62,24 +67,36 @@ func NewEncoderWorkspace() *EncoderWorkspace {
 // pool of reusable GEMM workers. Workers includes the caller goroutine and must
 // be between 1 and 64. Close the workspace to release its workers.
 func NewEncoderWorkspaceWithWorkers(workers int) (*EncoderWorkspace, error) {
+	return newEncoderWorkspace(TinyENDims, workers)
+}
+
+// newEncoderWorkspace sizes the scratch for one model's dimensions.
+func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
+	if !d.valid() {
+		return nil, errEncoderWeights
+	}
 	gemm, err := whispergemm.NewExecutor(workers)
 	if err != nil {
 		return nil, err
 	}
+	state := d.AudioState
 	w := &EncoderWorkspace{
-		conv1:       make([]float32, MelFrames*AudioState),
-		convColumns: make([]float32, AudioFrames*AudioState*3),
-		normalized:  make([]float32, AudioFrames*AudioState),
-		q:           make([]float32, AudioFrames*AudioState),
-		k:           make([]float32, AudioFrames*AudioState),
-		v:           make([]float32, AudioFrames*AudioState),
-		feedForward: make([]float32, AudioFrames*AudioFFNSize),
+		dims:        d,
+		conv1Pad:    make([]float32, (MelFrames+1)*state),
+		convColumns: make([]float32, (MelFrames+2)*MelBins),
+		normalized:  make([]float32, AudioFrames*state),
+		q:           make([]float32, AudioFrames*state),
+		k:           make([]float32, AudioFrames*state),
+		v:           make([]float32, AudioFrames*state),
+		feedForward: make([]float32, AudioFrames*4*state),
+		packed:      make([]packedEncoderBlock, d.AudioLayers),
 		gemm:        gemm,
 	}
-	// All shapes are fixed positive tiny.en dimensions and cannot overflow.
-	w.conv1Weight, _ = whispergemm.NewPackedB(MelBins*3, AudioState)
-	w.conv2Weight, _ = whispergemm.NewPackedB(AudioState*3, AudioState)
-	w.attention, err = newAudioAttention(AudioFrames, AudioState, AudioHeads, workers)
+	// Validated dimensions are small and positive, so these cannot fail.
+	w.conv1 = w.conv1Pad[state:]
+	w.conv1Weight, _ = whispergemm.NewPackedB(MelBins*3, state)
+	w.conv2Weight, _ = whispergemm.NewPackedB(state*3, state)
+	w.attention, err = newAudioAttention(AudioFrames, state, d.AudioHeads, workers)
 	if err != nil {
 		w.Close()
 		return nil, err
@@ -94,6 +111,7 @@ func (w *EncoderWorkspace) Close() {
 	}
 	w.closed = true
 	w.conv1 = nil
+	w.conv1Pad = nil
 	w.convColumns = nil
 	w.normalized = nil
 	w.q = nil
@@ -101,7 +119,8 @@ func (w *EncoderWorkspace) Close() {
 	w.v = nil
 	w.feedForward = nil
 	w.packedModel = nil
-	w.packed = [AudioLayers]packedEncoderBlock{}
+	w.packed = nil
+	w.weights = encoderWeights{}
 	w.conv1Weight = nil
 	w.conv2Weight = nil
 	w.attention = nil
@@ -129,156 +148,192 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 	if len(mel) != MelBins*MelFrames {
 		return errMelShape
 	}
-	outLen := AudioFrames * AudioState
+	if w.dims != m.dims || !w.valid() {
+		return errEncoderWeights
+	}
+	d := w.dims
+	state := d.AudioState
+	outLen := AudioFrames * state
 	if len(dst) < outLen {
 		return errEncoderOutputSize
 	}
-
-	weights, ok := bindEncoderWeights(m)
-	if !ok || !w.valid() {
-		return errEncoderWeights
+	if w.packedModel != m {
+		weights, ok := bindEncoderWeights(m)
+		if !ok {
+			return errEncoderWeights
+		}
+		w.weights = weights
+		if err := w.preparePacked(m, weights); err != nil {
+			return err
+		}
 	}
-	if err := w.preparePacked(m, weights); err != nil {
-		return err
-	}
+	weights := w.weights
 	dst = dst[:outLen]
 
 	// Whisper's audio stem is Conv1d -> exact GELU -> Conv1d (stride 2) ->
 	// exact GELU -> fixed sinusoidal positions.
-	lowerChannelMajor3(mel, w.convColumns, MelFrames, MelBins)
-	if err := w.gemm.Mul(w.conv1Weight, w.conv1, AudioState, w.convColumns, MelBins*3, MelFrames); err != nil {
+	// Both stem convolutions are single GEMMs over overlapping input rows:
+	// row t of the time-major mel starting at padded row t-1 holds the three
+	// taps [x(t-1), x(t), x(t+1)] contiguously, as does row 2t-1 of conv1's
+	// output for the stride-two conv2. Weights are packed tap-major to match.
+	melT := w.convColumns[:(MelFrames+2)*MelBins]
+	clear(melT[:MelBins])
+	clear(melT[(MelFrames+1)*MelBins:])
+	if err := w.rows(encoderRows{kind: rowsTransposeMel, src: mel, dst: melT[MelBins:], frames: MelFrames, width: MelBins}, MelFrames); err != nil {
 		return err
 	}
-	addRowBias(w.conv1, weights.conv1B, MelFrames, AudioState)
+	if err := w.gemm.Mul(w.conv1Weight, w.conv1, state, melT, MelBins, MelFrames); err != nil {
+		return err
+	}
 	if trace != nil {
-		trace(0, w.conv1[:MelFrames*AudioState])
-	}
-	if err := w.activate(w.conv1, nil, MelFrames, AudioState); err != nil {
+		addRowBias(w.conv1, weights.conv1B, MelFrames, state)
+		trace(0, w.conv1[:MelFrames*state])
+		if err := w.activate(w.conv1, nil, MelFrames, state); err != nil {
+			return err
+		}
+	} else if err := w.activate(w.conv1, weights.conv1B, MelFrames, state); err != nil {
 		return err
 	}
-	lowerTimeMajor3Stride2(w.conv1, w.convColumns, MelFrames, AudioFrames, AudioState)
-	if err := w.gemm.Mul(w.conv2Weight, dst, AudioState, w.convColumns, AudioState*3, AudioFrames); err != nil {
+	if err := w.gemm.Mul(w.conv2Weight, dst, state, w.conv1Pad, 2*state, AudioFrames); err != nil {
 		return err
 	}
-	addRowBias(dst, weights.conv2B, AudioFrames, AudioState)
 	if trace != nil {
+		addRowBias(dst, weights.conv2B, AudioFrames, state)
 		trace(1, dst)
-	}
-	if err := w.activate(dst, nil, AudioFrames, AudioState); err != nil {
+		if err := w.activate(dst, nil, AudioFrames, state); err != nil {
+			return err
+		}
+	} else if err := w.activate(dst, weights.conv2B, AudioFrames, state); err != nil {
 		return err
 	}
-	addPositionEmbedding(dst, weights.positions)
+	if err := w.rows(encoderRows{kind: rowsPosition, dst: dst, src: weights.positions, width: state}, AudioFrames); err != nil {
+		return err
+	}
+	if err := w.rows(encoderRows{kind: rowsNorm, dst: dst, out: w.normalized, normW: weights.blocks[0].attnNormW, normB: weights.blocks[0].attnNormB, width: state}, AudioFrames); err != nil {
+		return err
+	}
 
-	for i := 0; i < AudioLayers; i++ {
-		if err := encodeBlock(dst, weights.blocks[i], w.packed[i], w); err != nil {
+	for i := 0; i < d.AudioLayers; i++ {
+		// Each block ends by normalizing its output with the next block's
+		// attention LayerNorm, or with the final encoder LayerNorm.
+		nextW, nextB := weights.finalNormW, weights.finalNormB
+		if i+1 < d.AudioLayers {
+			nextW, nextB = weights.blocks[i+1].attnNormW, weights.blocks[i+1].attnNormB
+		}
+		if err := encodeBlock(dst, weights.blocks[i], w.packed[i], w, nextW, nextB, trace != nil); err != nil {
 			return err
 		}
 		if trace != nil {
 			trace(i+2, dst)
 		}
 	}
-	for t := 0; t < AudioFrames; t++ {
-		start := t * AudioState
-		row := dst[start : start+AudioState]
-		layerNormRow(row, row, weights.finalNormW, weights.finalNormB)
-	}
+	// The last block left the final LayerNorm output in w.normalized.
+	copy(dst, w.normalized[:len(dst)])
 	if trace != nil {
-		trace(AudioLayers+2, dst)
+		trace(d.AudioLayers+2, dst)
 	}
 	return nil
 }
 
-func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderBlock, w *EncoderWorkspace) error {
-	for t := 0; t < AudioFrames; t++ {
-		row := dst[t*AudioState : (t+1)*AudioState]
-		layerNormRow(row, w.normalized[t*AudioState:(t+1)*AudioState], block.attnNormW, block.attnNormB)
-	}
-	if err := w.gemm.Mul(packed.query, w.q, AudioState, w.normalized, AudioState, AudioFrames); err != nil {
+// encodeBlock expects w.normalized to hold this block's attention LayerNorm of
+// dst. It leaves LayerNorm(dst; nextW, nextB) there for the following stage.
+// With unfused set, the trace path also needs the raw block output, which dst
+// always holds.
+func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderBlock, w *EncoderWorkspace, nextW, nextB []float32, unfused bool) error {
+	_ = unfused
+	state, ffn := w.dims.AudioState, 4*w.dims.AudioState
+	if err := w.gemm.Mul(packed.query, w.q, state, w.normalized, state, AudioFrames); err != nil {
 		return err
 	}
-	addRowBias(w.q, block.queryB, AudioFrames, AudioState)
-	if err := w.gemm.Mul(packed.key, w.k, AudioState, w.normalized, AudioState, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.key, w.k, state, w.normalized, state, AudioFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.value, w.v, AudioState, w.normalized, AudioState, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.value, w.v, state, w.normalized, state, AudioFrames); err != nil {
 		return err
 	}
-	addRowBias(w.v, block.valueB, AudioFrames, AudioState)
-	// Each query tile consumes its Q slice before the value product overwrites
-	// it, avoiding another [1500,384] temporary.
-	if err := w.attention.run(w.q, w.k, w.v, w.q, w.gemm); err != nil {
+	// Q and V biases are added inside the attention preparation pass. Each
+	// query tile consumes its Q slice before the value product overwrites it.
+	if err := w.attention.runBiased(w.q, w.k, w.v, w.q, block.queryB, block.valueB, w.gemm); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.out, w.normalized, AudioState, w.q, AudioState, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.out, w.normalized, state, w.q, state, AudioFrames); err != nil {
 		return err
 	}
-	addRowBias(w.normalized, block.outB, AudioFrames, AudioState)
-	addInPlace(dst, w.normalized)
-
-	for t := 0; t < AudioFrames; t++ {
-		start := t * AudioState
-		row := dst[start : start+AudioState]
-		layerNormRow(row, w.normalized[start:start+AudioState], block.mlpNormW, block.mlpNormB)
-	}
-	if err := w.gemm.Mul(packed.mlpIn, w.feedForward, AudioFFNSize, w.normalized, AudioState, AudioFrames); err != nil {
+	if err := w.rows(encoderRows{kind: rowsResidual, dst: dst, src: w.normalized, bias: block.outB, out: w.normalized,
+		normW: block.mlpNormW, normB: block.mlpNormB, width: state}, AudioFrames); err != nil {
 		return err
 	}
-	if err := w.activate(w.feedForward, block.mlpInB, AudioFrames, AudioFFNSize); err != nil {
+	if err := w.gemm.Mul(packed.mlpIn, w.feedForward, ffn, w.normalized, state, AudioFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.mlpOut, w.normalized, AudioState, w.feedForward, AudioFFNSize, AudioFrames); err != nil {
+	if err := w.activate(w.feedForward, block.mlpInB, AudioFrames, ffn); err != nil {
 		return err
 	}
-	addRowBias(w.normalized, block.mlpOutB, AudioFrames, AudioState)
-	addInPlace(dst, w.normalized)
-	return nil
+	if err := w.gemm.Mul(packed.mlpOut, w.normalized, state, w.feedForward, ffn, AudioFrames); err != nil {
+		return err
+	}
+	return w.rows(encoderRows{kind: rowsResidual, dst: dst, src: w.normalized, bias: block.mlpOutB, out: w.normalized,
+		normW: nextW, normB: nextB, width: state}, AudioFrames)
 }
 
 func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) error {
-	if w.packedModel == model {
-		return nil
-	}
+	state, ffn := w.dims.AudioState, 4*w.dims.AudioState
 	if w.gemm == nil {
 		return errEncoderGEMM
 	}
-	if w.conv1Weight.Pack(weights.conv1W, MelBins*3, true) != nil ||
-		w.conv2Weight.Pack(weights.conv2W, AudioState*3, true) != nil {
+	if w.conv1Weight.Pack(tapMajor(weights.conv1W, state, MelBins), MelBins*3, true) != nil ||
+		w.conv2Weight.Pack(tapMajor(weights.conv2W, state, state), state*3, true) != nil {
 		return errEncoderGEMM
 	}
 	for i, block := range weights.blocks {
 		packed := &w.packed[i]
 		if packed.query == nil {
 			var err error
-			if packed.query, err = whispergemm.NewPackedB(AudioState, AudioState); err != nil {
+			if packed.query, err = whispergemm.NewPackedB(state, state); err != nil {
 				return errEncoderGEMM
 			}
-			if packed.key, err = whispergemm.NewPackedB(AudioState, AudioState); err != nil {
+			if packed.key, err = whispergemm.NewPackedB(state, state); err != nil {
 				return errEncoderGEMM
 			}
-			if packed.value, err = whispergemm.NewPackedB(AudioState, AudioState); err != nil {
+			if packed.value, err = whispergemm.NewPackedB(state, state); err != nil {
 				return errEncoderGEMM
 			}
-			if packed.out, err = whispergemm.NewPackedB(AudioState, AudioState); err != nil {
+			if packed.out, err = whispergemm.NewPackedB(state, state); err != nil {
 				return errEncoderGEMM
 			}
-			if packed.mlpIn, err = whispergemm.NewPackedB(AudioState, AudioFFNSize); err != nil {
+			if packed.mlpIn, err = whispergemm.NewPackedB(state, ffn); err != nil {
 				return errEncoderGEMM
 			}
-			if packed.mlpOut, err = whispergemm.NewPackedB(AudioFFNSize, AudioState); err != nil {
+			if packed.mlpOut, err = whispergemm.NewPackedB(ffn, state); err != nil {
 				return errEncoderGEMM
 			}
 		}
-		if packed.query.Pack(block.queryW, AudioState, true) != nil ||
-			packed.key.Pack(block.keyW, AudioState, true) != nil ||
-			packed.value.Pack(block.valueW, AudioState, true) != nil ||
-			packed.out.Pack(block.outW, AudioState, true) != nil ||
-			packed.mlpIn.Pack(block.mlpInW, AudioState, true) != nil ||
-			packed.mlpOut.Pack(block.mlpOutW, AudioFFNSize, true) != nil {
+		if packed.query.Pack(block.queryW, state, true) != nil ||
+			packed.key.Pack(block.keyW, state, true) != nil ||
+			packed.value.Pack(block.valueW, state, true) != nil ||
+			packed.out.Pack(block.outW, state, true) != nil ||
+			packed.mlpIn.Pack(block.mlpInW, state, true) != nil ||
+			packed.mlpOut.Pack(block.mlpOutW, ffn, true) != nil {
 			return errEncoderGEMM
 		}
 	}
 	w.packedModel = model
 	return nil
+}
+
+// tapMajor reorders PyTorch Conv1d weights [out][in][3] into [out][3][in],
+// matching the contiguous three-row input windows. It allocates once per
+// model binding.
+func tapMajor(weights []float32, out, in int) []float32 {
+	reordered := make([]float32, len(weights))
+	for o := 0; o < out; o++ {
+		for c := 0; c < in; c++ {
+			for j := 0; j < 3; j++ {
+				reordered[o*in*3+j*in+c] = weights[o*in*3+c*3+j]
+			}
+		}
+	}
+	return reordered
 }
 
 func addRowBias(values, bias []float32, rows, width int) {
@@ -310,14 +365,12 @@ type encoderWeights struct {
 	conv1W, conv1B []float32
 	conv2W, conv2B []float32
 	positions      []float32
-	blocks         [AudioLayers]encoderBlockWeights
+	blocks         []encoderBlockWeights
 	finalNormW     []float32
 	finalNormB     []float32
 }
 
-// Keep full names static so binding weights on a warmed inference path cannot
-// allocate while constructing per-layer map keys.
-var encoderWeightNames = [AudioLayers]struct {
+type encoderBlockNames struct {
 	queryW, queryB   string
 	keyW             string
 	valueW, valueB   string
@@ -328,51 +381,29 @@ var encoderWeightNames = [AudioLayers]struct {
 	mlpOutW, mlpOutB string
 	mlpNormW         string
 	mlpNormB         string
-}{
-	{
-		queryW: "encoder.blocks.0.attn.query.weight", queryB: "encoder.blocks.0.attn.query.bias",
-		keyW:   "encoder.blocks.0.attn.key.weight",
-		valueW: "encoder.blocks.0.attn.value.weight", valueB: "encoder.blocks.0.attn.value.bias",
-		outW: "encoder.blocks.0.attn.out.weight", outB: "encoder.blocks.0.attn.out.bias",
-		attnNormW: "encoder.blocks.0.attn_ln.weight", attnNormB: "encoder.blocks.0.attn_ln.bias",
-		mlpInW: "encoder.blocks.0.mlp.0.weight", mlpInB: "encoder.blocks.0.mlp.0.bias",
-		mlpOutW: "encoder.blocks.0.mlp.2.weight", mlpOutB: "encoder.blocks.0.mlp.2.bias",
-		mlpNormW: "encoder.blocks.0.mlp_ln.weight", mlpNormB: "encoder.blocks.0.mlp_ln.bias",
-	},
-	{
-		queryW: "encoder.blocks.1.attn.query.weight", queryB: "encoder.blocks.1.attn.query.bias",
-		keyW:   "encoder.blocks.1.attn.key.weight",
-		valueW: "encoder.blocks.1.attn.value.weight", valueB: "encoder.blocks.1.attn.value.bias",
-		outW: "encoder.blocks.1.attn.out.weight", outB: "encoder.blocks.1.attn.out.bias",
-		attnNormW: "encoder.blocks.1.attn_ln.weight", attnNormB: "encoder.blocks.1.attn_ln.bias",
-		mlpInW: "encoder.blocks.1.mlp.0.weight", mlpInB: "encoder.blocks.1.mlp.0.bias",
-		mlpOutW: "encoder.blocks.1.mlp.2.weight", mlpOutB: "encoder.blocks.1.mlp.2.bias",
-		mlpNormW: "encoder.blocks.1.mlp_ln.weight", mlpNormB: "encoder.blocks.1.mlp_ln.bias",
-	},
-	{
-		queryW: "encoder.blocks.2.attn.query.weight", queryB: "encoder.blocks.2.attn.query.bias",
-		keyW:   "encoder.blocks.2.attn.key.weight",
-		valueW: "encoder.blocks.2.attn.value.weight", valueB: "encoder.blocks.2.attn.value.bias",
-		outW: "encoder.blocks.2.attn.out.weight", outB: "encoder.blocks.2.attn.out.bias",
-		attnNormW: "encoder.blocks.2.attn_ln.weight", attnNormB: "encoder.blocks.2.attn_ln.bias",
-		mlpInW: "encoder.blocks.2.mlp.0.weight", mlpInB: "encoder.blocks.2.mlp.0.bias",
-		mlpOutW: "encoder.blocks.2.mlp.2.weight", mlpOutB: "encoder.blocks.2.mlp.2.bias",
-		mlpNormW: "encoder.blocks.2.mlp_ln.weight", mlpNormB: "encoder.blocks.2.mlp_ln.bias",
-	},
-	{
-		queryW: "encoder.blocks.3.attn.query.weight", queryB: "encoder.blocks.3.attn.query.bias",
-		keyW:   "encoder.blocks.3.attn.key.weight",
-		valueW: "encoder.blocks.3.attn.value.weight", valueB: "encoder.blocks.3.attn.value.bias",
-		outW: "encoder.blocks.3.attn.out.weight", outB: "encoder.blocks.3.attn.out.bias",
-		attnNormW: "encoder.blocks.3.attn_ln.weight", attnNormB: "encoder.blocks.3.attn_ln.bias",
-		mlpInW: "encoder.blocks.3.mlp.0.weight", mlpInB: "encoder.blocks.3.mlp.0.bias",
-		mlpOutW: "encoder.blocks.3.mlp.2.weight", mlpOutB: "encoder.blocks.3.mlp.2.bias",
-		mlpNormW: "encoder.blocks.3.mlp_ln.weight", mlpNormB: "encoder.blocks.3.mlp_ln.bias",
-	},
+}
+
+// encoderNames builds tensor names; binding happens once per workspace and
+// model, never on a warm inference call.
+func encoderNames(layer int) encoderBlockNames {
+	p := fmt.Sprintf("encoder.blocks.%d.", layer)
+	return encoderBlockNames{
+		queryW: p + "attn.query.weight", queryB: p + "attn.query.bias",
+		keyW:   p + "attn.key.weight",
+		valueW: p + "attn.value.weight", valueB: p + "attn.value.bias",
+		outW: p + "attn.out.weight", outB: p + "attn.out.bias",
+		attnNormW: p + "attn_ln.weight", attnNormB: p + "attn_ln.bias",
+		mlpInW: p + "mlp.0.weight", mlpInB: p + "mlp.0.bias",
+		mlpOutW: p + "mlp.2.weight", mlpOutB: p + "mlp.2.bias",
+		mlpNormW: p + "mlp_ln.weight", mlpNormB: p + "mlp_ln.bias",
+	}
 }
 
 func bindEncoderWeights(m *Model) (encoderWeights, bool) {
+	d := m.dims
+	state, ffn := d.AudioState, 4*d.AudioState
 	w := encoderWeights{
+		blocks:     make([]encoderBlockWeights, d.AudioLayers),
 		conv1W:     m.tensor("encoder.conv1.weight"),
 		conv1B:     m.tensor("encoder.conv1.bias"),
 		conv2W:     m.tensor("encoder.conv2.weight"),
@@ -381,12 +412,13 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 		finalNormW: m.tensor("encoder.ln_post.weight"),
 		finalNormB: m.tensor("encoder.ln_post.bias"),
 	}
-	if len(w.conv1W) != AudioState*MelBins*3 || len(w.conv1B) != AudioState ||
-		len(w.conv2W) != AudioState*AudioState*3 || len(w.conv2B) != AudioState ||
-		len(w.positions) != AudioFrames*AudioState || len(w.finalNormW) != AudioState || len(w.finalNormB) != AudioState {
+	if len(w.conv1W) != state*MelBins*3 || len(w.conv1B) != state ||
+		len(w.conv2W) != state*state*3 || len(w.conv2B) != state ||
+		len(w.positions) != AudioFrames*state || len(w.finalNormW) != state || len(w.finalNormB) != state {
 		return encoderWeights{}, false
 	}
-	for i, names := range encoderWeightNames {
+	for i := range w.blocks {
+		names := encoderNames(i)
 		b := &w.blocks[i]
 		b.queryW, b.queryB = m.tensor(names.queryW), m.tensor(names.queryB)
 		b.keyW = m.tensor(names.keyW)
@@ -396,13 +428,13 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 		b.mlpInW, b.mlpInB = m.tensor(names.mlpInW), m.tensor(names.mlpInB)
 		b.mlpOutW, b.mlpOutB = m.tensor(names.mlpOutW), m.tensor(names.mlpOutB)
 		b.mlpNormW, b.mlpNormB = m.tensor(names.mlpNormW), m.tensor(names.mlpNormB)
-		if len(b.queryW) != AudioState*AudioState || len(b.queryB) != AudioState ||
-			len(b.keyW) != AudioState*AudioState || len(b.valueW) != AudioState*AudioState || len(b.valueB) != AudioState ||
-			len(b.outW) != AudioState*AudioState || len(b.outB) != AudioState ||
-			len(b.attnNormW) != AudioState || len(b.attnNormB) != AudioState ||
-			len(b.mlpInW) != AudioFFNSize*AudioState || len(b.mlpInB) != AudioFFNSize ||
-			len(b.mlpOutW) != AudioState*AudioFFNSize || len(b.mlpOutB) != AudioState ||
-			len(b.mlpNormW) != AudioState || len(b.mlpNormB) != AudioState {
+		if len(b.queryW) != state*state || len(b.queryB) != state ||
+			len(b.keyW) != state*state || len(b.valueW) != state*state || len(b.valueB) != state ||
+			len(b.outW) != state*state || len(b.outB) != state ||
+			len(b.attnNormW) != state || len(b.attnNormB) != state ||
+			len(b.mlpInW) != ffn*state || len(b.mlpInB) != ffn ||
+			len(b.mlpOutW) != state*ffn || len(b.mlpOutB) != state ||
+			len(b.mlpNormW) != state || len(b.mlpNormB) != state {
 			return encoderWeights{}, false
 		}
 	}
@@ -410,12 +442,13 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 }
 
 func (w *EncoderWorkspace) valid() bool {
-	return len(w.conv1) >= MelFrames*AudioState &&
-		len(w.convColumns) >= AudioFrames*AudioState*3 &&
-		len(w.normalized) >= AudioFrames*AudioState &&
-		len(w.q) >= AudioFrames*AudioState &&
-		len(w.k) >= AudioFrames*AudioState && len(w.v) >= AudioFrames*AudioState &&
-		len(w.feedForward) >= AudioFrames*AudioFFNSize &&
+	state := w.dims.AudioState
+	return state > 0 && len(w.conv1) >= MelFrames*state && len(w.conv1Pad) >= (MelFrames+1)*state &&
+		len(w.convColumns) >= (MelFrames+2)*MelBins &&
+		len(w.normalized) >= AudioFrames*state &&
+		len(w.q) >= AudioFrames*state &&
+		len(w.k) >= AudioFrames*state && len(w.v) >= AudioFrames*state &&
+		len(w.feedForward) >= AudioFrames*4*state && len(w.packed) == w.dims.AudioLayers &&
 		w.conv1Weight != nil && w.conv2Weight != nil && w.attention != nil && w.gemm != nil
 }
 
@@ -482,7 +515,19 @@ func addPositionEmbedding(dst, positions []float32) {
 	}
 }
 
+// layerNormRow normalizes one row with float64 statistics. Rows whose length
+// is a positive multiple of eight use the NEON kernel on arm64, which sums
+// in four float64x2 partial accumulators instead of one.
 func layerNormRow(src, dst, gamma, beta []float32) {
+	n := len(src)
+	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(gamma) >= n && len(beta) >= n {
+		layerNormNEON(&src[0], &dst[0], &gamma[0], &beta[0], n)
+		return
+	}
+	layerNormRowGeneric(src, dst, gamma, beta)
+}
+
+func layerNormRowGeneric(src, dst, gamma, beta []float32) {
 	var sum float64
 	for _, x := range src {
 		sum += float64(x)

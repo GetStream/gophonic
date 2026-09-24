@@ -1,8 +1,0 @@
-goos: darwin
-goarch: arm64
-pkg: github.com/GetStream/gophonic/whisper
-cpu: Apple M4 Max
-BenchmarkEncoder/workers4-4         	       5	 319881525 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncoder/workers4-4         	       5	 319665858 ns/op	       0 B/op	       0 allocs/op
-BenchmarkEncoder/workers4-4         	       5	 320291917 ns/op	       0 B/op	       0 allocs/op
-PASS

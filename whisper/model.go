@@ -14,47 +14,106 @@ import (
 	"math"
 	"os"
 	"slices"
+	"sync"
+
+	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
 const (
 	bundleMagic   = "WHISPER1"
 	bundleVersion = uint32(1)
-	MelBins       = 80
-	MelFrames     = 3000
-	AudioFrames   = 1500
-	AudioState    = 384
-	AudioHeads    = 6
-	AudioLayers   = 4
-	TextContext   = 448
-	TextState     = 384
-	TextHeads     = 6
-	TextLayers    = 4
-	VocabSize     = 51864
+	// bundleVersionDims adds explicit model dimensions for larger checkpoints.
+	bundleVersionDims = uint32(2)
+	MelBins           = 80
+	MelFrames         = 3000
+	AudioFrames       = 1500
+	AudioState        = 384
+	AudioHeads        = 6
+	AudioLayers       = 4
+	TextContext       = 448
+	TextState         = 384
+	TextHeads         = 6
+	TextLayers        = 4
+	VocabSize         = 51864
 )
 
-// Model owns validated FP32 weights for OpenAI Whisper tiny.en.
-type Model struct{ tensors map[string][]float32 }
+// Dims describes the variable width and depth of an English Whisper model.
+// Mel bins, audio frames, text context, and vocabulary are shared by all
+// English checkpoints and remain package constants.
+type Dims struct {
+	AudioState, AudioHeads, AudioLayers int
+	TextState, TextHeads, TextLayers    int
+}
+
+// TinyENDims are the dimensions of the official tiny.en checkpoint.
+var TinyENDims = Dims{AudioState: AudioState, AudioHeads: AudioHeads, AudioLayers: AudioLayers,
+	TextState: TextState, TextHeads: TextHeads, TextLayers: TextLayers}
+
+func (d Dims) valid() bool {
+	ok := func(state, heads, layers int) bool {
+		return state > 0 && state <= 4096 && heads > 0 && state%heads == 0 && layers > 0 && layers <= 64
+	}
+	return ok(d.AudioState, d.AudioHeads, d.AudioLayers) && ok(d.TextState, d.TextHeads, d.TextLayers) &&
+		d.AudioState == d.TextState
+}
+
+// Model owns validated FP32 weights for an English OpenAI Whisper model.
+type Model struct {
+	tensors map[string][]float32
+	dims    Dims
+
+	// vectors caches immutable matrix-vector packings shared by every
+	// decoder on this model. It is populated on first use.
+	vectorMu sync.Mutex
+	vectors  map[string]*whispergemm.PackedVector
+}
+
+// packedVector returns the shared packing of an N-by-K tensor, or nil when
+// the platform has no accelerated matrix-vector path.
+func (m *Model) packedVector(name string, rows, k int) (*whispergemm.PackedVector, error) {
+	if !whispergemm.PackedVectorAccelerated() {
+		return nil, nil
+	}
+	m.vectorMu.Lock()
+	defer m.vectorMu.Unlock()
+	if p := m.vectors[name]; p != nil {
+		return p, nil
+	}
+	p, err := whispergemm.NewPackedVector(m.tensor(name), k, rows, k)
+	if err != nil {
+		return nil, err
+	}
+	if m.vectors == nil {
+		m.vectors = make(map[string]*whispergemm.PackedVector)
+	}
+	m.vectors[name] = p
+	return p, nil
+}
 
 func (m *Model) tensor(name string) []float32 { return m.tensors[name] }
+
+// Dims returns the model's dimensions.
+func (m *Model) Dims() Dims { return m.dims }
 
 type tensorSpec struct {
 	name  string
 	shape []int
 }
 
-func expectedTensors() []tensorSpec {
+func expectedTensors(d Dims) []tensorSpec {
+	a, t := d.AudioState, d.TextState
 	s := []tensorSpec{
-		{"encoder.conv1.weight", []int{384, 80, 3}},
-		{"encoder.conv1.bias", []int{384}},
-		{"encoder.conv2.weight", []int{384, 384, 3}},
-		{"encoder.conv2.bias", []int{384}},
-		{"encoder.positional_embedding", []int{1500, 384}},
-		{"encoder.ln_post.weight", []int{384}},
-		{"encoder.ln_post.bias", []int{384}},
-		{"decoder.token_embedding.weight", []int{51864, 384}},
-		{"decoder.positional_embedding", []int{448, 384}},
-		{"decoder.ln.weight", []int{384}},
-		{"decoder.ln.bias", []int{384}},
+		{"encoder.conv1.weight", []int{a, MelBins, 3}},
+		{"encoder.conv1.bias", []int{a}},
+		{"encoder.conv2.weight", []int{a, a, 3}},
+		{"encoder.conv2.bias", []int{a}},
+		{"encoder.positional_embedding", []int{AudioFrames, a}},
+		{"encoder.ln_post.weight", []int{a}},
+		{"encoder.ln_post.bias", []int{a}},
+		{"decoder.token_embedding.weight", []int{VocabSize, t}},
+		{"decoder.positional_embedding", []int{TextContext, t}},
+		{"decoder.ln.weight", []int{t}},
+		{"decoder.ln.bias", []int{t}},
 	}
 	addLinear := func(prefix string, in, out int, bias bool) {
 		s = append(s, tensorSpec{prefix + ".weight", []int{out, in}})
@@ -62,25 +121,29 @@ func expectedTensors() []tensorSpec {
 			s = append(s, tensorSpec{prefix + ".bias", []int{out}})
 		}
 	}
-	addNorm := func(prefix string) {
-		s = append(s, tensorSpec{prefix + ".weight", []int{384}}, tensorSpec{prefix + ".bias", []int{384}})
-	}
 	for _, path := range []string{"encoder", "decoder"} {
-		for i := 0; i < 4; i++ {
+		state, layers := a, d.AudioLayers
+		if path == "decoder" {
+			state, layers = t, d.TextLayers
+		}
+		addNorm := func(prefix string) {
+			s = append(s, tensorSpec{prefix + ".weight", []int{state}}, tensorSpec{prefix + ".bias", []int{state}})
+		}
+		for i := 0; i < layers; i++ {
 			p := fmt.Sprintf("%s.blocks.%d.", path, i)
-			for _, a := range []string{"attn", "cross_attn"} {
-				if a == "cross_attn" && path == "encoder" {
+			for _, attention := range []string{"attn", "cross_attn"} {
+				if attention == "cross_attn" && path == "encoder" {
 					continue
 				}
-				q := p + a + "."
-				addLinear(q+"query", 384, 384, true)
-				addLinear(q+"key", 384, 384, false)
-				addLinear(q+"value", 384, 384, true)
-				addLinear(q+"out", 384, 384, true)
-				addNorm(p + a + "_ln")
+				q := p + attention + "."
+				addLinear(q+"query", state, state, true)
+				addLinear(q+"key", state, state, false)
+				addLinear(q+"value", state, state, true)
+				addLinear(q+"out", state, state, true)
+				addNorm(p + attention + "_ln")
 			}
-			addLinear(p+"mlp.0", 384, 1536, true)
-			addLinear(p+"mlp.2", 1536, 384, true)
+			addLinear(p+"mlp.0", state, 4*state, true)
+			addLinear(p+"mlp.2", 4*state, state, true)
 			addNorm(p + "mlp_ln")
 		}
 	}
@@ -111,13 +174,27 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	if err := binary.Read(r, binary.LittleEndian, &version); err != nil {
 		return nil, err
 	}
-	if version != bundleVersion {
+	if version != bundleVersion && version != bundleVersionDims {
 		return nil, fmt.Errorf("unsupported Whisper bundle version %d", version)
 	}
 	if err := binary.Read(r, binary.LittleEndian, &count); err != nil {
 		return nil, err
 	}
-	specs := expectedTensors()
+	hash := sha256.New()
+	payload := io.TeeReader(r, hash)
+	dims := TinyENDims
+	if version == bundleVersionDims {
+		// Version 2 records the dimensions inside the checksummed payload.
+		var raw [6]uint32
+		if err := binary.Read(payload, binary.LittleEndian, &raw); err != nil {
+			return nil, err
+		}
+		dims = Dims{int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3]), int(raw[4]), int(raw[5])}
+		if !dims.valid() {
+			return nil, fmt.Errorf("invalid Whisper dimensions %+v", dims)
+		}
+	}
+	specs := expectedTensors(dims)
 	if int(count) != len(specs) {
 		return nil, fmt.Errorf("Whisper bundle has %d tensors; need %d", count, len(specs))
 	}
@@ -126,8 +203,6 @@ func ReadWeights(r io.Reader) (*Model, error) {
 		want[s.name] = s.shape
 	}
 	tensors := make(map[string][]float32, len(specs))
-	hash := sha256.New()
-	payload := io.TeeReader(r, hash)
 	for range count {
 		var n uint16
 		if err := binary.Read(payload, binary.LittleEndian, &n); err != nil {
@@ -194,7 +269,7 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	if n, err := r.Read(trailing[:]); n != 0 || err != io.EOF {
 		return nil, errors.New("Whisper bundle has trailing data")
 	}
-	return &Model{tensors: tensors}, nil
+	return &Model{tensors: tensors, dims: dims}, nil
 }
 
 func decodeFiniteFloat32(data []byte, dst []float32) error {

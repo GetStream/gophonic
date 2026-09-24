@@ -7,10 +7,31 @@ package whispergemm
 
 import "simd/archsimd"
 
-const kernelName = "arm64-neon-4x16"
+const kernelName = "arm64-neon-2x32-4x16"
 
 func mulPacked(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int) {
-	for c := 0; c < n; c += panelColumns {
+	c := 0
+	if m >= 4 {
+		// Keep complete groups of four rows on the ordered FMA path. The
+		// remaining one to three rows keep kernel1x16's reduction streams,
+		// matching the four-row boundaries used by Executor.
+		rows := m / 4 * 4
+		for ; c+32 <= n; c += 32 {
+			w0, w1 := packed[c*k:(c+16)*k], packed[(c+16)*k:(c+32)*k]
+			r := 0
+			for ; r < rows; r += 2 {
+				kernel2x32(
+					a[r*aStride:r*aStride+k], a[(r+1)*aStride:(r+1)*aStride+k], w0, w1,
+					dst[r*dstStride+c:r*dstStride+c+32], dst[(r+1)*dstStride+c:(r+1)*dstStride+c+32],
+				)
+			}
+			for ; r < m; r++ {
+				kernel1x16(a[r*aStride:r*aStride+k], w0, dst[r*dstStride+c:r*dstStride+c+16])
+				kernel1x16(a[r*aStride:r*aStride+k], w1, dst[r*dstStride+c+16:r*dstStride+c+32])
+			}
+		}
+	}
+	for ; c < n; c += panelColumns {
 		width := min(panelColumns, n-c)
 		weights := packed[c*k : (c+panelColumns)*k]
 		r := 0

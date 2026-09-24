@@ -28,7 +28,7 @@ func TestDecoderMathHelpers(t *testing.T) {
 		bias := []float32{0.25, -0.5}
 		x := []float32{2, -1, 0.5}
 		got := make([]float32, 2)
-		linearInto(got, x, weight, bias, 3, 2)
+		linearInto(got, x, &decoderLinear{weight: weight, bias: bias}, 3, 2)
 		if got[0] != 1.75 || got[1] != -1 {
 			t.Fatalf("linear output %v, want [1.75 -1]", got)
 		}
