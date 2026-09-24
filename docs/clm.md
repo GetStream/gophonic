@@ -61,7 +61,7 @@ the state and once for the action batch, then returns candidates sorted by
 softmax probability. The callback receives caller-owned output buffers, and
 `RankInto` reuses workspace storage without allocations after setup. Workspace
 allocation is capped at 256 MiB. Allocations made inside a concrete embedder are
-separate; the local Qwen3-8B encoder is maintained in [`examples/clm-qwen`](../examples/clm-qwen).
+separate; the local Qwen3-8B encoder is the [`qwen3`](../qwen3) package.
 
 The reference API's HTTP embedder sends `truncate_prompt_tokens` to vLLM and
 normalizes the returned vectors. vLLM's default truncation keeps the last

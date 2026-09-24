@@ -16,7 +16,7 @@ transcripts.
 - **Built for servers:** a loaded model is shared and immutable. Each
   concurrent lane reuses its own scratch, and warm calls allocate nothing.
 - **CLM action ranking:** pure-Go CPU projection heads score state/action
-  embeddings; `examples/clm-qwen` adds a local Qwen3-8B encoder with exact
+  embeddings; [`qwen3`](qwen3) runs Qwen3-8B with exact
   BF16 weights (about 70 ms for a 12-token text on an M4 Max CPU, faster
   than llama.cpp Q8_0 at higher fidelity; a new turn on an 1800-token
   conversation in 203 ms; cached re-ranks in under 2 ms).
@@ -167,7 +167,8 @@ For your own recording, run the CLI with `-whisper-model tiny.en.gophonic`
 and `recording.wav`; it also accepts Ogg Opus and prints `{"text":"..."}`.
 The test above requires the official `tiny.en` checkpoint; other sizes can be
 tried through the CLI but do not match that pinned oracle. CLM/Qwen ranking has
-[a separate runnable example](examples/clm-qwen/README.md).
+[its own package](qwen3/README.md), with runnable programs in
+`examples/qwen3`.
 
 ```sh
 CGO_ENABLED=0 go test ./...

@@ -398,7 +398,8 @@ func (h *HeadPair) NewWorkspace() *Workspace {
 	if h == nil {
 		return nil
 	}
-	ws := &Workspace{head: h, stateProjection: make([]float32, h.config.ProjectionDim)}
+	ws := &Workspace{head: h, stateProjection: make([]float32, h.config.ProjectionDim),
+		gemm: make([]float32, whispergemm.ScratchLen(max(h.config.EncoderDim, h.config.Width)))}
 	ws.grow(1)
 	return ws
 }
@@ -410,6 +411,7 @@ type Workspace struct {
 	rows                    int
 	input, hiddenA, hiddenB []float32 // [rows][dim]
 	projected               []float32 // [rows][ProjectionDim]
+	gemm                    []float32 // GEMM scratch, owned so no call allocates
 	stateProjection         []float32
 	one                     [1][]float32
 }
@@ -524,14 +526,14 @@ func (h *HeadPair) projectRows(head *projectionHead, embeddings [][]float32, ws 
 			return err
 		}
 	}
-	linearRows(&head.in, ws.input, ws.hiddenA, n)
+	linearRows(&head.in, ws.input, ws.hiddenA, n, ws.gemm)
 	for i := range n {
 		activateInPlace(head.activation, ws.hiddenA[i*c.Width:(i+1)*c.Width])
 	}
 	cur, next := ws.hiddenA, ws.hiddenB
 	for l := range head.hidden {
 		layer := &head.hidden[l]
-		linearRows(&layer.linear, cur, next, n)
+		linearRows(&layer.linear, cur, next, n, ws.gemm)
 		for i := range n {
 			row := next[i*c.Width : (i+1)*c.Width]
 			if head.layerNorm {
@@ -546,7 +548,7 @@ func (h *HeadPair) projectRows(head *projectionHead, embeddings [][]float32, ws 
 		}
 		cur, next = next, cur
 	}
-	linearRows(&head.out, cur, ws.projected, n)
+	linearRows(&head.out, cur, ws.projected, n, ws.gemm)
 	for i := range n {
 		if err := normalizeProjectedInPlace(ws.projected[i*c.ProjectionDim : (i+1)*c.ProjectionDim]); err != nil {
 			return err
@@ -557,8 +559,8 @@ func (h *HeadPair) projectRows(head *projectionHead, embeddings [][]float32, ws 
 
 // linearRows computes output[r] = input[r] · Wᵀ + bias for rows packed at
 // the layer's input and output widths.
-func linearRows(l *linear, input, output []float32, rows int) {
-	if err := l.packed.Mul(output, l.out, input, l.in, rows); err != nil {
+func linearRows(l *linear, input, output []float32, rows int, scratch []float32) {
+	if err := l.packed.MulScratch(output, l.out, input, l.in, rows, scratch); err != nil {
 		panic("clm: head GEMM: " + err.Error())
 	}
 	for r := range rows {

@@ -136,6 +136,35 @@ func (b *PackedB) Mul(dst []float32, dstStride int, a []float32, aStride int, m 
 	return nil
 }
 
+// ScratchLen reports the scratch MulScratch needs for K-wide products; it is
+// zero when the SME kernel is unavailable.
+func ScratchLen(k int) int { return scratchLen(k) }
+
+// MulScratch is Mul with caller-owned scratch of at least ScratchLen(K)
+// values, so concurrent callers never allocate or share pooled buffers.
+func (b *PackedB) MulScratch(dst []float32, dstStride int, a []float32, aStride int, m int, scratch []float32) error {
+	if b == nil {
+		return ErrNilMatrix
+	}
+	if !validInput(a, m, b.k, aStride) || !validMatrix(dst, m, b.n, dstStride) || len(scratch) < scratchLen(b.k) {
+		return ErrShape
+	}
+	if m == 0 || b.n == 0 {
+		return nil
+	}
+	if b.k == 0 {
+		for r := 0; r < m; r++ {
+			clear(dst[r*dstStride : r*dstStride+b.n])
+		}
+		return nil
+	}
+	if mulSMEScratch(dst, dstStride, a, aStride, b.data, m, b.k, b.n, scratch) {
+		return nil
+	}
+	mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)
+	return nil
+}
+
 // mul requires validated shapes and exclusive ownership of the output rows.
 func (b *PackedB) mul(dst []float32, dstStride int, a []float32, aStride int, m int) {
 	if m == 0 || b.n == 0 {

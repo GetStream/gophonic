@@ -93,15 +93,14 @@ panel-decode kernel (NEON on arm64) that is correct but far slower.
 ## Reproducing
 
 ```sh
-cd examples/clm-qwen
 export GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B
 export GOPHONIC_QWEN3_TOKENIZER=$GOPHONIC_QWEN3_MODEL
 export GOPHONIC_QWEN3_HELLO_REFERENCE=/path/to/qwen3-8b-hello-reference.f32
 export GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm
-CGO_ENABLED=0 GOEXPERIMENT=simd go test -run TestOfficial -v
-CGO_ENABLED=0 GOEXPERIMENT=simd go test -run '^$' -bench 'Official' -benchtime=5x
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run TestOfficial -v
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run '^$' -bench 'Official' -benchtime=5x
 llama-bench -m Qwen3-8B-Q8_0.gguf -p 1,12,64 -n 0 -embd 1 -t 8 -ngl 0 -dev none
 ```
 
-`examples/clm-qwen/tools/reference_hidden.py` writes the BF16 reference vector. Set
+`qwen3/tools/reference_hidden.py` writes the BF16 reference vector. Set
 `GOPHONIC_QWEN_WEIGHTS=int8` or `GOPHONIC_QWEN_THREADS=N` to vary benchmarks.
