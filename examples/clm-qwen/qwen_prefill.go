@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/q8gemv"
 	"github.com/townsendmerino/aikit/linalg"
 	"github.com/townsendmerino/goinfer/decoder"
@@ -18,7 +19,16 @@ import (
 // loaded once and reused across the prompt instead of reread once per token.
 // It shares immutable weights and geometry with a FastEvaluator.
 type PrefillEvaluator struct {
-	fast *FastEvaluator
+	fast      *FastEvaluator
+	packed    []packedQ8Layer
+	setupErr  error
+	useQ8GEMM bool
+}
+
+// packedQ8Layer keeps SME-friendly copies of the seven projection matrices.
+// The decoder remains immutable and caller-owned; packing never rewrites it.
+type packedQ8Layer struct {
+	q, k, v, o, gate, up, down *q8gemm.Weights
 }
 
 // PrefillWorkspace owns reusable prompt activations, one layer's KV rows, and
@@ -36,6 +46,7 @@ type PrefillWorkspace struct {
 	capacity                              int
 	owner                                 *PrefillEvaluator
 	gemm                                  linalg.Workspace
+	q8gemm                                *q8gemm.Workspace
 }
 
 // NewPrefillEvaluator builds a layer-batched evaluator over a CPU-loaded
@@ -45,14 +56,59 @@ func NewPrefillEvaluator(model *decoder.Model) (*PrefillEvaluator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newPrefillEvaluator(fast), nil
+	p := newPrefillEvaluator(fast)
+	if p.setupErr != nil {
+		return nil, p.setupErr
+	}
+	return p, nil
 }
 
 func newPrefillEvaluator(fast *FastEvaluator) *PrefillEvaluator {
 	if fast == nil {
 		return nil
 	}
-	return &PrefillEvaluator{fast: fast}
+	p := &PrefillEvaluator{fast: fast}
+	// The packed layout duplicates the model's Q8 projection bytes, so build it
+	// only when the current CPU can execute SME. Other platforms keep the
+	// existing allocation-free batched Q8 path.
+	if q8gemm.Available() {
+		p.useQ8GEMM = true
+		p.packed, p.setupErr = packQ8Layers(fast.w)
+	}
+	return p
+}
+
+func packQ8Layers(weights *decoder.Weights) ([]packedQ8Layer, error) {
+	if weights == nil {
+		return nil, errors.New("clmqwen: cannot pack nil Qwen3 weights")
+	}
+	out := make([]packedQ8Layer, len(weights.Layers))
+	for i := range weights.Layers {
+		layer := &weights.Layers[i]
+		mats := [...]*linalg.WeightMat{
+			&layer.QProj, &layer.KProj, &layer.VProj, &layer.OProj,
+			&layer.GateProj, &layer.UpProj, &layer.DownProj,
+		}
+		packed := [...]**q8gemm.Weights{
+			&out[i].q, &out[i].k, &out[i].v, &out[i].o,
+			&out[i].gate, &out[i].up, &out[i].down,
+		}
+		for j, mat := range mats {
+			q, scales, w8a8, ok := mat.Int8()
+			if !ok || w8a8 {
+				continue
+			}
+			w, err := q8gemm.NewWeights(mat.Cols(), mat.Rows())
+			if err != nil {
+				return nil, fmt.Errorf("clmqwen: allocate SME weights for layer %d projection %d: %w", i, j, err)
+			}
+			if err := w.Pack(q, scales); err != nil {
+				return nil, fmt.Errorf("clmqwen: pack SME weights for layer %d projection %d: %w", i, j, err)
+			}
+			*packed[j] = w
+		}
+	}
+	return out, nil
 }
 
 // NewWorkspace allocates a reusable workspace. Activation and KV buffers grow
@@ -65,6 +121,9 @@ func (p *PrefillEvaluator) NewWorkspace() *PrefillWorkspace {
 	}
 	ws := &PrefillWorkspace{owner: p}
 	ws.gemm.SetThreshold(int(^uint(0) >> 1))
+	if p.useQ8GEMM {
+		ws.q8gemm, _ = q8gemm.NewWorkspace(p.fast.intermediate)
+	}
 	return ws
 }
 
@@ -79,6 +138,9 @@ func (p *PrefillEvaluator) HiddenLastInto(ids []int, dst []float32, ws *PrefillW
 	}
 	if ws.owner != p {
 		return errors.New("clmqwen: prefill workspace belongs to another evaluator")
+	}
+	if p.setupErr != nil {
+		return p.setupErr
 	}
 	f := p.fast
 	if len(ids) == 0 {
@@ -106,14 +168,18 @@ func (p *PrefillEvaluator) HiddenLastInto(ids []int, dst []float32, ws *PrefillW
 
 	for layer := range f.w.Layers {
 		lw := &f.w.Layers[layer]
+		packed := packedQ8Layer{}
+		if layer < len(p.packed) {
+			packed = p.packed[layer]
+		}
 		normRows(ws.norm, ws.h, lw.PreAttnNorm, seq, f.hidden, f.eps)
-		if err := projectBatch(ws, &lw.QProj, ws.norm, ws.q, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.QProj, packed.q, ws.norm, ws.q, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d Q projection: %w", layer, err)
 		}
-		if err := projectBatch(ws, &lw.KProj, ws.norm, ws.k, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.KProj, packed.k, ws.norm, ws.k, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d K projection: %w", layer, err)
 		}
-		if err := projectBatch(ws, &lw.VProj, ws.norm, ws.v, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.VProj, packed.v, ws.norm, ws.v, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d V projection: %w", layer, err)
 		}
 		for pos := range seq {
@@ -139,22 +205,22 @@ func (p *PrefillEvaluator) HiddenLastInto(ids []int, dst []float32, ws *PrefillW
 			ctxrow := ws.ctx[pos*f.hidden : (pos+1)*f.hidden]
 			fastAttention(qrow, ctxrow, ws.scores, ws.keys, ws.values, pos+1, f)
 		}
-		if err := projectBatch(ws, &lw.OProj, ws.ctx, ws.attn, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.OProj, packed.o, ws.ctx, ws.attn, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d O projection: %w", layer, err)
 		}
 		addRows(ws.h, ws.attn, seq, f.hidden)
 		normRows(ws.norm, ws.h, lw.PreMLPNorm, seq, f.hidden, f.eps)
-		if err := projectBatch(ws, &lw.GateProj, ws.norm, ws.gate, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.GateProj, packed.gate, ws.norm, ws.gate, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d gate projection: %w", layer, err)
 		}
-		if err := projectBatch(ws, &lw.UpProj, ws.norm, ws.up, seq, f.hidden); err != nil {
+		if err := projectBatch(ws, &lw.UpProj, packed.up, ws.norm, ws.up, seq, f.hidden); err != nil {
 			return fmt.Errorf("clmqwen: layer %d up projection: %w", layer, err)
 		}
 		for i, gate := range ws.gate[:seq*f.intermediate] {
 			x := float64(gate)
 			ws.gate[i] = float32(x/(1+math.Exp(-x))) * ws.up[i]
 		}
-		if err := projectBatch(ws, &lw.DownProj, ws.gate, ws.attn, seq, f.intermediate); err != nil {
+		if err := projectBatch(ws, &lw.DownProj, packed.down, ws.gate, ws.attn, seq, f.intermediate); err != nil {
 			return fmt.Errorf("clmqwen: layer %d down projection: %w", layer, err)
 		}
 		addRows(ws.h, ws.attn, seq, f.hidden)
@@ -223,10 +289,16 @@ func (ws *PrefillWorkspace) prepareRoPE(f *FastEvaluator, n int) {
 	}
 }
 
-func projectBatch(ws *PrefillWorkspace, w *linalg.WeightMat, src, dst []float32, rows, cols int) error {
+func projectBatch(ws *PrefillWorkspace, w *linalg.WeightMat, packed *q8gemm.Weights, src, dst []float32, rows, cols int) error {
 	if q, scales, w8a8, ok := w.Int8(); ok {
 		if w8a8 {
 			return projectW8A8Batch(ws, q, scales, src, dst, rows, cols, w.Rows())
+		}
+		if packed != nil && rows > 1 && rows <= q8gemm.ActivationRows {
+			if ws.q8gemm == nil {
+				return errors.New("clmqwen: SME projection workspace is not initialized")
+			}
+			return q8gemm.MulInto(dst, src, rows, packed, ws.q8gemm)
 		}
 		if rows == 1 {
 			q8gemv.MulInto(src[:cols], q, scales, dst[:w.Rows()], cols, w.Rows())

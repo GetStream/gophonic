@@ -81,6 +81,10 @@ func OpenWithOptions(path string, opts Options) (*Encoder, error) {
 		}
 		e.ws = e.fast.NewWorkspace()
 		e.prefill = newPrefillEvaluator(e.fast)
+		if e.prefill.setupErr != nil {
+			_ = model.Close()
+			return nil, fmt.Errorf("clmqwen: initialize Qwen3 prefill evaluator: %w", e.prefill.setupErr)
+		}
 		e.prefillWS = e.prefill.NewWorkspace()
 	}
 	return e, nil
