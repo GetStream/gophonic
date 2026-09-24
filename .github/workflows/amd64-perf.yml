@@ -1,0 +1,27 @@
+name: AMD64 SIMD validation
+
+on:
+  push:
+    branches: [codex/amd64-whisper-simd]
+
+permissions:
+  contents: read
+
+jobs:
+  v3:
+    runs-on: ubuntu-latest
+    env:
+      GOAMD64: v3
+      GOEXPERIMENT: simd
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: CPU
+        run: lscpu | grep -E 'Model name|Architecture|Flags'
+      - name: Native SIMD and executor tests
+        run: go test ./internal/whispergemm ./whisper -count=5
+      - name: Native packed matrix and vector benchmarks
+        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector)$' -benchtime=100ms -count=3 -benchmem
