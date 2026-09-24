@@ -41,9 +41,14 @@ reported **0 B/op and 0 allocs/op**. These timings use one Go process per mode
 on the same runner; the model, input, and test harness are identical.
 
 The full-file benchmark is distinct from the padded 30-second-window benchmark
-used for a matched whisper.cpp comparison. The native C comparison must use
-the same model tensors, transcript, window, worker count, and warmup before any
-relative speed claim.
+used for a matched whisper.cpp comparison. On an AMD EPYC 9V74 runner, a
+[separate matched run](https://github.com/GetStream/gophonic/actions/runs/36060210384)
+measured the warm, single-worker 30-second window at **1.952 s for Go** and
+**1.459 s for whisper.cpp** (Go/C = **1.338**). Both ran the official tiny.en
+FP32 tensors, checked the same JFK transcript on every call, used five warm
+calls per block, and alternated process order. The Go implementation is still
+about 34% slower on this CPU and workload. The result is an end-to-end latency
+measurement, not a claim that each individual kernel is slower.
 
 ## Dispatch and correctness
 

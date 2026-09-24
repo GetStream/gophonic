@@ -23,6 +23,8 @@ jobs:
         run: lscpu | grep -E 'Model name|Architecture|Flags'
       - name: Native SIMD and executor tests
         run: go test ./... -count=2
+      - name: Native Qwen batch parity stress
+        run: go test ./qwen3 -run '^TestEvaluatorPortableMatchesReference$' -count=15
       - name: Native packed matrix and vector benchmarks
         run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar|BenchmarkAMD64Tile)$' -benchtime=100ms -count=3 -benchmem
       - name: Native int8 vector benchmarks

@@ -124,8 +124,7 @@ scaling after about two concurrent streaming threads, which is why the
 ## Limits and next steps
 
 - **Scope:** the SME path needs M4-class hardware. Other ARM64 CPUs use NEON, and AMD64 v3 builds use AVX2/FMA kernels;
-  see [native AMD64 results](amd64-performance.md). These CPUs have not been
-  compared with whisper.cpp in this study.
+  see [native AMD64 results and a matched whisper.cpp comparison](amd64-performance.md).
 - **Remaining one-core time** is mostly at hardware limits: `FMOPA` throughput,
   NEON throughput for the exponential, and FP16 widening. The largest
   quality-preserving idea left is to screen the vocabulary with a
