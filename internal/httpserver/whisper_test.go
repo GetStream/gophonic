@@ -232,3 +232,22 @@ func TestWarmedWAVHandlerAllocations(t *testing.T) {
 		t.Fatalf("warmed WAV handler must allocate zero heap objects, got %g", allocs)
 	}
 }
+
+func TestMultipartBoundaryInsideAudioIsNotADelimiter(t *testing.T) {
+	body := []byte("--simple\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n\r\nfirst\r\n--simpleXsecond\r\n--simple--\r\n")
+	got, err := parseUpload("multipart/form-data; boundary=simple", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.audio) != "first\r\n--simpleXsecond" {
+		t.Fatalf("audio was truncated: %q", got.audio)
+	}
+}
+
+func TestMalformedMultipartDoesNotPanic(t *testing.T) {
+	contentType := "multipart/form-data; boundary=abcd"
+	for n := 0; n < 64; n++ {
+		body := bytes.Repeat([]byte{'-'}, n)
+		_, _ = parseUpload(contentType, body)
+	}
+}
