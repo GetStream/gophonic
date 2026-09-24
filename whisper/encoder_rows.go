@@ -39,6 +39,18 @@ func (op *encoderRows) ApplyRows(start, end int) {
 			layerNormRow(op.dst[r*w:(r+1)*w], op.out[r*w:(r+1)*w], op.normW, op.normB)
 		}
 	case rowsResidual:
+		if layerNormAccelerated && op.normW != nil && w > 0 && w%8 == 0 && &op.src[0] == &op.out[0] {
+			// Fused: row += add + bias, then out = LayerNorm(row). out may
+			// alias add; each chunk of add is read before out is written.
+			var bias *float32
+			if op.bias != nil {
+				bias = &op.bias[0]
+			}
+			for r := start; r < end; r++ {
+				residualNormNEON(&op.dst[r*w], &op.out[r*w], &op.normW[0], &op.normB[0], w, &op.src[r*w], bias)
+			}
+			return
+		}
 		for r := start; r < end; r++ {
 			row, add := op.dst[r*w:(r+1)*w], op.src[r*w:(r+1)*w]
 			if op.bias != nil {

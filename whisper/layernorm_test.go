@@ -97,3 +97,45 @@ func TestArgmaxFiniteMatchesScalar(t *testing.T) {
 		}
 	}
 }
+
+func TestResidualNormMatchesSeparatePasses(t *testing.T) {
+	const rows, width = 9, 384
+	for _, withBias := range []bool{false, true} {
+		dst, add := make([]float32, rows*width), make([]float32, rows*width)
+		gamma, beta, bias := make([]float32, width), make([]float32, width), make([]float32, width)
+		for i := range dst {
+			dst[i] = float32(math.Sin(float64(i)*0.11)) * 4
+			add[i] = float32(math.Cos(float64(i)*0.07)) * 2
+		}
+		for i := range gamma {
+			gamma[i], beta[i], bias[i] = float32(1+i%5)*0.3, float32(i%7)*0.1, float32(i%3)*0.2
+		}
+		wantDst, wantOut := append([]float32(nil), dst...), make([]float32, len(dst))
+		var b []float32
+		if withBias {
+			b = bias
+		}
+		for r := 0; r < rows; r++ {
+			row, a := wantDst[r*width:(r+1)*width], add[r*width:(r+1)*width]
+			for i := range row {
+				if b != nil {
+					row[i] += a[i] + b[i]
+				} else {
+					row[i] += a[i]
+				}
+			}
+			layerNormRowGeneric(row, wantOut[r*width:(r+1)*width], gamma, beta)
+		}
+		out := append([]float32(nil), add...) // out aliases add, as in the encoder
+		op := encoderRows{kind: rowsResidual, dst: dst, src: out, bias: b, out: out, normW: gamma, normB: beta, width: width}
+		op.ApplyRows(0, rows)
+		for i := range dst {
+			if dst[i] != wantDst[i] {
+				t.Fatalf("bias=%v residual %d: %v != %v", withBias, i, dst[i], wantDst[i])
+			}
+			if d := math.Abs(float64(out[i] - wantOut[i])); d > 1e-6*(1+math.Abs(float64(wantOut[i]))) {
+				t.Fatalf("bias=%v norm %d: %v != %v", withBias, i, out[i], wantOut[i])
+			}
+		}
+	}
+}

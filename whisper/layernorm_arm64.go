@@ -22,3 +22,9 @@ func attnPrepNEON(q, k, v, qbias, vbias *float32, n int, scale float32)
 //
 //go:noescape
 func maxNumNEON(x *float32, n int) float32
+
+// residualNormNEON adds add (+ bias when non-nil) to row in place, then writes
+// LayerNorm(row) to dst. The sum row + (add + bias) keeps the scalar order.
+//
+//go:noescape
+func residualNormNEON(row, dst, gamma, beta *float32, n int, add, bias *float32)
