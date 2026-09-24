@@ -1,24 +1,18 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package main
+package audiofile
 
 import (
 	"errors"
 	"io"
-	"os"
 
 	"github.com/thesyncim/gopus"
 	"github.com/thesyncim/gopus/container/ogg"
 )
 
-func readOggOpus(path string) ([]float32, int, int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	defer f.Close()
-	reader, err := ogg.NewReader(f)
+func decodeOggOpus(input io.Reader, maxSeconds int) ([]float32, int, int, error) {
+	reader, err := ogg.NewReader(input)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -51,6 +45,9 @@ func readOggOpus(path string) ([]float32, int, int, error) {
 		if decodeErr != nil {
 			return nil, 0, 0, decodeErr
 		}
+		if maxSeconds > 0 && len(pcm)/channels+samples > 16000*maxSeconds+5760 {
+			return nil, 0, 0, errors.New("audio exceeds duration limit")
+		}
 		pcm = append(pcm, frame[:samples*channels]...)
 	}
 	if finalGranule == 0 {
@@ -66,5 +63,8 @@ func readOggOpus(path string) ([]float32, int, int, error) {
 		return nil, 0, 0, errors.New("Ogg Opus stream is shorter than its pre-skip")
 	}
 	pcm = pcm[preSkip*channels : validEnd*channels]
+	if maxSeconds > 0 && len(pcm)/channels > 16000*maxSeconds {
+		return nil, 0, 0, errors.New("audio exceeds duration limit")
+	}
 	return pcm, 16000, channels, nil
 }

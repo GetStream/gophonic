@@ -22,7 +22,7 @@ transcripts.
   fallback.
 
 [Whisper performance](docs/whisper-performance.md) ·
-[Whisper design](docs/whisper-design.md) · [Models](docs/models.md) ·
+[Whisper design](docs/whisper-design.md) · [Local server](docs/server.md) · [Models](docs/models.md) ·
 [Go API](docs/api.md) · [Architecture](docs/architecture.md) ·
 [Benchmarks](docs/benchmarks.md) · [Validation](docs/validation.md)
 
@@ -39,6 +39,10 @@ python3 tools/whisper_pt_to_gophonic.py base.en.pt base.en.gophonic
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
 ./gophonic -whisper-model base.en.gophonic speech.wav   # {"text":"..."}
 ```
+
+To submit completed recordings over HTTP, use the optional
+[local server](docs/server.md), which shares the model across bounded
+transcriber lanes.
 
 | Model | Parameters | Checkpoint |
 | --- | ---: | --- |

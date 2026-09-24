@@ -8,10 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/GetStream/gophonic"
+	"github.com/GetStream/gophonic/internal/audiofile"
 	"github.com/GetStream/gophonic/whisper"
 )
 
@@ -35,7 +35,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	pcm, rate, channels, err := readAudio(flag.Arg(0))
+	pcm, rate, channels, err := audiofile.ReadPath(flag.Arg(0))
 	if err != nil {
 		fatal(err)
 	}
@@ -95,17 +95,6 @@ func main() {
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(prediction); err != nil {
 		fatal(err)
-	}
-}
-
-func readAudio(path string) ([]float32, int, int, error) {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".wav":
-		return readWAV(path)
-	case ".opus", ".ogg":
-		return readOggOpus(path)
-	default:
-		return nil, 0, 0, fmt.Errorf("unsupported audio file %q; use WAV or Ogg Opus", path)
 	}
 }
 
