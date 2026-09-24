@@ -10,13 +10,15 @@ none` and its best thread count (8).
 
 | Workload | gophonic before | llama.cpp Q8_0, CPU | gophonic now |
 | --- | ---: | ---: | ---: |
-| 1 token | 338 ms | 31.8 ms | 65 ms |
-| 12 tokens (one text) | 413 ms | 90 ms | **69 ms** |
-| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | **342 ms (70)** |
-| 16 texts × ~12 tokens | ≈6.6 s | — | 1.08 s |
-| Rank 16 candidates, cached | 6.6 s | — | **1.65 ms** |
+| 1 token | 338 ms | 31.8 ms | 68 ms |
+| 12 tokens (one text) | 413 ms | 90 ms | **69–73 ms** |
+| 64–70 tokens (one text) | ≈2 s | 487 ms (64) | **317 ms (70)** |
+| 2048 tokens (one text) | minutes | — | 8.19 s |
+| New 30-token turn on an 1800-token state | minutes | — | **203 ms** |
+| 16 texts × ~12 tokens | ≈6.6 s | — | 850 ms |
+| Rank 16 candidates, cached | 6.6 s | — | **1.7 ms** |
 | Cosine vs official BF16 (`hello`) | 0.99738 | 0.99929 | **0.99991** |
-| Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.1 s |
+| Load (safetensors → packed) | goinfer load + 5–8 s repack | — | 3.0 s |
 
 All warmed paths report 0 allocs/op. “Before” is the previous single-thread
 per-row int8 path. Probabilities for the pinned CLM ranking now differ from the
@@ -53,6 +55,22 @@ for 1 ms before parking. On this machine the projection stage runs at
 own tokens. The CLM head scores all candidates as one batched GEMM instead of
 one matrix-vector product per candidate.
 
+**Blocked SME attention.** Sequences of 64 tokens or more compute attention
+per KV-head group and 128-query block: keys and values up to the block's
+causal limit are packed once, and Q·Kᵀ and P·V run as FP32 SME matrix
+products with a vectorized softmax between them. Per-token cost stays near
+3.9 ms from 280 to 2048 tokens; the previous streaming loop made 2048 tokens
+take 23 s.
+
+**Prefix key/value store.** The encoder keeps the post-RoPE keys and values
+of the last long input for all 36 layers in FP32 (288 KiB per token, one
+2048-token store by default). A later input that shares a token prefix, such
+as a conversation state with a new turn, evaluates only its new tokens.
+Branching from the middle of the stored sequence reuses the shared part.
+
+**Final-layer pruning.** Only each sequence's last row reaches the output, so
+the last layer's output projection and MLP run on one row per sequence.
+
 **Exact embedding cache.** Finished embeddings are cached by a 128-bit hash of
 their token IDs (4096 entries, 64 MiB, CLOCK eviction, no allocation). Inference
 is deterministic, so a hit returns exactly what recomputation would.
@@ -62,12 +80,15 @@ is deterministic, so a hit returns exactly what recomputation would.
 
 ## Limits
 
-Prefill costs ≈3.7 ms per token (one 16-row tile ≈ 60 ms) at the SME FP16
-ceiling. A single token pays for a full tile; a bandwidth-bound matrix-vector
-path would help single-token requests with int8 weights. Long texts (up to the
-2048-token CLM limit) scale linearly in projection time; attention is still a
-simple streaming loop. CPUs without SME use a portable panel-decode kernel
-(NEON on arm64) that is correct but far slower.
+Every floating-point SME format (FP32, FP16, BF16, and int16) peaks at
+2.07 TMAC/s across the chip in a register-only loop, with or without
+efficiency cores; the projection kernel sustains about 1.8–1.9 TMAC/s while
+streaming weights from DRAM. Fresh prefill therefore costs ≈3.7–3.9 ms per
+token (one 16-row tile ≈ 60 ms), and a single token pays for a full tile.
+Only int8×int8 `SMOPA` runs faster (4.1 TMAC/s), and it would require
+quantized activations. Further speedups on this CPU come from avoiding work:
+the prefix store and the embedding cache. CPUs without SME use a portable
+panel-decode kernel (NEON on arm64) that is correct but far slower.
 
 ## Reproducing
 
@@ -78,7 +99,7 @@ export GOPHONIC_QWEN3_TOKENIZER=$GOPHONIC_QWEN3_MODEL
 export GOPHONIC_QWEN3_HELLO_REFERENCE=/path/to/qwen3-8b-hello-reference.f32
 export GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm
 CGO_ENABLED=0 GOEXPERIMENT=simd go test -run TestOfficial -v
-CGO_ENABLED=0 GOEXPERIMENT=simd go test -run '^$' -bench 'Official' -benchtime=20x
+CGO_ENABLED=0 GOEXPERIMENT=simd go test -run '^$' -bench 'Official' -benchtime=5x
 llama-bench -m Qwen3-8B-Q8_0.gguf -p 1,12,64 -n 0 -embd 1 -t 8 -ngl 0 -dev none
 ```
 

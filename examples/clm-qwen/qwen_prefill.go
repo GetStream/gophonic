@@ -40,7 +40,7 @@ type PrefixKV struct {
 }
 
 // NewPrefixKV allocates storage for up to capacity tokens:
-// 8 bytes × layers × KV width per token (144 KiB for Qwen3-8B).
+// 8 bytes × layers × KV width per token (288 KiB for Qwen3-8B).
 func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 	if e == nil || e.m == nil {
 		return nil, errors.New("clmqwen: nil evaluator")
@@ -294,18 +294,21 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if len(ws.attnItems) > 0 {
 			ws.run(opAttentionGEMM, len(ws.attnItems), 1)
 		}
+		if layer == len(m.layers)-1 {
+			// Only each sequence's last row reaches the output, so the final
+			// output projection and MLP run on those rows alone.
+			ws.keepLastRows(seqs, c)
+		}
 		ws.project(ws.ctx, c.heads*c.headDim, projection{l.o, ws.attn})
 		ws.addNorm(ws.attn, l.mlpNorm)
 		ws.project(ws.norm, c.hidden, projection{l.gate, ws.gate}, projection{l.up, ws.up})
-		ws.run(opSwiGLU, rows*swigluChunks(c.intermediate), 4)
+		ws.run(opSwiGLU, op.rows*swigluChunks(c.intermediate), 4)
 		ws.project(ws.gate, c.intermediate, projection{l.down, ws.attn})
 	}
 	op.layer = nil
-	row = 0
-	for s, ids := range seqs {
-		row += len(ids)
-		last := ws.h[(row-1)*c.hidden : row*c.hidden]
-		addInto(last, ws.attn[(row-1)*c.hidden:row*c.hidden])
+	for s := range seqs {
+		last := ws.h[s*c.hidden : (s+1)*c.hidden]
+		addInto(last, ws.attn[s*c.hidden:(s+1)*c.hidden])
 		rmsNorm32(dst[s], last, m.finalNorm, c.eps)
 		for _, value := range dst[s] {
 			if !finite32(value) {
@@ -314,6 +317,22 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		}
 	}
 	return nil
+}
+
+// keepLastRows moves each sequence's last row of h and ctx to row s and
+// shrinks the batch to one row per sequence. Rows only move toward the
+// front, so copying in sequence order never overwrites a row still needed.
+func (ws *Workspace) keepLastRows(seqs [][]int, c *modelConfig) {
+	qdim := c.heads * c.headDim
+	row := 0
+	for s, ids := range seqs {
+		row += len(ids)
+		if last := row - 1; last != s {
+			copy(ws.h[s*c.hidden:(s+1)*c.hidden], ws.h[last*c.hidden:(last+1)*c.hidden])
+			copy(ws.ctx[s*qdim:(s+1)*qdim], ws.ctx[last*qdim:(last+1)*qdim])
+		}
+	}
+	ws.op.rows = len(seqs)
 }
 
 func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {

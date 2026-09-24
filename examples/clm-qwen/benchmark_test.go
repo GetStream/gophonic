@@ -24,6 +24,9 @@ func BenchmarkOfficialQwenTokenizer(b *testing.B) {
 	}
 	var ws TokenizerWorkspace
 	ids := make([]int, 0, 64)
+	if ids, err = tok.EncodeInto("hello", ids, &ws); err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	for b.Loop() {
 		ids, err = tok.EncodeInto("hello", ids[:0], &ws)

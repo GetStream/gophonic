@@ -65,7 +65,7 @@ type Encoder struct {
 // evaluation would produce.
 //
 // PrefixCacheTokens sizes a store of the last long input's per-layer keys and
-// values (144 KiB per token): when a later input of at least 64 tokens shares
+// values (288 KiB per token): when a later input of at least 64 tokens shares
 // a token prefix with it (a growing conversation state), only the new tokens
 // are evaluated. Zero selects 2048 tokens; a negative value disables it.
 type Options struct {

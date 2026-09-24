@@ -45,8 +45,8 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Encoder, time.Duration)
 	v, _ := officialEncoders.LoadOrStore(format, &officialEncoder{})
 	o := v.(*officialEncoder)
 	o.once.Do(func() {
-		// Benchmarks repeat inputs; keep the cache out of compute timings.
-		opts := Options{Weights: format, CacheEntries: -1}
+		// Benchmarks repeat inputs; keep both caches out of compute timings.
+		opts := Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1}
 		if n, err := strconv.Atoi(os.Getenv("GOPHONIC_QWEN_THREADS")); err == nil && n > 0 {
 			opts.Threads = n
 		}
