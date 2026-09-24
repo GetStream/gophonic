@@ -307,6 +307,7 @@ type tensorInfo struct {
 }
 
 type safetensors struct {
+	dir     string
 	files   []*os.File
 	tensors map[string]tensorInfo
 }
@@ -329,7 +330,7 @@ func openSafetensors(dir string) (*safetensors, error) {
 			}
 		}
 	}
-	st := &safetensors{tensors: map[string]tensorInfo{}}
+	st := &safetensors{dir: dir, tensors: map[string]tensorInfo{}}
 	for _, name := range names {
 		if filepath.Base(name) != name {
 			st.close()

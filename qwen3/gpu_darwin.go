@@ -192,6 +192,15 @@ func (m *Weights) loadGPU(st *safetensors, bits int) error {
 			job{p + "mlp.down_proj.weight", h, inter, nil, g.inter, g.hidden, gl, gl.d, gl.dScale, 1, 1, 0},
 		)
 	}
+	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
+	format := WeightsGPU
+	if bits == 4 {
+		format = WeightsGPUQ4
+	}
+	pre := openGPTQ(st.dir, format, bits, c)
+	if pre != nil {
+		defer pre.close()
+	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
 	var (
 		wg    sync.WaitGroup
@@ -214,6 +223,18 @@ func (m *Weights) loadGPU(st *safetensors, bits int) error {
 				j := jobs[next]
 				next++
 				mu.Unlock()
+				if pre != nil {
+					done, err := pre.place(j.name, j.n, j.k, j.layer.buf.Bytes(), j.base, j.sc, j.row0, j.step)
+					if err != nil {
+						mu.Lock()
+						first = errors.Join(first, err)
+						mu.Unlock()
+						return
+					}
+					if done {
+						continue
+					}
+				}
 				t, err := st.lookup(j.name, j.n, j.k)
 				if err == nil && t.dtype != "BF16" {
 					err = fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", j.name, t.dtype)
