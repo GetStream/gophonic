@@ -53,7 +53,7 @@ func benchQ8GEMMShape(b *testing.B, m, k, n int) {
 		if usingSME() {
 			b.Log("dispatch=SME16x64, SVL=64")
 		} else {
-			b.Log("dispatch=scalar (SME unavailable)")
+			b.Log("dispatch=" + portableKernelName)
 		}
 		b.SetBytes(int64(k * n))
 		b.ResetTimer()

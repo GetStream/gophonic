@@ -1,7 +1,7 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-//go:build !arm64
+//go:build !arm64 && (!amd64 || !amd64.v3 || !goexperiment.simd)
 
 package whisper
 

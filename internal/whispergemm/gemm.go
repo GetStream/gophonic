@@ -160,7 +160,7 @@ func (b *PackedB) Pack(src []float32, stride int, transposed bool) error {
 // STFT frames directly from a signal.
 //
 // Mul is single-threaded and allocates no memory. Callers can partition rows
-// across their existing workers by passing row-sliced A and C. ARM64 SIMD uses
+// across their existing workers by passing row-sliced A and C. ARM64 and AMD64 v3 SIMD use
 // FP32 fused multiply-add; results need not be bit-identical to scalar builds
 // or other BLAS reduction orders. See README.md for the numerical contract.
 func (b *PackedB) Mul(dst []float32, dstStride int, a []float32, aStride int, m int) error {

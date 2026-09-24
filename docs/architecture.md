@@ -42,7 +42,7 @@ flowchart LR
 The decoder borrows the encoder workspace's persistent worker executor.
 Matrix and row operations publish a generation to each helper, use atomic
 completion, and write disjoint output ranges. No worker pool is created per
-token. `internal/whispergemm` holds Apple SME, Go 1.27 ARM64 SIMD, and scalar kernels;
+token. `internal/whispergemm` holds Apple SME, ARM64 NEON, AMD64 v3 AVX2/FMA, and scalar kernels;
 model loading and first weight packing occur outside warm inference.
 
 An external backend can reuse `WhisperFeatureWorkspace` when its model expects
@@ -101,7 +101,8 @@ performs layout conversion into dedicated scratch.
 
 ## SIMD dispatch
 
-`GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and AMD64. ARM64 also
+`GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and, with
+`GOAMD64=v3`, AMD64. ARM64 also
 uses Go 1.27's 128-bit NEON operations through `simd/archsimd` for TinyMelNet
 quantization, dense and depthwise integer convolutions, mel-layout conversion,
 and selected GRU projection tiles. TinyMelNet's integer stages use scalar Go
@@ -109,8 +110,8 @@ fallbacks on AMD64; other architectures use scalar Go kernels throughout.
 
 These are Go compiler intrinsics expressed in Go source. SIMD support is
 experimental in Go 1.27, so changing the toolchain requires rebuilding and
-checking the numerical and performance gates. The development performance
-numbers are for ARM64; they do not establish AMD64 speed.
+checking the numerical and performance gates. Native AMD64 measurements and their
+reproduction conditions are in [AMD64 performance](amd64-performance.md).
 [Go 1.27 SIMD documentation](https://go.dev/doc/go1.27).
 
 ## Concurrency and ownership

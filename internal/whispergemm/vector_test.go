@@ -85,6 +85,22 @@ func TestMulVectorSpecialValidationAndAllocations(t *testing.T) {
 	}
 }
 
+func BenchmarkMulVectorScalar(b *testing.B) {
+	for _, shape := range benchmarkShapes {
+		if shape.m != 1 {
+			continue
+		}
+		b.Run(shape.name, func(b *testing.B) {
+			x, weights, dst, _ := benchmarkData(b, 1, shape.k, shape.n)
+			b.ReportAllocs()
+			for b.Loop() {
+				mulVectorScalar(dst, weights, shape.k, x, shape.n)
+			}
+			benchmarkSink = dst[len(dst)-1]
+		})
+	}
+}
+
 func BenchmarkMulVector(b *testing.B) {
 	for _, s := range benchmarkShapes {
 		if s.m != 1 {

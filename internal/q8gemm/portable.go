@@ -14,16 +14,24 @@ var (
 	f16Table     []float32
 )
 
-// portableMulPanels is the kernel for CPUs without SME. It decodes each
-// weight panel to FP32 once, then accumulates every packed row against it in
-// increasing K order.
-func portableMulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int, panel []float32) {
+// prepareF16Table is called while loading FP16 weights on portable CPUs.
+// Keeping this allocation in model setup leaves the inference call allocation-free.
+func prepareF16Table() {
 	f16TableOnce.Do(func() {
 		f16Table = make([]float32, 1<<16)
 		for h := range f16Table {
 			f16Table[h] = f16ToF32(uint16(h))
 		}
 	})
+}
+
+// portableMulPanels is the kernel for CPUs without SME. It decodes each
+// weight panel to FP32 once, then accumulates every packed row against it in
+// increasing K order.
+func portableMulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int, panel []float32) {
+	if w.h != nil {
+		prepareF16Table()
+	}
 	rows := ws.rows
 	var acc [ActivationRows][OutputPanel]float32
 	for p := p0; p < p1; p++ {

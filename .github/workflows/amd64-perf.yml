@@ -1,0 +1,69 @@
+name: AMD64 SIMD validation
+
+on:
+  push:
+    branches: [codex/amd64-whisper-simd]
+
+permissions:
+  contents: read
+
+jobs:
+  v3:
+    runs-on: ubuntu-latest
+    env:
+      GOAMD64: v3
+      GOEXPERIMENT: simd
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: CPU
+        run: lscpu | grep -E 'Model name|Architecture|Flags'
+      - name: Native SIMD and executor tests
+        run: go test ./... -count=2
+      - name: Native Qwen batch parity stress
+        run: go test ./qwen3 -run '^TestEvaluatorPortableMatchesReference$' -count=15
+      - name: Native packed matrix and vector benchmarks
+        run: go test ./internal/whispergemm -run '^$' -bench '^(BenchmarkMul|BenchmarkScalar|BenchmarkMulVector|BenchmarkMulVectorScalar|BenchmarkAMD64Tile)$' -benchtime=100ms -count=3 -benchmem
+      - name: Native int8 vector benchmarks
+        run: go test ./internal/q8gemv -run '^$' -bench '^BenchmarkMulInto' -benchtime=100ms -count=3 -benchmem
+      - name: Native portable int8 matrix benchmark
+        run: go test ./internal/q8gemm -run '^$' -bench '^BenchmarkQ8GEMM16x64/M12K4096N1024/SME_or_scalar$' -benchtime=1x -count=3 -benchmem
+      - name: Native portable int8 matrix scalar baseline
+        env:
+          GOEXPERIMENT: ""
+        run: go test ./internal/q8gemm -run '^$' -bench '^BenchmarkQ8GEMM16x64/M12K4096N1024/SME_or_scalar$' -benchtime=1x -count=3 -benchmem
+      - name: Native Whisper elementwise benchmarks
+        run: go test ./whisper -run '^$' -bench '^(BenchmarkGELU|BenchmarkAudioSoftmax|BenchmarkAudioSoftmaxScalar|BenchmarkAMD64LayerNorm)$' -benchtime=100ms -count=3 -benchmem
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Prepare official tiny.en model
+        run: |
+          python3 -m pip install numpy
+          curl -fL --retry 3 --output "$RUNNER_TEMP/tiny.en.pt" https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt
+          python3 tools/whisper_pt_to_gophonic.py "$RUNNER_TEMP/tiny.en.pt" "$RUNNER_TEMP/tiny.en.gophonic"
+      - name: Native full Whisper parity and SIMD timing
+        env:
+          GOPHONIC_WHISPER_MODEL: ${{ runner.temp }}/tiny.en.gophonic
+        run: |
+          go test ./whisper -run 'TestOfficialTinyENBundle|TestTranscriberOfficialJFK|TestOfficialJFKSegmentTimestamps|TestOfficialJFKWordTimestamps' -count=1
+          go test ./whisper -run '^$' -bench '^BenchmarkOfficialTinyENTranscribe$' -benchtime=1x -count=3 -benchmem
+      - name: Native full Whisper scalar timing
+        env:
+          GOEXPERIMENT: ""
+          GOPHONIC_WHISPER_MODEL: ${{ runner.temp }}/tiny.en.gophonic
+        run: go test ./whisper -run '^$' -bench '^BenchmarkOfficialTinyENTranscribe$' -benchtime=1x -count=3 -benchmem
+      - name: Matched CPU-only whisper.cpp comparison
+        run: |
+          git clone --quiet --filter=blob:none https://github.com/ggml-org/whisper.cpp.git "$RUNNER_TEMP/whisper.cpp"
+          git -C "$RUNNER_TEMP/whisper.cpp" checkout --quiet a664346ea5c6dddff3e61a2b7b32dd4514613f50
+          cmake -S "$RUNNER_TEMP/whisper.cpp" -B "$RUNNER_TEMP/whisper.cpp/build" -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_TESTS=OFF
+          cmake --build "$RUNNER_TEMP/whisper.cpp/build" --target whisper -j 2
+          curl -fL --retry 3 --output "$RUNNER_TEMP/ggml-tiny.en.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+          python3 tools/whisper_bundle_to_ggml_f32.py "$RUNNER_TEMP/tiny.en.gophonic" "$RUNNER_TEMP/ggml-tiny.en.bin" "$RUNNER_TEMP/ggml-tiny.en-f32.bin"
+          c++ -O3 -std=c++17 -I"$RUNNER_TEMP/whisper.cpp/include" -I"$RUNNER_TEMP/whisper.cpp/ggml/include" tools/benchmark_whisper_cpp_warm.cpp -L"$RUNNER_TEMP/whisper.cpp/build/bin" -lwhisper -Wl,-rpath,"$RUNNER_TEMP/whisper.cpp/build/bin" -o "$RUNNER_TEMP/cpp-warm"
+          go build -o "$RUNNER_TEMP/go-warm" ./tools/benchmark_whisper_go_warm
+          python3 tools/benchmark_whisper_warm_compare.py "$RUNNER_TEMP/go-warm" "$RUNNER_TEMP/tiny.en.gophonic" "$RUNNER_TEMP/cpp-warm" "$RUNNER_TEMP/ggml-tiny.en-f32.bin" testdata/whisper_jfk.pcm.f32le --workers 1 --blocks 2 --calls 2

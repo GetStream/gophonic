@@ -52,14 +52,17 @@ assembler has no SME mnemonics, so `smesrc/` holds the sources and
 - The M4 Max has one SME unit per performance cluster. Aggregate throughput
   saturates around two concurrent streaming threads.
 
-## NEON path
+## SIMD paths
 
 With Go 1.27 and `GOEXPERIMENT=simd` on ARM64, dispatch selects a NEON 2 × 32
 kernel for pairs of packed panels, with a 4 × 16 kernel for a remaining full
 panel. The wider kernel reuses each source broadcast across more columns and
 preserves increasing-K FMA order. Final one-to-three-row tails retain their
 existing reduction streams, so executor worker counts keep identical results.
-Other builds use a scalar 4 × 4 kernel. Both paths are pure Go. The
+AMD64 v3 builds with `GOEXPERIMENT=simd` select an AVX2/FMA 4 × 16 kernel
+with 2 × 16 row tails and four independent reduction streams for one-row
+decoder work. AMD64 v1/v2
+and other builds use the scalar 4 × 4 kernel. All paths are pure Go. The
 SIMD kernel uses fused FP32 multiply-add; its single-row path uses four
 independent reduction streams. The scalar path accumulates in increasing K
 order and permits compiler-fused FP32 multiply-add. Results therefore need
@@ -76,8 +79,9 @@ Input/output aliasing is not supported.
 
 `MulVector` reads ordinary row-major weights directly for incremental decoder
 projections. It processes four output rows together and reuses each input
-load. The ARM64 path uses two four-lane reduction streams per row, while the
-scalar path uses two scalar streams. This avoids a packed copy of the 80 MB
+load. The ARM64 path uses two four-lane reduction streams per row; AMD64 v3 uses
+two eight-lane streams; the scalar path uses two scalar streams. This avoids
+a packed copy of the 80 MB
 vocabulary matrix. Its tests use the same independent FP64 error bound and
 exercise empty inputs, reduction/output tails, special values, and zero warm
 allocations. The decoder's vocabulary shards align to four output rows so

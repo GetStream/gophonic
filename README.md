@@ -105,7 +105,9 @@ The speed comes from Apple's **SME** matrix unit, driven from Go assembly:
 - **Elementwise work:** softmax, GELU, LayerNorm, and argmax are hand-written
   NEON, with fused passes wherever data would otherwise be read twice.
 
-SME is detected at run time. Other CPUs use portable NEON or scalar Go kernels.
+SME is detected at run time. ARM64 without SME uses NEON; AMD64 v3 builds use
+AVX2/FMA kernels for Whisper FP32 and quantized inference. Older AMD64 builds
+use scalar Go. See the [native AMD64 results](docs/amd64-performance.md).
 
 ### Accuracy
 
