@@ -26,6 +26,17 @@
 	umov w10, v6.s[1]
 	umov w11, v6.s[2]
 	umov w12, v6.s[3]
+	// Clamp indices as integers: the table has 1025 entries, and a NaN
+	// surviving fminnm would otherwise compute an out-of-bounds address.
+	mov w13, #1024
+	cmp w9, #1024
+	csel w9, w9, w13, lo
+	cmp w10, #1024
+	csel w10, w10, w13, lo
+	cmp w11, #1024
+	csel w11, w11, w13, lo
+	cmp w12, #1024
+	csel w12, w12, w13, lo
 	add x9, x3, x9, lsl #3
 	add x10, x3, x10, lsl #3
 	add x11, x3, x11, lsl #3
