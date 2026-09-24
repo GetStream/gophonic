@@ -1,14 +1,17 @@
 # Downloaded model checkpoints and local converted bundles.
 *.onnx
 *.gofloor
+*.gophonic
 *.goinfer
 
 # Local binaries and benchmark profiles.
 /gofloor
+/gophonic
 /goinfer
 *.test
 *.prof
 *.pprof
+*.ses
 
 # Converter environments.
 .venv/

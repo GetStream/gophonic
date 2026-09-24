@@ -1,0 +1,48 @@
+
+SIMD baseline round 1
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 907332125 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+SIMD candidate round 1
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 778992278 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+SIMD candidate round 2
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 936236875 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+SIMD baseline round 2
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 904878292 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+SIMD baseline round 3
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 897673569 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+SIMD candidate round 3
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers1-16         	       3	 778739167 ns/op	       0 B/op	       0 allocs/op
+PASS

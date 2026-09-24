@@ -1,0 +1,58 @@
+{
+  "source_commit": "86098128c0b4f24f0e2aa2994de830614b474227",
+  "checkpoint_sha256": "d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03",
+  "pcm_sha256": "80a6b1e2dcc00e55e5341e4de9c44f65bc576202c93106ff6b4bfe251a87e02f",
+  "mel_shape": [
+    80,
+    3000
+  ],
+  "encoder_shape": [
+    1500,
+    384
+  ],
+  "prefix": [
+    50257,
+    50362
+  ],
+  "prefix_argmax": 843,
+  "transcript": "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.",
+  "tokens": [
+    843,
+    523,
+    616,
+    5891,
+    3399,
+    1265,
+    407,
+    644,
+    534,
+    1499,
+    460,
+    466,
+    329,
+    345,
+    11,
+    1265,
+    644,
+    345,
+    460,
+    466,
+    329,
+    534,
+    1499,
+    13
+  ],
+  "files_sha256": {
+    "jfk.after_843_logits.f32le": "071d27441c5c17d776e74cc8a3dca2ca930589ded2680a72dc5495643bcee132",
+    "jfk.encoder.block0.f32le": "96f7eaa0c2fcb20c9cc40dc440ecef8a8efb1cdbcb7184eceba4d8fe678ccff7",
+    "jfk.encoder.block1.f32le": "0df692f949e91bcb611cb29d46d7d8d3043f55302c5210b93a2127ef83de726a",
+    "jfk.encoder.block2.f32le": "d83e2cbb2ee86ff4c13ddddfbb34842368163032c50d4f313ed11be2c25b0f6c",
+    "jfk.encoder.block3.f32le": "a852861fcac6f072f18ed6220d532fd21ce40370662691f23d1fd6dacac74796",
+    "jfk.encoder.conv1.f32le": "ce6f1b4801255e379aa7483db52978681d193d9f5beb2c5759161aea8725d491",
+    "jfk.encoder.conv2.f32le": "4a6c3c27b7e4ea39d0fa7c272df59a5b1c5a511a86481701c130f4b603a00d22",
+    "jfk.encoder.f32le": "a651d4d315813aff0c74e38f66b0558c7bb7c364da33c816f8512f33c49e1aa8",
+    "jfk.half_audio_prefix_logits.f32le": "e23afa873dccefebb201d0cf66f9c0b52eaa76f0028532014aa77fb098e0d636",
+    "jfk.mel.f32le": "42f89bf6b9ea85f8820409dafe631241ae3879d01b2860bc5f4860eaad958981",
+    "jfk.prefix_logits.f32le": "dd2163ed584c9bd7abec54583c441044a8e4bc0e450493d536202f76ecec030f"
+  }
+}

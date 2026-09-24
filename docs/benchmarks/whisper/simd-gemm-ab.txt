@@ -1,0 +1,32 @@
+original
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers12-12         	       5	 214556567 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+tbl4
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers12-12         	       5	 171325375 ns/op	       0 B/op	       0 allocs/op
+PASS
+
+tbl4
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers12-12         	       5	 179196433 ns/op	      99 B/op	       1 allocs/op
+PASS
+
+original
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/whisper
+cpu: Apple M4 Max
+BenchmarkEncoder/workers12-12         	       5	 217464292 ns/op	       0 B/op	       0 allocs/op
+PASS
+

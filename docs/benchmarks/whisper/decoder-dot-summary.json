@@ -1,0 +1,63 @@
+{
+  "baseline": "1c55eec",
+  "go": "go1.27.0 darwin/arm64",
+  "cpu": "Apple M4 Max",
+  "experiment": "simd",
+  "gomaxprocs": 8,
+  "full_decoder": "official tiny.en JFK encoder fixture + 24 generated tokens; BeginDecode and prefix included",
+  "observed_allocations": "0 objects, 0 bytes across 256 measured complete decodes",
+  "results": [
+    {
+      "file": "gophonic-decoder-dot-direct.txt",
+      "workers": 8,
+      "pairs": 48,
+      "candidate_wins": 33,
+      "median_paired_ratio": 0.9747049141900483,
+      "median_ratio_bootstrap95": [
+        0.9521319055327365,
+        0.9894825246978058
+      ],
+      "baseline_ms": 89.7150835,
+      "candidate_ms": 85.9706255
+    },
+    {
+      "file": "gophonic-decoder-dot-direct.txt",
+      "workers": 1,
+      "pairs": 16,
+      "candidate_wins": 15,
+      "median_paired_ratio": 0.9632256297750358,
+      "median_ratio_bootstrap95": [
+        0.9595105007958897,
+        0.9699897244588729
+      ],
+      "baseline_ms": 157.024021,
+      "candidate_ms": 151.5746455
+    },
+    {
+      "file": "gophonic-decoder-dot-direct-repeat.txt",
+      "workers": 8,
+      "pairs": 48,
+      "candidate_wins": 34,
+      "median_paired_ratio": 0.9790491888230068,
+      "median_ratio_bootstrap95": [
+        0.9653286332903768,
+        0.9893793493604481
+      ],
+      "baseline_ms": 89.849208,
+      "candidate_ms": 90.4316665
+    },
+    {
+      "file": "gophonic-decoder-dot-direct-repeat.txt",
+      "workers": 1,
+      "pairs": 16,
+      "candidate_wins": 16,
+      "median_paired_ratio": 0.9725191963586295,
+      "median_ratio_bootstrap95": [
+        0.9656537271188655,
+        0.9741377918270726
+      ],
+      "baseline_ms": 155.7278335,
+      "candidate_ms": 151.1871665
+    }
+  ]
+}
