@@ -246,6 +246,13 @@ struct MMArgs {
 
 constant constexpr uint MM_BN = 64, MM_BK = 32;
 
+// mmSmemFloats sizes the shared tiles: FP16 weight and activation tiles
+// during the K loop, then the FP32 output tile.
+constexpr uint mmSmemFloats(uint bm) {
+	uint tiles = (MM_BN * MM_BK + bm * MM_BK) / 2, out = bm * MM_BN;
+	return tiles > out ? tiles : out;
+}
+
 // mm computes y[M][N] = x[M][K]·Wᵀ with simdgroup matrices. A threadgroup of
 // T threads owns BM tokens by 64 weight rows, and each simdgroup a 16×16
 // output block; each K step dequantizes a 64×32 weight tile to FP16 (int8
@@ -399,7 +406,7 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 			device float *partsOut [[buffer(6)]], device float *scratch [[buffer(7)]],             \
 			uint3 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],   \
 			uint sg [[simdgroup_index_in_threadgroup]]) {                                          \
-		threadgroup float smem[BM * MM_BN];                                                      \
+		threadgroup float smem[mmSmemFloats(BM)];                                                \
 		threadgroup float inv[BM];                                                               \
 		mm<PRO, EPI, BITS, BM, BM * 8>(W, scale, x, y, partsIn, partsOut, a, scratch, smem, inv, tg, tid, sg); \
 	}
