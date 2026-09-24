@@ -175,6 +175,7 @@ type Workspace struct {
 	ropeCos, ropeSin                []float32
 	ropePositions                   int // positions whose RoPE values are filled
 	positions                       int // position capacity of RoPE and attention scratch
+	gpu                             *gpuWorkspace
 	capacity                        int
 	owner                           *Evaluator
 	tiles                           []*q8gemm.Workspace
@@ -202,6 +203,13 @@ func (e *Evaluator) NewWorkspace(workers int) (*Workspace, error) {
 	}
 	ws := &Workspace{owner: e}
 	ws.op.ws = ws
+	if e.m.gpu != nil {
+		var err error
+		if ws.gpu, err = e.m.gpu.newWorkspace(); err != nil {
+			return nil, err
+		}
+		return ws, nil
+	}
 	if workers > 1 {
 		ws.pool = newWorkerPool(workers)
 	}
@@ -217,6 +225,10 @@ func (e *Evaluator) NewWorkspace(workers int) (*Workspace, error) {
 // Close stops the workspace's worker goroutines. The workspace must not be
 // used afterwards.
 func (ws *Workspace) Close() error {
+	if ws != nil && ws.gpu != nil {
+		ws.gpu.release()
+		ws.gpu = nil
+	}
 	if ws == nil || ws.pool == nil {
 		return nil
 	}
@@ -275,6 +287,17 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		}
 		rows += len(ids)
 		longest = max(longest, len(ids))
+	}
+	if ws.gpu != nil {
+		if ws.prefix != nil {
+			return errors.New("qwen3: prefix stores are not yet supported on the GPU")
+		}
+		for s, ids := range seqs {
+			if err := ws.gpu.sequence(m, ids, dst[s]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if ws.prefix != nil && !ws.shared && len(seqs) != 1 {
 		return errors.New("qwen3: a prefix extension evaluates exactly one sequence")
@@ -428,6 +451,9 @@ func (ws *Workspace) Reserve(rows, positions int) error {
 	c := &ws.owner.m.cfg
 	if rows < 1 || positions < 1 || positions > c.maxPositions {
 		return fmt.Errorf("qwen3: cannot reserve %d rows and %d positions", rows, positions)
+	}
+	if ws.gpu != nil {
+		return nil // GPU buffers are allocated whole
 	}
 	if err := ws.ensure(c, rows, positions); err != nil {
 		return err

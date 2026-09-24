@@ -225,6 +225,9 @@ func MulInto(dst, x []float32, rows int, w *Weights, ws *Workspace) error {
 // cleared streaming vector registers. It is a process-wide diagnostic counter.
 func Retries() uint64 { return retryCount() }
 
+// F32ToF16 rounds f to the nearest IEEE half-precision value, ties to even.
+func F32ToF16(f float32) uint16 { return f32ToF16(f) }
+
 // f32ToF16 rounds to the nearest FP16 value, ties to even. Callers scale
 // inputs so they never exceed FP16's finite range; NaN stays NaN.
 func f32ToF16(f float32) uint16 {

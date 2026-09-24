@@ -74,3 +74,30 @@ func fwht(v []float32) {
 		}
 	}
 }
+
+// unapply applies the inverse rotation Rᵀ in place.
+func (r *rotation) unapply(x []float32) {
+	x = x[:len(r.signs)]
+	for b := 0; b < len(x); b += r.block {
+		fwht(x[b : b+r.block])
+	}
+	scaleMulInto(x, x, r.signs, r.scale)
+}
+
+// applyRows replaces the n×k row-major matrix a with R·a, rotating along
+// the row index; n must not exceed the rotation's width.
+func (r *rotation) applyRows(a []float32, n, k int) {
+	for i := range n {
+		scaleVector(a[i*k:(i+1)*k], r.signs[i])
+	}
+	for b := 0; b < n; b += r.block {
+		for h := 1; h < r.block; h *= 2 {
+			for i := b; i < b+r.block; i += 2 * h {
+				for j := i; j < i+h; j++ {
+					butterflies(a[j*k:(j+1)*k], a[(j+h)*k:(j+h+1)*k])
+				}
+			}
+		}
+	}
+	scaleVector(a[:n*k], r.scale)
+}

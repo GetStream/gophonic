@@ -30,6 +30,14 @@ const (
 	// halves weight memory and runs the int8 matrix units at about twice the
 	// FP16 rate, at a measurable accuracy cost.
 	WeightsInt8 = "int8"
+	// WeightsGPU runs the model on the Apple GPU through Metal (darwin/arm64
+	// only). Projections are rotated like WeightsInt8 and stored as int8 per
+	// row; activations stay in FP32, so only the weights are quantized.
+	WeightsGPU = "gpu"
+	// WeightsGPUQ4 is WeightsGPU with 4-bit weights in blocks of 32 values
+	// sharing an FP16 scale: 4.5 bits per weight, for the lowest latency at
+	// a measurable accuracy cost.
+	WeightsGPUQ4 = "gpu-q4"
 )
 
 // Weights is an immutable Qwen3 dense decoder prepared for last-hidden-state
@@ -42,6 +50,7 @@ type Weights struct {
 	finalNorm []float32
 	layers    []modelLayer
 	format    string
+	gpu       *gpuModel // set for WeightsGPU
 }
 
 type modelLayer struct {
@@ -111,7 +120,7 @@ func LoadWeights(dir, format string) (*Weights, error) {
 	if format == "" {
 		format = WeightsF16
 	}
-	if format != WeightsF16 && format != WeightsInt8 {
+	if format != WeightsF16 && format != WeightsInt8 && format != WeightsGPU && format != WeightsGPUQ4 {
 		return nil, fmt.Errorf("qwen3: unsupported weight format %q", format)
 	}
 	if !littleEndian() {
@@ -173,6 +182,16 @@ func LoadWeights(dir, format string) (*Weights, error) {
 			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden},
 			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter},
 		)
+	}
+	if format == WeightsGPU || format == WeightsGPUQ4 {
+		bits := 8
+		if format == WeightsGPUQ4 {
+			bits = 4
+		}
+		if err := m.loadGPU(st, bits); err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
 	var (
