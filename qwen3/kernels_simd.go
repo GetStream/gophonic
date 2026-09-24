@@ -27,7 +27,8 @@ func sum4(v archsimd.Float32x4) float32 {
 func exp4(x archsimd.Float32x4) archsimd.Float32x4 {
 	x = x.Max(archsimd.BroadcastFloat32x4(-87))
 	n := x.Mul(archsimd.BroadcastFloat32x4(1.4426950408889634)).Trunc()
-	r := n.MulAdd(archsimd.BroadcastFloat32x4(-0.6931471805599453), x)
+	r := n.MulAdd(archsimd.BroadcastFloat32x4(-ln2Hi), x)
+	r = n.MulAdd(archsimd.BroadcastFloat32x4(-ln2Lo), r)
 	p := archsimd.BroadcastFloat32x4(1.0 / 40320.0)
 	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/5040.0))
 	p = p.MulAdd(r, archsimd.BroadcastFloat32x4(1.0/720.0))

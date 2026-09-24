@@ -260,11 +260,19 @@ func silu32(x float32) float32 {
 // expNonPositive32 evaluates exp(x) for x <= 0 with range reduction onto
 // (-ln 2, 0] and a degree-8 Taylor polynomial; relative error is below 1e-6.
 // Inputs below -87 return exp(-87).
+const (
+	ln2Hi = 0.693359375
+	ln2Lo = -2.12194440e-4
+)
+
 func expNonPositive32(x float32) float32 {
 	x = max(x, -87) // exp(-87) is near FP32's smallest normal
 
 	n := int(x * 1.4426950408889634)
-	r := x - float32(n)*0.6931471805599453
+	// Cody–Waite reduction: n*ln2Hi is exact (ln2Hi has 11 significant
+	// bits), so r is accurate whether or not the compiler fuses into FMA.
+	fn := float32(n)
+	r := (x - fn*ln2Hi) - fn*ln2Lo
 	p := float32(1.0 / 40320.0)
 	p = 1.0/5040.0 + r*p
 	p = 1.0/720.0 + r*p
