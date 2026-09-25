@@ -2,7 +2,7 @@
 // Copyright (c) 2023-2026 The ggml authors
 // SPDX-License-Identifier: MIT
 
-package whisper
+package nn
 
 import "math"
 

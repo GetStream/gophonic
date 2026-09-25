@@ -9,6 +9,7 @@ import (
 	"math"
 	"runtime"
 
+	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -186,7 +187,7 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 		return err
 	}
 	if trace != nil {
-		addRowBias(w.conv1, weights.conv1B, MelFrames, state)
+		nn.AddRowBias(w.conv1, weights.conv1B, MelFrames, state)
 		trace(0, w.conv1[:MelFrames*state])
 		if err := w.activate(w.conv1, nil, MelFrames, state); err != nil {
 			return err
@@ -198,7 +199,7 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 		return err
 	}
 	if trace != nil {
-		addRowBias(dst, weights.conv2B, AudioFrames, state)
+		nn.AddRowBias(dst, weights.conv2B, AudioFrames, state)
 		trace(1, dst)
 		if err := w.activate(dst, nil, AudioFrames, state); err != nil {
 			return err
@@ -334,18 +335,6 @@ func tapMajor(weights []float32, out, in int) []float32 {
 		}
 	}
 	return reordered
-}
-
-func addRowBias(values, bias []float32, rows, width int) {
-	if bias == nil {
-		return
-	}
-	for row := 0; row < rows; row++ {
-		start := row * width
-		for col, value := range bias {
-			values[start+col] += value
-		}
-	}
 }
 
 type encoderBlockWeights struct {
@@ -501,37 +490,6 @@ func conv1DStride2TimeMajor(src, dst, weights, bias []float32, inputFrames, outp
 func addPositionEmbedding(dst, positions []float32) {
 	for i := range dst {
 		dst[i] += positions[i]
-	}
-}
-
-// layerNormRow normalizes one row with float64 statistics. Rows whose length
-// is a positive multiple of eight use the NEON kernel on arm64, which sums
-// in four float64x2 partial accumulators instead of one.
-func layerNormRow(src, dst, gamma, beta []float32) {
-	n := len(src)
-	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(gamma) >= n && len(beta) >= n {
-		layerNormNEON(&src[0], &dst[0], &gamma[0], &beta[0], n)
-		return
-	}
-	layerNormRowGeneric(src, dst, gamma, beta)
-}
-
-func layerNormRowGeneric(src, dst, gamma, beta []float32) {
-	var sum float64
-	for _, x := range src {
-		sum += float64(x)
-	}
-	mean := sum / float64(len(src))
-	var variance float64
-	for _, x := range src {
-		delta := float64(x) - mean
-		variance += delta * delta
-	}
-	variance /= float64(len(src))
-	invStd := 1 / math.Sqrt(variance+1e-5)
-	for i, x := range src {
-		normalized := (float64(x) - mean) * invStd
-		dst[i] = float32(normalized*float64(gamma[i]) + float64(beta[i]))
 	}
 }
 

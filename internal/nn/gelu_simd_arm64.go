@@ -3,11 +3,11 @@
 
 //go:build goexperiment.simd && arm64
 
-package whisper
+package nn
 
 import "simd/archsimd"
 
-func applyGELU(values []float32) {
+func GELU(values []float32) {
 	one := archsimd.BroadcastFloat32x4(1)
 	half := archsimd.BroadcastFloat32x4(0.5)
 	sixth := archsimd.BroadcastFloat32x4(1.0 / 6)
@@ -19,7 +19,7 @@ func applyGELU(values []float32) {
 		x := archsimd.LoadFloat32x4Array((*[4]float32)(values[i : i+4]))
 		a := x.Abs()
 		if a.Less(limit).ToInt32x4().ReduceMax() != -1 {
-			applyGELUScalar(values[i : i+4])
+			geluScalar(values[i : i+4])
 			continue
 		}
 		z := a.Add(shift)
@@ -38,5 +38,5 @@ func applyGELU(values []float32) {
 		q = one.Sub(q).IfElse(x.Greater(archsimd.Float32x4{}), q)
 		x.Mul(q).StoreArray((*[4]float32)(values[i : i+4]))
 	}
-	applyGELUScalar(values[i:])
+	geluScalar(values[i:])
 }

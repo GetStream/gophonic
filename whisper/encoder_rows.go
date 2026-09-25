@@ -3,6 +3,8 @@
 
 package whisper
 
+import "github.com/GetStream/gophonic/internal/nn"
+
 // encoderRowKind selects the elementwise work of one parallel encoder pass.
 type encoderRowKind uint8
 
@@ -38,18 +40,14 @@ func (op *encoderRows) ApplyRows(start, end int) {
 	switch op.kind {
 	case rowsNorm:
 		for r := start; r < end; r++ {
-			layerNormRow(op.dst[r*w:(r+1)*w], op.out[r*w:(r+1)*w], op.normW, op.normB)
+			nn.LayerNorm(op.dst[r*w:(r+1)*w], op.out[r*w:(r+1)*w], op.normW, op.normB)
 		}
 	case rowsResidual:
-		if layerNormAccelerated && op.normW != nil && w > 0 && w%8 == 0 && &op.src[0] == &op.out[0] {
+		if nn.Accelerated && op.normW != nil && w > 0 && w%8 == 0 && &op.src[0] == &op.out[0] {
 			// Fused: row += add + bias, then out = LayerNorm(row). out may
 			// alias add; each chunk of add is read before out is written.
-			var bias *float32
-			if op.bias != nil {
-				bias = &op.bias[0]
-			}
 			for r := start; r < end; r++ {
-				residualNormNEON(&op.dst[r*w], &op.out[r*w], &op.normW[0], &op.normB[0], w, &op.src[r*w], bias)
+				nn.ResidualNorm(op.dst[r*w:(r+1)*w], op.out[r*w:(r+1)*w], op.normW, op.normB, op.src[r*w:(r+1)*w], op.bias)
 			}
 			return
 		}
@@ -66,11 +64,11 @@ func (op *encoderRows) ApplyRows(start, end int) {
 				}
 			}
 			if op.normW != nil {
-				layerNormRow(row, op.out[r*w:(r+1)*w], op.normW, op.normB)
+				nn.LayerNorm(row, op.out[r*w:(r+1)*w], op.normW, op.normB)
 			}
 		}
 	case rowsBias:
-		addRowBias(op.dst[start*w:end*w], op.bias, end-start, w)
+		nn.AddRowBias(op.dst[start*w:end*w], op.bias, end-start, w)
 	case rowsPosition:
 		addPositionEmbedding(op.dst[start*w:end*w], op.src[start*w:end*w])
 	case rowsLowerChannel:

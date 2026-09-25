@@ -7,6 +7,8 @@ import (
 	"errors"
 	"math"
 	"strings"
+
+	"github.com/GetStream/gophonic/internal/nn"
 )
 
 var (
@@ -389,7 +391,7 @@ func suppressSymbol(tokenizer *Tokenizer, text string, always bool, add func(int
 // NaN nor -Inf, or -1 when there is none.
 func argmaxFinite(values []float32) int {
 	n := len(values) / 16 * 16
-	if layerNormAccelerated && n > 0 {
+	if nn.Accelerated && n > 0 {
 		best := maxNumNEON(&values[0], n)
 		for _, v := range values[n:] {
 			if v > best || best != best {

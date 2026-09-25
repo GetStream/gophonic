@@ -6,15 +6,19 @@ Set `GOPHONIC_MODELS` to keep them elsewhere. Git ignores everything in this
 directory except this file; symbolic links work.
 
 ```sh
-tools/fetch-models.sh                 # whisper and turn (the default)
-tools/fetch-models.sh qwen3 clm       # large Hugging Face checkpoints
+tools/fetch-models.sh                 # asr and turn (the default)
+tools/fetch-models.sh whisper         # the English Whisper bundles
+tools/fetch-models.sh asr-small qwen3 clm
 ```
 
-The script downloads each official checkpoint, verifies the SHA-256 digest
-its converter pins, and converts it. Files already present are kept.
+The script downloads each official checkpoint at a pinned revision or
+digest and converts the ones that need it; Hugging Face snapshot
+directories load as they are. Files already present are kept.
 
 | File | Model | Target | Source |
 | --- | --- | --- | --- |
+| `Qwen3-ASR-1.7B/` | Qwen3-ASR-1.7B snapshot (recommended transcriber) | `asr` | [Qwen/Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) |
+| `Qwen3-ASR-0.6B/` | Qwen3-ASR-0.6B snapshot | `asr-small` | [Qwen/Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) |
 | `tiny.en.gophonic` | Whisper tiny.en | `whisper` | [OpenAI](https://openaipublic.azureedge.net/main/whisper/models/d3dd57d32accea0b295c96e26691aa14d8822fac7d9d27d5dc00b4ca2826dd03/tiny.en.pt), converted |
 | `base.en.gophonic` | Whisper base.en | `whisper` | [OpenAI](https://openaipublic.azureedge.net/main/whisper/models/25a8566e1d0c1e2231d1c762132cd20e0f96a85d16145c3a00adf5d1ac670ead/base.en.pt), converted |
 | `small.en.gophonic` | Whisper small.en | by hand | [OpenAI](https://openaipublic.azureedge.net/main/whisper/models/f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872/small.en.pt), converted |

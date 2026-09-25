@@ -141,12 +141,13 @@ func openGPTQ(dir, format string, bits int, c *modelConfig) *gptqFile {
 	return g
 }
 
-// projection locates a tensor name's codes and scales: offset of the codes,
+// projection locates a tensor's codes and scales from its name after the
+// decoder prefix ("layers.3.mlp.up_proj.weight"): offset of the codes,
 // offset of the scales, and whether the file holds it.
 func (g *gptqFile) projection(name string) (codes, scales int64, ok bool) {
 	var layer int
 	var rest string
-	if _, err := fmt.Sscanf(name, "model.layers.%d.%s", &layer, &rest); err != nil || layer < 0 || layer >= g.c.layers {
+	if _, err := fmt.Sscanf(name, "layers.%d.%s", &layer, &rest); err != nil || layer < 0 || layer >= g.c.layers {
 		return 0, 0, false
 	}
 	rest = strings.TrimSuffix(rest, ".weight")

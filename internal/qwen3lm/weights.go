@@ -32,6 +32,11 @@ const (
 	// only). Projections are rotated like WeightsInt8 and stored as int8 per
 	// row; activations stay in FP32, so only the weights are quantized.
 	WeightsGPU = "gpu"
+	// WeightsGPUQ8 is WeightsGPU with int8 weights in blocks of 32 values
+	// sharing an FP16 scale, as GGML's Q8_0 on top of the rotation: 8.5 bits
+	// per weight, for models (such as Qwen3-1.7B) that lose precision with a
+	// single scale per row.
+	WeightsGPUQ8 = "gpu-q8"
 	// WeightsGPUQ4 is WeightsGPU with 4-bit weights in blocks of 32 values
 	// sharing an FP16 scale: 4.5 bits per weight, for the lowest latency at
 	// a measurable accuracy cost.
@@ -40,13 +45,15 @@ const (
 
 // Weights is an immutable Qwen3 dense decoder prepared for last-hidden-state
 // inference on the CPU. Projections are packed once for the SME tile kernel;
-// the language-model head is not loaded. Weights may be shared by any number
-// of evaluators and workspaces.
+// the language-model head is loaded only when LoadOptions.Head names it.
+// Weights may be shared by any number of evaluators and workspaces.
 type Weights struct {
 	cfg       modelConfig
 	embed     []uint16 // BF16 bits, [vocab][hidden]
 	finalNorm []float32
 	layers    []modelLayer
+	head      linear // language-model head, [vocab][hidden]; unset unless loaded
+	prefix    string
 	format    string
 	gpu       *gpuModel // set for WeightsGPU
 }
@@ -92,7 +99,10 @@ type modelConfig struct {
 	invFreq                                        []float64
 }
 
-type hfConfig struct {
+// TextConfig is a Qwen3 decoder's Hugging Face configuration: the
+// config.json of a Qwen3 snapshot, or the text_config a multimodal model such
+// as Qwen3-ASR nests.
+type TextConfig struct {
 	ModelType        string  `json:"model_type"`
 	HiddenSize       int     `json:"hidden_size"`
 	Layers           int     `json:"num_hidden_layers"`
@@ -112,23 +122,65 @@ type hfConfig struct {
 
 // LoadWeights reads an official Qwen3 safetensors snapshot directory
 // (config.json plus model.safetensors or a sharded index). format is one of
-// the Weights constants, or empty to choose the fastest backend available:
-// WeightsGPU for the Qwen3-8B geometry on a Metal GPU, WeightsF16 otherwise.
+// the Weights constants, or empty to choose the fastest backend that keeps
+// Q8_0-level fidelity: on a Metal GPU, WeightsGPU for Qwen3-8B (whose rows
+// quantize well with one scale) and WeightsGPUQ8 for other sizes; otherwise
+// WeightsF16.
 // Tensors are read and packed in parallel; peak memory is the packed model
 // plus one tensor per loader.
 func LoadWeights(dir, format string) (*Weights, error) {
-	if format == "" {
-		format = WeightsF16
-		if cfg, err := readConfig(filepath.Join(dir, "config.json")); err == nil && gpuSupports(&cfg) {
-			format = WeightsGPU
-		}
+	return Load(dir, LoadOptions{Format: format})
+}
+
+// LoadOptions selects how Load reads a Qwen3 decoder.
+type LoadOptions struct {
+	// Format is one of the Weights constants, or empty for the fastest
+	// faithful backend, as LoadWeights chooses.
+	Format string
+	// Prefix precedes every decoder tensor name: "model." (the default) for
+	// a Qwen3 snapshot, "thinker.model." for Qwen3-ASR.
+	Prefix string
+	// Config is the decoder configuration. Nil reads config.json in dir.
+	Config *TextConfig
+	// Head names the language-model head tensor, such as "lm_head.weight",
+	// for Logits. Empty loads no head.
+	Head string
+}
+
+// headChunkRows overrides the head's row-chunk size in tests.
+var headChunkRows int
+
+// Load reads a Qwen3 decoder from the safetensors checkpoint in dir, which
+// may hold it inside a larger model.
+func Load(dir string, opts LoadOptions) (*Weights, error) {
+	var (
+		cfg modelConfig
+		err error
+	)
+	if opts.Config != nil {
+		cfg, err = opts.Config.model()
+	} else {
+		cfg, err = readConfig(filepath.Join(dir, "config.json"))
 	}
-	if format != WeightsF16 && format != WeightsInt8 && format != WeightsGPU && format != WeightsGPUQ4 {
-		return nil, fmt.Errorf("qwen3: unsupported weight format %q", format)
-	}
-	cfg, err := readConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		return nil, err
+	}
+	format := opts.Format
+	if format == "" {
+		format = WeightsF16
+		if gpuSupports(&cfg) {
+			format = WeightsGPUQ8
+			if cfg.hidden == 4096 && cfg.layers == 36 { // Qwen3-8B
+				format = WeightsGPU
+			}
+		}
+	}
+	if format != WeightsF16 && format != WeightsInt8 && format != WeightsGPU && format != WeightsGPUQ8 && format != WeightsGPUQ4 {
+		return nil, fmt.Errorf("qwen3: unsupported weight format %q", format)
+	}
+	prefix := opts.Prefix
+	if prefix == "" {
+		prefix = "model."
 	}
 	st, err := safetensors.Open(dir)
 	if err != nil {
@@ -136,13 +188,13 @@ func LoadWeights(dir, format string) (*Weights, error) {
 	}
 	defer st.Close()
 
-	m := &Weights{cfg: cfg, format: format, layers: make([]modelLayer, cfg.layers)}
+	m := &Weights{cfg: cfg, format: format, prefix: prefix, layers: make([]modelLayer, cfg.layers)}
 	h, kv, inter := cfg.hidden, cfg.kvDim, cfg.intermediate
 	qdim := cfg.heads * cfg.headDim
-	if m.embed, err = st.BF16("model.embed_tokens.weight", cfg.vocab, h); err != nil {
+	if m.embed, err = st.BF16(prefix+"embed_tokens.weight", cfg.vocab, h); err != nil {
 		return nil, err
 	}
-	if m.finalNorm, err = st.Float32("model.norm.weight", h); err != nil {
+	if m.finalNorm, err = st.Float32(prefix+"norm.weight", h); err != nil {
 		return nil, err
 	}
 	var rotHidden, rotContext, rotInter *rotation
@@ -154,11 +206,12 @@ func LoadWeights(dir, format string) (*Weights, error) {
 		n, k int
 		dst  *linear
 		rot  *rotation
+		rows [2]int // for the head: the row range this job packs into dst
 	}
 	var jobs []job
 	for i := range m.layers {
 		l := &m.layers[i]
-		p := fmt.Sprintf("model.layers.%d.", i)
+		p := fmt.Sprintf("%slayers.%d.", prefix, i)
 		for _, v := range []struct {
 			name string
 			n    int
@@ -174,32 +227,43 @@ func LoadWeights(dir, format string) (*Weights, error) {
 			}
 		}
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, &l.q, rotHidden},
-			job{p + "self_attn.k_proj.weight", kv, h, &l.k, rotHidden},
-			job{p + "self_attn.v_proj.weight", kv, h, &l.v, rotHidden},
-			job{p + "self_attn.o_proj.weight", h, qdim, &l.o, rotContext},
-			job{p + "mlp.gate_proj.weight", inter, h, &l.gate, rotHidden},
-			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden},
-			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter},
+			job{p + "self_attn.q_proj.weight", qdim, h, &l.q, rotHidden, [2]int{}},
+			job{p + "self_attn.k_proj.weight", kv, h, &l.k, rotHidden, [2]int{}},
+			job{p + "self_attn.v_proj.weight", kv, h, &l.v, rotHidden, [2]int{}},
+			job{p + "self_attn.o_proj.weight", h, qdim, &l.o, rotContext, [2]int{}},
+			job{p + "mlp.gate_proj.weight", inter, h, &l.gate, rotHidden, [2]int{}},
+			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden, [2]int{}},
+			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter, [2]int{}},
 		)
 	}
-	if format == WeightsGPU || format == WeightsGPUQ4 {
-		bits := 8
-		if format == WeightsGPUQ4 {
-			bits = 4
-		}
-		if err := m.loadGPU(st, bits); err != nil {
+	if format == WeightsGPU || format == WeightsGPUQ8 || format == WeightsGPUQ4 {
+		bits := map[string]int{WeightsGPU: 8, WeightsGPUQ8: 9, WeightsGPUQ4: 4}[format]
+		if err := m.loadGPU(st, bits, opts.Head); err != nil {
 			return nil, err
 		}
 		return m, nil
 	}
+	maxSize := max(inter*h, qdim*h)
+	if opts.Head != "" {
+		// The head is the largest matrix (vocabulary × hidden); it is read
+		// and packed in row chunks no larger than a layer projection.
+		if m.head, err = newHead(&cfg, format, rotHidden); err != nil {
+			return nil, err
+		}
+		step := max(q8gemm.OutputPanel, maxSize/h/q8gemm.OutputPanel*q8gemm.OutputPanel)
+		if headChunkRows > 0 {
+			step = headChunkRows
+		}
+		for r := 0; r < cfg.vocab; r += step {
+			jobs = append(jobs, job{opts.Head, cfg.vocab, h, &m.head, rotHidden, [2]int{r, min(r+step, cfg.vocab)}})
+		}
+	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		first   error
-		next    int
-		maxSize = max(inter*h, qdim*h)
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+		next  int
 	)
 	for range workers {
 		wg.Add(1)
@@ -215,12 +279,18 @@ func LoadWeights(dir, format string) (*Weights, error) {
 				j := jobs[next]
 				next++
 				mu.Unlock()
-				w, err := loadProjection(st, j.name, j.n, j.k, buf, j.rot)
+				var err error
+				if j.rows[1] > 0 {
+					err = loadRows(st, j.name, j.n, j.k, j.rows[0], j.rows[1], buf, j.dst)
+				} else {
+					var w linear
+					w, err = loadProjection(st, j.name, j.n, j.k, buf, j.rot)
+					*j.dst = w
+				}
 				mu.Lock()
 				if err != nil && first == nil {
 					first = err
 				}
-				*j.dst = w
 				mu.Unlock()
 			}
 		}()
@@ -247,9 +317,13 @@ func (m *Weights) Config() Config {
 // Format reports the projection weight format.
 func (m *Weights) Format() string { return m.format }
 
-// WeightBytes reports the resident bytes of packed projection weights.
+// WeightBytes reports the resident bytes of packed projection weights,
+// including the language-model head when loaded.
 func (m *Weights) WeightBytes() int64 {
 	var n int64
+	if m.head.f16 != nil || m.head.i8 != nil {
+		n += int64(m.head.bytes())
+	}
 	for i := range m.layers {
 		l := &m.layers[i]
 		for _, w := range [...]*linear{&l.q, &l.k, &l.v, &l.o, &l.gate, &l.up, &l.down} {
@@ -271,10 +345,15 @@ func readConfig(path string) (modelConfig, error) {
 	if err != nil {
 		return modelConfig{}, fmt.Errorf("qwen3: read Qwen3 config: %w", err)
 	}
-	var c hfConfig
+	var c TextConfig
 	if err := vibejson.Unmarshal(raw, &c); err != nil {
 		return modelConfig{}, fmt.Errorf("qwen3: parse Qwen3 config: %w", err)
 	}
+	return c.model()
+}
+
+// model validates the configuration and derives the evaluator's geometry.
+func (c TextConfig) model() (modelConfig, error) {
 	if c.ModelType != "qwen3" {
 		return modelConfig{}, fmt.Errorf("qwen3: expected model_type qwen3, got %q", c.ModelType)
 	}
@@ -303,6 +382,44 @@ func readConfig(path string) (modelConfig, error) {
 		vocab: c.Vocab, maxPositions: c.MaxPositions, eps: c.RMSNormEps,
 		attnScale: 1 / math.Sqrt(float64(c.HeadDim)), invFreq: inv,
 	}, nil
+}
+
+// newHead allocates the language-model head's packed storage, which
+// loadRows then fills a row range at a time.
+func newHead(c *modelConfig, format string, rot *rotation) (linear, error) {
+	if format == WeightsInt8 {
+		w, err := q8gemm.NewWeightsI8(c.hidden, c.vocab)
+		return linear{i8: w, rot: rot}, err
+	}
+	w, err := q8gemm.NewWeightsF16(c.hidden, c.vocab)
+	return linear{f16: w}, err
+}
+
+// loadRows reads rows [r0, r1) of an [n][k] BF16 matrix and packs them into
+// dst, which newHead allocated.
+func loadRows(st *safetensors.Checkpoint, name string, n, k, r0, r1 int, buf []uint16, dst *linear) error {
+	t, err := st.Lookup(name, n, k)
+	if err != nil {
+		return fmt.Errorf("qwen3: %w", err)
+	}
+	if t.DType != "BF16" {
+		return fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", name, t.DType)
+	}
+	raw := buf[:(r1-r0)*k]
+	if err := t.ReadBits(raw, int64(r0)*int64(k)); err != nil {
+		return fmt.Errorf("qwen3: %w", err)
+	}
+	if dst.i8 == nil {
+		if _, err := dst.f16.PackBF16Rows(raw, r0); err != nil {
+			return fmt.Errorf("qwen3: pack %s: %w", name, err)
+		}
+		return nil
+	}
+	q, scales := quantizeRotatedRows(raw, r1-r0, k, dst.rot)
+	if err := dst.i8.PackRows(q, scales, r0); err != nil {
+		return fmt.Errorf("qwen3: pack %s: %w", name, err)
+	}
+	return nil
 }
 
 // loadProjection reads an [n][k] BF16 matrix into buf and packs it: exactly as

@@ -1,7 +1,7 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package whisper
+package nn
 
 const geluAccelerated = true
 

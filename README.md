@@ -1,19 +1,24 @@
 # gophonic
 
-**Speech and language models in pure Go: transcription, turn detection, and
-Qwen3.**
+**Speech and language models in pure Go: multilingual transcription with
+Qwen3-ASR, turn detection, and Qwen3.**
 
-gophonic runs speech-to-text, end-of-turn detection, and Qwen3-8B inside your
-Go process. There is no cgo, no ONNX Runtime, and no Python at inference time.
+gophonic runs speech-to-text, end-of-turn detection, and Qwen3 inside your Go
+process. There is no cgo, no ONNX Runtime, and no Python at inference time.
 Matrix work runs on Apple's SME matrix unit from Go assembly, or on the Apple
 GPU through a pure-Go Metal binding, with portable kernels everywhere else.
 
 | Task | Model | Package | On an M4 Max |
 | --- | --- | --- | --- |
-| Transcription | OpenAI Whisper `tiny.en`, `base.en`, `small.en` | [`whisper`](whisper) | about 3× whisper.cpp on one core, identical transcripts |
+| **Transcription (recommended)** | **Qwen3-ASR 1.7B and 0.6B**, 30 languages and 22 Chinese dialects | [`qwen3asr`](qwen3asr) | 11 s of speech in 302 ms, the official transcripts, zero allocations |
+| Transcription, English | OpenAI Whisper `tiny.en`, `base.en`, `small.en` | [`whisper`](whisper) | about 3× whisper.cpp on one core, identical transcripts |
 | Turn detection | Pipecat Smart Turn v3.2 | [`smartturn`](smartturn) | FP32 Whisper encoder, ONNX parity within 2e-5 |
 | Turn detection | TinyMelNet | [`tinymel`](tinymel) | 3.6 ms from PCM to prediction, zero allocations |
 | Language | Qwen3-8B, CLM action ranking | [`qwen3`](qwen3), [`clm`](clm) | one token in 15 ms on the GPU (llama.cpp Metal: 19 ms) |
+
+Qwen3-ASR is the state-of-the-art open speech recognizer: it detects the
+language, takes context text, and is the model to use unless you need
+Whisper's word timestamps or a CPU-only English model.
 
 - **One interface per task.** Every transcription model implements
   `speech.Transcriber` and every turn detector `speech.TurnDetector`;
@@ -26,7 +31,8 @@ GPU through a pure-Go Metal binding, with portable kernels everywhere else.
   path has a portable fallback.
 
 [Go API](docs/api.md) · [Architecture](docs/architecture.md) ·
-[Models](docs/models.md) · [Local server](docs/server.md) ·
+[Models](docs/models.md) · [Qwen3-ASR](docs/qwen3asr.md) ·
+[Local server](docs/server.md) ·
 [Whisper design](docs/whisper-design.md) ·
 [Whisper performance](docs/whisper-performance.md) ·
 [Qwen3 performance](docs/clm-performance.md) ·
@@ -34,19 +40,20 @@ GPU through a pure-Go Metal binding, with portable kernels everywhere else.
 
 ## Quick start
 
-Fetch the official models once; the script downloads each checkpoint,
-verifies its pinned digest, and converts it into [`models/`](models). Then
-build the CLI and point it at any model; the format is detected from the
-file:
+Fetch the official models once; the script downloads each checkpoint at a
+pinned revision or digest, converting where needed, into [`models/`](models).
+Then build the CLI and point it at any model; the format is detected from
+the path:
 
 ```sh
-tools/fetch-models.sh   # Whisper tiny.en and base.en, Smart Turn, TinyMelNet
+tools/fetch-models.sh   # Qwen3-ASR-1.7B, Smart Turn, TinyMelNet (add "whisper" for Whisper)
 
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
-./gophonic -model models/base.en.gophonic speech.wav          # {"text":"..."}
-./gophonic -model models/base.en.gophonic -response-format srt speech.wav
+./gophonic -model models/Qwen3-ASR-1.7B speech.wav              # {"text":"..."}
+./gophonic -model models/Qwen3-ASR-1.7B -language de speech.wav  # force German
+./gophonic -model models/Qwen3-ASR-1.7B -context "gophonic, SME" speech.wav
 ./gophonic -model models/base.en.gophonic -response-format verbose_json -word-timestamps speech.wav
-./gophonic -model models/smart-turn-v3.2.gophonic speech.wav  # {"probability":0.91,"complete":true}
+./gophonic -model models/smart-turn-v3.2.gophonic speech.wav    # {"probability":0.91,"complete":true}
 ```
 
 The CLI reads WAV and Ogg Opus. [`gophonic-server`](docs/server.md) serves the
@@ -55,15 +62,15 @@ same transcription models over an OpenAI-style HTTP endpoint.
 From Go, open the model once and give each concurrent caller its own lane:
 
 ```go
-model, err := gophonic.Open("models/base.en.gophonic", gophonic.Options{})
+model, err := gophonic.Open("models/Qwen3-ASR-1.7B", gophonic.Options{})
 if err != nil { return err }
 lane, err := model.NewTranscriber()
 if err != nil { return err }
 defer lane.Close()
 
 var t speech.Transcript // reused across calls
-err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Words: true}, &t)
-fmt.Printf("%s (%s, %d words)\n", t.Text, t.Language, len(t.Words))
+err = lane.Transcribe(ctx, mono16kPCM, speech.Options{}, &t)
+fmt.Printf("%s (%s)\n", t.Text, t.Language) // detected language, such as "Chinese"
 ```
 
 Turn detectors work the same way, on PCM at any rate from 8 to 96 kHz:
@@ -82,6 +89,36 @@ prediction, err := detector.PredictInto(pcm, 48000, 2) // call on each VAD pause
 transcriber expects. Each model package also offers lower-level entry points,
 such as feature-level prediction and caller-sized result buffers; see the
 [Go API](docs/api.md).
+
+## Qwen3-ASR transcription
+
+[`qwen3asr`](qwen3asr) loads the official
+[Qwen/Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) and
+[0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) snapshot directories
+directly. The audio encoder runs in FP32 on SME; the Qwen3 decoder runs on the
+Apple GPU with int8 weights in blocks of 32 sharing an FP16 scale, in a
+Hadamard-rotated basis, or on the CPU with every BF16 weight kept exactly.
+Warm latency, PCM to text, for Qwen3-ASR-1.7B:
+
+| Audio | GPU decoder (default) | CPU decoder, exact weights |
+| --- | ---: | ---: |
+| 11.0 s English (JFK) | **302 ms** (0.028× real time) | 689 ms |
+| 4.2 s Chinese | **121 ms** (0.029× real time) | 256 ms |
+
+The decoder alone, against llama.cpp's Metal backend on the same Qwen3-1.7B
+geometry with Q8_0 weights and flash attention:
+
+| Qwen3-1.7B decoder | gophonic GPU | llama.cpp Metal Q8_0 |
+| --- | ---: | ---: |
+| One token | **4.67 ms** (214 tokens/s) | 5.54 ms (180 tokens/s) |
+| 158-token prompt | 50 ms | **41 ms** |
+
+Features, encoder rows, prompt ids, first-step logits, and transcripts match
+the official `qwen-asr` package's FP32 run: the encoder to within 2e-6, and
+every transcript exactly. The GPU weights keep the decoder's final state at
+cosine 0.9984–0.9986 of the exact path on the test clips, above
+llama.cpp's Q8_0 rounding of the same weights (0.9972–0.9987).
+[Qwen3-ASR](docs/qwen3asr.md) documents the design and measurements.
 
 ## Whisper transcription
 
@@ -160,14 +197,19 @@ path stores every BF16 weight without rounding (0.99991). See the [package READM
 | --- | --- |
 | `gophonic` | `Open`, which recognizes and loads any supported model, and the turn detectors' standalone log-mel frontend |
 | `speech` | `Transcriber`, `TurnDetector`, transcripts, predictions, languages, and the 16 kHz resampler |
-| `whisper`, `smartturn`, `tinymel`, `qwen3`, `clm` | One model family each; model packages never import each other |
-| `internal/mel`, `internal/resample` | The log-mel frontends and the resampling filter every model shares |
-| `internal/qwen3lm` | The Qwen3 transformer: loader, tokenizer, CPU and GPU forward pass |
+| `qwen3asr`, `whisper`, `smartturn`, `tinymel`, `qwen3`, `clm` | One model family each; model packages never import each other |
+| `internal/mel`, `internal/resample`, `internal/nn` | The log-mel frontends, the resampling filter, and the GELU, LayerNorm, and softmax kernels the encoders share |
+| `internal/qwen3lm` | The Qwen3 transformer every Qwen3 model shares: loader, tokenizer, CPU and GPU forward pass, logits |
 | `internal/whispergemm`, `internal/q8gemm`, `internal/q8gemv`, `internal/vec`, `internal/metal` | SME, NEON, and scalar kernels and the Metal binding |
 | `cmd/gophonic`, `cmd/gophonic-server`, `cmd/qwen3-gptq` | CLI, HTTP server, offline GPTQ rounding |
 
 [Architecture](docs/architecture.md) explains the dependency rules and the
 shared building blocks.
+
+[`examples/streamcall`](examples/streamcall) puts it together: it joins a
+Stream video call as a silent listener, finds each speaker's turns with Smart
+Turn, transcribes them with Qwen3-ASR, reads the speaker's mood with Qwen3-8B,
+and posts the results to the call's chat, all on the local machine.
 
 ## Testing
 

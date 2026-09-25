@@ -35,16 +35,28 @@ func (w *WeightsI8) Pack(q []int8, scales []float32) error {
 	if w == nil || len(q) != w.k*w.n || len(scales) != w.n {
 		return ErrDimensions
 	}
+	clear(w.q)
+	return w.PackRows(q, scales, 0)
+}
+
+// PackRows is Pack for output rows [row0, row0+len(scales)) of freshly
+// allocated weights, so a large matrix can be packed from row chunks,
+// concurrently for disjoint chunks.
+func (w *WeightsI8) PackRows(q []int8, scales []float32, row0 int) error {
+	rows := len(scales)
+	if w == nil || len(q) != w.k*rows || row0 < 0 || row0+rows > w.n {
+		return ErrDimensions
+	}
 	for _, s := range scales {
 		if math.IsNaN(float64(s)) || math.IsInf(float64(s), 0) {
 			return ErrNonFinite
 		}
 	}
-	copy(w.scales, scales)
-	clear(w.q)
-	for row := range w.n {
+	copy(w.scales[row0:], scales)
+	for i := range rows {
+		row := row0 + i
 		base := (row/OutputPanel)*w.quads*4*OutputPanel + (row%OutputPanel)*4
-		for k, v := range q[row*w.k : (row+1)*w.k] {
+		for k, v := range q[i*w.k : (i+1)*w.k] {
 			w.q[base+(k/4)*4*OutputPanel+k%4] = v
 		}
 	}

@@ -227,3 +227,59 @@ func BenchmarkGPUMatMul(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkGPUGemvShapes measures serial GEMV dispatches of the Qwen3-1.7B
+// projection shapes over 28 weight copies each, as one decode step issues
+// them.
+func BenchmarkGPUGemvShapes(b *testing.B) {
+	dev, err := metal.Open()
+	if err != nil {
+		b.Skip(err)
+	}
+	c := &modelConfig{hidden: 2048, heads: 16, kvHeads: 8, headDim: 128, kvDim: 1024, intermediate: 6144}
+	lib, err := dev.Compile(gpuSourceFor(c))
+	if err != nil {
+		b.Fatal(err)
+	}
+	const mats = 28
+	for _, s := range []struct {
+		name string
+		k, n int
+	}{{"qkv", 2048, 4096}, {"o", 2048, 2048}, {"gateup", 2048, 12288}, {"down", 6144, 2048}} {
+		for _, kernel := range []string{"gemv_o", "gemv_o_q8"} {
+			b.Run(s.name+"/"+kernel, func(b *testing.B) {
+				p, err := dev.Pipeline(lib, kernel)
+				if err != nil {
+					b.Fatal(err)
+				}
+				wBytes, sBytes := s.n*s.k, 2*s.n*s.k/q4Group
+				w, _ := dev.Buffer(wBytes * mats)
+				sc, _ := dev.Buffer(sBytes * mats)
+				x, _ := dev.Buffer(4 * s.k)
+				y, _ := dev.Buffer(4 * s.n)
+				parts, _ := dev.Buffer(4 * s.n)
+				args := gemvArgs{k: uint32(s.k), n: uint32(s.n)}
+				var e metal.Encoder
+				b.SetBytes(int64((wBytes + sBytes) * mats))
+				for b.Loop() {
+					dev.Begin(&e, false)
+					e.SetPipeline(p)
+					e.SetBuffer(x, 0, 2)
+					e.SetBuffer(y, 0, 3)
+					e.SetBuffer(parts, 0, 4)
+					e.SetBytes(unsafe.Pointer(&args), 16, 5)
+					e.SetBuffer(parts, 0, 6)
+					for m := range mats {
+						e.SetBuffer(w, m*wBytes, 0)
+						e.SetBuffer(sc, m*sBytes, 1)
+						e.Dispatch(metal.Size{X: s.n / gpuRows(9), Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+					}
+					if err := e.Wait(); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(b.Elapsed().Microseconds())/float64(b.N)/mats, "µs/dispatch")
+			})
+		}
+	}
+}

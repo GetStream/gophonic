@@ -36,6 +36,16 @@ type Checkpoint struct {
 // safetensors file) whose values are exactly representable in BF16.
 func Write(t testing.TB, seed int64) *Checkpoint {
 	t.Helper()
+	return WriteNamed(t, seed, nil)
+}
+
+// WriteNamed is Write with each tensor stored under rename(name), as a model
+// that nests the decoder stores it. Tensors keeps the Qwen3 names.
+func WriteNamed(t testing.TB, seed int64, rename func(string) string) *Checkpoint {
+	t.Helper()
+	if rename == nil {
+		rename = func(name string) string { return name }
+	}
 	s := Shape
 	rng := rand.New(rand.NewSource(seed))
 	ck := &Checkpoint{Dir: t.TempDir(), Tensors: map[string][]float32{}, Shapes: map[string][]int{}}
@@ -91,7 +101,7 @@ func Write(t testing.TB, seed int64) *Checkpoint {
 		for _, v := range ck.Tensors[name] {
 			data = binary.LittleEndian.AppendUint16(data, uint16(math.Float32bits(v)>>16))
 		}
-		header[name] = entry{"BF16", ck.Shapes[name], []int64{start, int64(len(data))}}
+		header[rename(name)] = entry{"BF16", ck.Shapes[name], []int64{start, int64(len(data))}}
 	}
 	raw, err := vibejson.Marshal(&header)
 	if err != nil {
@@ -118,6 +128,12 @@ func BF16Round(v float32) float32 {
 // ReferenceHidden runs a direct float64 Qwen3 forward pass over the BF16
 // checkpoint values and returns the final-normalized last-token state.
 func (ck *Checkpoint) ReferenceHidden(ids []int) []float32 {
+	return ck.ReferenceHiddenEmbeds(ids, -1, nil)
+}
+
+// ReferenceHiddenEmbeds is ReferenceHidden with the i-th occurrence of
+// token taking row i of rows as its input embedding.
+func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32) []float32 {
 	s := Shape
 	w := func(name string) []float32 { return ck.Tensors[name] }
 	matvec := func(m []float32, x []float64, n, k int) []float64 {
@@ -152,10 +168,16 @@ func (ck *Checkpoint) ReferenceHidden(ids []int) []float32 {
 	}
 	n := len(ids)
 	h := make([][]float64, n)
+	spliced := 0
 	for i, id := range ids {
 		h[i] = make([]float64, s.Hidden)
+		src := w("model.embed_tokens.weight")[id*s.Hidden:]
+		if id == token {
+			src = rows[spliced*s.Hidden:]
+			spliced++
+		}
 		for j := range s.Hidden {
-			h[i][j] = float64(w("model.embed_tokens.weight")[id*s.Hidden+j])
+			h[i][j] = float64(src[j])
 		}
 	}
 	qd, kd := s.Heads*s.HeadDim, s.KVHeads*s.HeadDim
@@ -222,6 +244,22 @@ func (ck *Checkpoint) ReferenceHidden(ids []int) []float32 {
 		res[i] = float32(v)
 	}
 	return res
+}
+
+// ReferenceLogits applies lm_head.weight to a final-normalized state in
+// float64.
+func (ck *Checkpoint) ReferenceLogits(hidden []float32) []float32 {
+	s := Shape
+	head := ck.Tensors["lm_head.weight"]
+	out := make([]float32, s.Vocab)
+	for i := range out {
+		var sum float64
+		for j, v := range hidden {
+			sum += float64(head[i*s.Hidden+j]) * float64(v)
+		}
+		out[i] = float32(sum)
+	}
+	return out
 }
 
 // VectorParity returns the cosine similarity and largest absolute

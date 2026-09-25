@@ -58,6 +58,9 @@ built with `CGO_ENABLED=0`.
 | Whisper whole-file frontend | Pinned PyTorch JFK and long-file mel samples; separate single-window full-array oracle |
 | Whisper encoder and decoder | Pinned PyTorch stem, all four encoder blocks, final encoder, prefix/next-token logits, cache reset, and JFK token sequence; scalar/SIMD worker parity |
 | Whisper full transcription | Pinned OpenAI JFK, silence, and JFK plus 35 seconds of silence transcripts; warm allocation checks |
+| Qwen3-ASR | The official `qwen-asr` package's FP32 run on English and Chinese clips (`qwen3asr/tools/reference.py`, windowed encoder attention): features within `1e-4`, encoder rows at every window edge within `1e-5`, prompt ids, the 32 largest first-step logits, generated ids and transcripts; GPU transcripts and first tokens; warm allocation checks in both decoder formats |
+| Qwen3-ASR text rules | Repetition fix, output parsing, token counts, sinusoids, and long-audio cuts against the reference functions' outputs |
+| Qwen2 tokenizer files | `vocab.json`, `merges.txt`, and added tokens against the processor's prompt ids and `tokenizer.json`'s encodings; Python-compatible UTF-8 replacement in decoding |
 
 An external-package conformance test also implements `speech.TurnDetector`
 using only the standalone Whisper frontend. Its model head is a test stand-in; this proves

@@ -30,3 +30,6 @@ jobs:
         run: go vet ./...
       - name: Build CLI
         run: go build ./cmd/gophonic
+      - name: Vet example
+        working-directory: examples/streamcall
+        run: go vet ./...

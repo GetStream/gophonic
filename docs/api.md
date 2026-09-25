@@ -11,9 +11,10 @@ There are two layers:
   `speech.Transcriber` for speech-to-text and `speech.TurnDetector` for
   end-of-turn detection. Applications, the CLI, and the HTTP server use only
   this layer.
-- **Per model.** Packages `whisper`, `smartturn`, `tinymel`, and `qwen3`
-  expose each model's own entry points: explicit workspaces, feature-level
-  prediction, caller-sized result buffers, and Qwen3's text tasks.
+- **Per model.** Packages `qwen3asr`, `whisper`, `smartturn`, `tinymel`, and
+  `qwen3` expose each model's own entry points: decoder formats, explicit
+  workspaces, feature-level prediction, caller-sized result buffers, and
+  Qwen3's text tasks.
 
 ## Open a model
 
@@ -32,15 +33,17 @@ case gophonic.TurnDetection:
 }
 ```
 
-`Open` recognizes the format from the file: a converted Whisper, Smart Turn,
-or TinyMelNet `.gophonic` bundle. It returns `ErrUnknownFormat` for anything
-else. `Model.Name` reports the architecture (`"whisper"`, `"smart-turn"`,
-`"tinymel"`). Asking a model for the other kind of lane fails with
-`speech.ErrUnsupported`.
+`Open` recognizes the format from the path: an official Qwen3-ASR snapshot
+directory (`config.json` with `model_type` `qwen3_asr`), or a converted
+Whisper, Smart Turn, or TinyMelNet `.gophonic` bundle. It returns
+`ErrUnknownFormat` for anything else. `Model.Name` reports the architecture
+(`"qwen3-asr"`, `"whisper"`, `"smart-turn"`, `"tinymel"`). Asking a model for
+the other kind of lane fails with `speech.ErrUnsupported`.
 
 `Options.Threads` bounds each lane's CPU workers, including the caller: a
-Whisper transcriber uses that many execution slots (default
-`min(GOMAXPROCS, 8)`), and a TinyMelNet detector uses `Threads-1` helper
+Qwen3-ASR transcriber uses that many (default `min(GOMAXPROCS, 16)`, at most
+8 for the encoder), a Whisper transcriber that many execution slots (default
+`min(GOMAXPROCS, 8)`), and a TinyMelNet detector `Threads-1` helper
 goroutines (default none). Smart Turn uses `GOMAXPROCS-1` helpers regardless.
 
 ## Transcription
@@ -126,6 +129,28 @@ nonempty, contain complete frames, and be finite where it is read.
 `> 0.57`). The result does not borrow lane storage.
 
 ## Model packages
+
+### qwen3asr
+
+```go
+model, err := qwen3asr.Load("models/Qwen3-ASR-1.7B", qwen3asr.Options{})
+if err != nil { return err }
+lane, err := qwen3asr.NewTranscriber(model, 0) // 0: default workers
+if err != nil { return err }
+defer lane.Close()
+
+err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: "de", Context: "Bundestag"}, &t)
+```
+
+`Options.Format` picks the decoder: `qwen3asr.FormatGPU` (int8 blocks on the
+Apple GPU, the default where Metal is present) or `qwen3asr.FormatF16` (every
+BF16 weight exactly, on the CPU). `speech.Options.Language` forces one of
+`Model.Languages()` and skips detection; `Context` primes recognition with
+names and terms. Qwen3-ASR produces no timestamps: `Segments` yields one
+segment per decoded piece (the whole clip, or each piece of audio longer
+than 20 minutes), and `Words` fails with `speech.ErrUnsupported`. Input whose
+peak exceeds 1 is scaled down by its peak, as the reference normalizes
+decoded audio. See [Qwen3-ASR](qwen3asr.md).
 
 ### whisper
 

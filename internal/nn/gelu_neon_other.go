@@ -3,7 +3,7 @@
 
 //go:build !arm64
 
-package whisper
+package nn
 
 const geluAccelerated = false
 
