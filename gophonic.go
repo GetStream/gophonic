@@ -2,25 +2,22 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 // Package gophonic runs speech models in pure Go: speech recognition
-// (Whisper, Qwen3-ASR) and end-of-turn detection (Smart Turn, TinyMelNet).
+// (Qwen3-ASR, Whisper) and end-of-turn detection (Smart Turn, TinyMelNet).
 //
-// Open loads any supported model by path and reports what it does; its
-// lanes implement the model-independent interfaces of package speech. Each
-// model also has its own package (whisper, qwen3asr, smartturn, tinymel)
+// Open loads any registered model by path and reports what it does; its
+// lanes implement the model-independent interfaces of package speech. The
+// built-in formats are registered already, and Register adds more. Each
+// model also has its own package (qwen3asr, whisper, smartturn, tinymel)
 // with lower level entry points.
 package gophonic
 
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
+	"slices"
+	"sync"
 
-	"github.com/GetStream/gophonic/qwen3asr"
-	"github.com/GetStream/gophonic/smartturn"
 	"github.com/GetStream/gophonic/speech"
-	"github.com/GetStream/gophonic/tinymel"
-	"github.com/GetStream/gophonic/whisper"
 )
 
 // Kind is what a Model does.
@@ -58,9 +55,23 @@ type Model struct {
 	kind            Kind
 	newTranscriber  func() (speech.Transcriber, error)
 	newTurnDetector func() (speech.TurnDetector, error)
+	close           func() error
 }
 
-// Name identifies the architecture, such as "whisper" or "smart-turn".
+// NewTranscriptionModel returns a transcription Model named name whose
+// lanes come from newLane. close, when not nil, releases the model's
+// resources (such as GPU memory) and runs once, from Model.Close. A Format's
+// Open builds its Model with this or NewTurnDetectionModel.
+func NewTranscriptionModel(name string, newLane func() (speech.Transcriber, error), close func() error) *Model {
+	return &Model{name: name, kind: Transcription, newTranscriber: newLane, close: close}
+}
+
+// NewTurnDetectionModel is NewTranscriptionModel for turn detectors.
+func NewTurnDetectionModel(name string, newLane func() (speech.TurnDetector, error), close func() error) *Model {
+	return &Model{name: name, kind: TurnDetection, newTurnDetector: newLane, close: close}
+}
+
+// Name identifies the architecture, such as "qwen3-asr" or "smart-turn".
 func (m *Model) Name() string { return m.name }
 
 // Kind reports what the model does.
@@ -84,76 +95,71 @@ func (m *Model) NewTurnDetector() (speech.TurnDetector, error) {
 	return m.newTurnDetector()
 }
 
-// ErrUnknownFormat is returned by Open for a file it does not recognize.
+// Close releases the model's resources. Close its lanes first; neither the
+// model nor its lanes may be used afterwards. It is safe to call more than
+// once.
+func (m *Model) Close() error {
+	c := m.close
+	m.close, m.newTranscriber, m.newTurnDetector = nil, nil, nil
+	if c == nil {
+		return nil
+	}
+	return c()
+}
+
+// A Format is one kind of model that Open recognizes.
+type Format struct {
+	// Name identifies the format in errors and listings; the Model's Name
+	// is the one its Open gives it.
+	Name string
+	// Match reports whether path holds this format. It should read as
+	// little as it can: a file signature, or one field of a config file.
+	Match func(path string) bool
+	// Open loads the model at path.
+	Open func(path string, opts Options) (*Model, error)
+}
+
+// ErrUnknownFormat is returned by Open for a path no format matches.
 var ErrUnknownFormat = errors.New("gophonic: unrecognized model format")
 
-// Open loads the model at path, recognizing its format from the file: a
-// converted Whisper, Smart Turn, or TinyMelNet .gophonic bundle, or an
-// official Qwen3-ASR checkpoint directory.
+var (
+	registry sync.RWMutex
+	formats  = builtinFormats() // tried in order
+)
+
+// Register adds a format for Open. Formats registered later are tried
+// first, so a registered format can take over paths a built-in one matches.
+// It is safe to call concurrently with Open.
+func Register(f Format) {
+	if f.Match == nil || f.Open == nil {
+		panic("gophonic: Register of a format without Match or Open")
+	}
+	registry.Lock()
+	formats = append([]Format{f}, formats...)
+	registry.Unlock()
+}
+
+// Formats lists the registered formats, in the order Open tries them.
+func Formats() []Format {
+	registry.RLock()
+	defer registry.RUnlock()
+	return slices.Clone(formats)
+}
+
+// Open loads the model at path with the first registered format that
+// matches it: by default, an official Qwen3-ASR checkpoint directory or a
+// converted Whisper, Smart Turn, or TinyMelNet .gophonic bundle.
 func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("gophonic: invalid thread count %d", opts.Threads)
 	}
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		if !qwen3asr.IsModelDir(path) {
-			return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, path)
+	for _, f := range Formats() {
+		if f.Match(path) {
+			return f.Open(path, opts)
 		}
-		model, err := qwen3asr.Load(path, qwen3asr.Options{})
-		if err != nil {
-			return nil, err
-		}
-		threads := opts.Threads
-		return &Model{name: "qwen3-asr", kind: Transcription, newTranscriber: func() (speech.Transcriber, error) {
-			return qwen3asr.NewTranscriber(model, threads)
-		}}, nil
 	}
-	magic, err := readMagic(path)
-	if err != nil {
+	if err := exists(path); err != nil {
 		return nil, err
 	}
-	switch magic {
-	case whisper.BundleMagic:
-		model, err := whisper.Load(path)
-		if err != nil {
-			return nil, err
-		}
-		workers := opts.Threads
-		return &Model{name: "whisper", kind: Transcription, newTranscriber: func() (speech.Transcriber, error) {
-			if workers == 0 {
-				return whisper.NewTranscriber(model)
-			}
-			return whisper.NewTranscriberWithWorkers(model, workers)
-		}}, nil
-	case smartturn.BundleMagic:
-		model, err := smartturn.Load(path)
-		if err != nil {
-			return nil, err
-		}
-		return &Model{name: "smart-turn", kind: TurnDetection, newTurnDetector: func() (speech.TurnDetector, error) {
-			return smartturn.NewSession(model)
-		}}, nil
-	case tinymel.BundleMagic:
-		model, err := tinymel.Load(path)
-		if err != nil {
-			return nil, err
-		}
-		helpers := max(opts.Threads-1, 0)
-		return &Model{name: "tinymel", kind: TurnDetection, newTurnDetector: func() (speech.TurnDetector, error) {
-			return tinymel.NewSession(model, helpers)
-		}}, nil
-	}
 	return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, path)
-}
-
-func readMagic(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	var magic [8]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
-		return "", fmt.Errorf("%w: %s: %v", ErrUnknownFormat, path, err)
-	}
-	return string(magic[:]), nil
 }
