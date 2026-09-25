@@ -763,6 +763,7 @@ func (ws *Workspace) prepareTiles(cols int) {
 		var err error
 		if ws.op.rot != nil {
 			err = ws.tilesI8[t].Prepare(n, cols)
+
 		} else {
 			err = ws.tiles[t].Prepare(n, cols)
 		}
@@ -805,7 +806,13 @@ func (ws *Workspace) project(src []float32, cols int, prepared bool, projs ...pr
 			op.src = ws.rotated
 		}
 	}
-	ws.run(opPack, tiles*packChunks(cols), 1)
+	// One decode row is too little work to amortize a worker barrier.
+	// Keep the same packing path and numerical representation.
+	if rows == 1 && op.rot == nil {
+		op.pack(0, packChunks(cols))
+	} else {
+		ws.run(opPack, tiles*packChunks(cols), 1)
+	}
 	// SME saturates near eight streaming threads. With int8 weights and at
 	// least four tiles, four SME workers plus NEON strips on the remaining
 	// cores are faster; with fewer tiles NEON only adds contention.
