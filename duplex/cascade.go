@@ -178,6 +178,7 @@ type Cascade struct {
 	// A silence the model chose, until what it named happens; kept by the
 	// responder.
 	silentUntil string
+	silentSince time.Time
 	wakeProbs   []float32
 
 	// The utterance being heard, written by the listener and transcribed
@@ -1095,7 +1096,10 @@ func (c *Cascade) respond() {
 			message, answer := c.heard(text)
 			heardAs = message
 			if answer && c.silentUntil != "" {
-				answer = c.wakes(ctx, message)
+				// A silence ends when what the model named happens, and
+				// in any case after maxSilence: what it named may be
+				// something no one will say.
+				answer = time.Since(c.silentSince) > maxSilence || c.wakes(ctx, message)
 			}
 			// Whether the words are finished helps judge the turn; their
 			// evaluation is the reply's first step anyway.
@@ -1332,7 +1336,7 @@ func (c *Cascade) respond() {
 			// model chose until something happens lasts until then.
 			c.silentUntil = ""
 			if silent && c.cfg.Wake != nil {
-				c.silentUntil = until
+				c.silentUntil, c.silentSince = until, time.Now()
 			}
 		}
 		if interrupted {
@@ -1347,6 +1351,9 @@ func (c *Cascade) respond() {
 const SilencePrompt = `Never repeat or read back what someone said: everyone in the call heard it. Always answer, unless someone explicitly asks you to be quiet, to stop talking, or to wait: only then reply with nothing but <silent until "...">, naming the word or event that ends the silence.`
 
 const silentMark = "<silent"
+
+// maxSilence ends any silence the model chose.
+const maxSilence = time.Minute
 
 // echoOf reports how much of reply, from its start, repeats one of the
 // messages it answers word for word (0 if none), and whether reply, still
