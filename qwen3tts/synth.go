@@ -144,6 +144,7 @@ func (s *Synthesizer) Speak(ctx context.Context, opts speech.SpeakOptions, next 
 			}
 		}
 	}
+	first := true
 	err := s.generate(ctx, opts, next, func(frame *[groups]int) error {
 		flush()
 		if outErr != nil {
@@ -151,7 +152,13 @@ func (s *Synthesizer) Speak(ctx context.Context, opts speech.SpeakOptions, next 
 		}
 		s.jobs <- decodeJob{*frame, buf}
 		inFlight, buf = true, 1-buf
-		return nil
+		if first {
+			// The first frame is what the listener waits for: pass it on
+			// as soon as it is decoded.
+			first = false
+			flush()
+		}
+		return outErr
 	})
 	flush()
 	if err == nil {

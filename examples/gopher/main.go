@@ -38,6 +38,7 @@ import (
 	audiortc "github.com/GetStream/getstream-go-webrtc/audio/rtc"
 	"github.com/GetStream/getstream-go-webrtc/logger"
 	"github.com/GetStream/getstream-go-webrtc/track"
+	getstream "github.com/GetStream/getstream-go/v5"
 	sfu_events "github.com/GetStream/protocol/protobuf/video/sfu/event"
 	sfu_models "github.com/GetStream/protocol/protobuf/video/sfu/models"
 	"github.com/GetStream/protocol/protobuf/video/sfu/signal_rpc"
@@ -55,8 +56,10 @@ const self = "gopher" // our user ID; we never subscribe to ourselves
 var verbose *bool
 
 const prompt = `You are Gopher, a friendly voice assistant taking part in a live video call.
-Everything you write is spoken aloud, so answer in one to three short, natural sentences,
-without lists, markdown, or emoji. You run entirely on the user's own laptop, in Go.`
+Everything you write is spoken aloud, so answer in one to three short, natural sentences.
+Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
+Today is %s. Your knowledge may be older than that: when someone tells you about something
+newer, believe them rather than insisting on what you knew.`
 
 func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
@@ -64,7 +67,7 @@ func main() {
 	turnPath := flag.String("turn", "../../models/smart-turn-v3.2.gophonic", "turn detection model")
 	llmPath := flag.String("llm", "../../models/Qwen3-8B", "language model")
 	ttsPath := flag.String("tts", "../../models/Qwen3-TTS-12Hz-1.7B-CustomVoice", "speech synthesis model")
-	language := flag.String("language", "en", "language spoken in the call (ISO 639-1); empty detects it")
+	language := flag.String("language", "", "language spoken in the call (ISO 639-1); empty detects it, and Gopher answers in kind")
 	voice := flag.String("voice", "ryan", "voice: ryan, aiden, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
 	pronto := flag.String("pronto", "https://pronto-staging.getstream.io", "Pronto app whose call to join")
 	verbose = flag.Bool("v", false, "log the input level every second")
@@ -97,8 +100,12 @@ func main() {
 	// The call's chat opens once Gopher has joined, which creates its user.
 	var room *chatChannel
 	humans := &roster{}
+	mix := newMixer()
+	// Closed captions are a server-side API: with the app's secret, what is
+	// said appears as the call's captions; without it, in the chat.
+	captions := newCaptions(apiKey, callType, callID)
 	agent, err := duplex.New(duplex.Config{
-		Prompt: prompt,
+		Prompt: fmt.Sprintf(prompt, time.Now().Format("Monday, January 2, 2006")),
 		Voice:  speech.SpeakOptions{Voice: *voice, Language: *language},
 		Listen: speech.Options{Language: *language},
 		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
@@ -107,13 +114,22 @@ func main() {
 		Addressed: func(text string) bool {
 			return humans.count() <= 1 || strings.Contains(strings.ToLower(text), "gopher")
 		},
-		OnText: func(role chat.Role, text string) {
+		OnText: func(role chat.Role, text string, final bool) {
+			if role == chat.Assistant {
+				// Captions follow the voice sentence by sentence.
+				captions.assistant(text, final)
+			} else {
+				captions.show(mix.loudest(), text)
+			}
+			if !final {
+				return
+			}
 			who := "🧑"
 			if role == chat.Assistant {
 				who = "🐹 Gopher:"
 			}
 			fmt.Printf("%s %s\n", who, text)
-			if room != nil {
+			if room != nil && captions.call == nil {
 				go room.send(who + " " + text)
 			}
 		},
@@ -137,7 +153,6 @@ func main() {
 	check(err)
 	defer client.Close()
 	call := client.Call(callType, callID)
-	mix := newMixer()
 	join, err := call.Join(ctx, rtc.WithOnTrack(rtc.SubscriberFunc(func(t rtc.OnTrackReceived) {
 		if t.TrackType == sfu_models.TrackType_TRACK_TYPE_AUDIO {
 			go hear(ctx, t, mix, humans)
@@ -278,9 +293,10 @@ func hear(ctx context.Context, t rtc.OnTrackReceived, mix *mixer, humans *roster
 type mixer struct {
 	mu     sync.Mutex
 	queues map[string][]float32
+	energy map[string]float32 // recent loudness per track, decaying
 }
 
-func newMixer() *mixer { return &mixer{queues: map[string][]float32{}} }
+func newMixer() *mixer { return &mixer{queues: map[string][]float32{}, energy: map[string]float32{}} }
 
 const maxQueue = speech.SampleRate / 5 // 200 ms
 
@@ -297,6 +313,7 @@ func (m *mixer) write(id string, pcm []float32) {
 func (m *mixer) drop(key string) {
 	m.mu.Lock()
 	delete(m.queues, key)
+	delete(m.energy, key)
 	m.mu.Unlock()
 }
 
@@ -307,12 +324,91 @@ func (m *mixer) read(dst []float32) {
 		if len(q) < len(dst) {
 			continue
 		}
+		var e float32
 		for i, v := range q[:len(dst)] {
 			dst[i] += v
+			e += v * v
 		}
+		m.energy[key] = 0.95*m.energy[key] + e
 		m.queues[key] = q[:copy(q, q[len(dst):])]
 	}
 	m.mu.Unlock()
+}
+
+// loudest returns the user whose audio was loudest recently, the likely
+// speaker of what was just transcribed.
+func (m *mixer) loudest() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	best, who := float32(0), self
+	for key, e := range m.energy {
+		if e > best {
+			best, who = e, key
+		}
+	}
+	id, _, _ := strings.Cut(who, "/")
+	return id
+}
+
+// captions sends what is said as the call's closed captions.
+type captions struct {
+	call *getstream.Call // nil without the app's secret
+	send chan getstream.SendClosedCaptionRequest
+	sent int // bytes of the current reply already captioned
+}
+
+func newCaptions(apiKey, callType, callID string) *captions {
+	c := &captions{}
+	secret := os.Getenv("STREAM_API_SECRET")
+	if secret == "" {
+		log.Printf("closed captions are off: set STREAM_API_SECRET to show them")
+		return c
+	}
+	client, err := getstream.NewClient(apiKey, secret)
+	if err != nil {
+		log.Printf("closed captions are off: %v", err)
+		return c
+	}
+	c.call = client.Video().Call(callType, callID)
+	c.send = make(chan getstream.SendClosedCaptionRequest, 64)
+	go func() { // one request at a time, in order
+		for req := range c.send {
+			if _, err := c.call.SendClosedCaption(context.Background(), &req); err != nil {
+				log.Printf("caption: %v", err)
+			}
+		}
+	}()
+	log.Printf("closed captions are on")
+	return c
+}
+
+func (c *captions) show(speaker, text string) {
+	if c.call == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	select {
+	case c.send <- getstream.SendClosedCaptionRequest{SpeakerID: speaker, Text: strings.TrimSpace(text)}:
+	default: // captions are falling behind; drop rather than delay the call
+	}
+}
+
+// assistant captions each finished sentence of the reply growing in text.
+func (c *captions) assistant(text string, final bool) {
+	if c.sent > len(text) {
+		c.sent = 0 // a new reply
+	}
+	rest := text[c.sent:]
+	end := strings.LastIndexAny(rest, ".!?…")
+	if final {
+		end = len(rest) - 1
+	}
+	if end >= 0 {
+		c.show(self, rest[:end+1])
+		c.sent += end + 1
+	}
+	if final {
+		c.sent = 0
+	}
 }
 
 // roster counts the people in the call.

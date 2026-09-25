@@ -143,7 +143,13 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 	var mu sync.Mutex
 	var said []string
 	c, err := New(Config{Transcriber: fakeTranscriber{}, TurnDetector: fakeTurns{}, Session: session, Synthesizer: fakeSynth{},
-		OnText: func(role chat.Role, text string) { mu.Lock(); said = append(said, text); mu.Unlock() }})
+		OnText: func(role chat.Role, text string, final bool) {
+			if final {
+				mu.Lock()
+				said = append(said, text)
+				mu.Unlock()
+			}
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

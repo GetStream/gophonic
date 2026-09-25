@@ -6,6 +6,7 @@ replace github.com/GetStream/gophonic => ../..
 
 require (
 	github.com/GetStream/getstream-go-webrtc v0.0.0-20260923215301-80daf64c2fc1
+	github.com/GetStream/getstream-go/v5 v5.2.0
 	github.com/GetStream/gophonic v0.0.0
 	github.com/GetStream/protocol v1.49.0
 	github.com/sirupsen/logrus v1.9.3
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	github.com/GetStream/getstream-go/v5 v5.2.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/gammazero/deque v1.1.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
