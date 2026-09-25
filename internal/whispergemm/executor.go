@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/GetStream/gophonic/internal/arena"
 )
 
 var (
@@ -26,14 +28,17 @@ var (
 // PackedB, provided nobody calls Pack while it is in use. An Executor must not
 // be copied after first use, and must be closed to release its worker goroutines.
 type Executor struct {
-	mu      sync.Mutex
-	closed  bool
-	workers []executorWorker
-	stop    atomic.Bool
-	pending atomic.Int32
-	stopped sync.WaitGroup
-	job     matrixJob
-	rowJob  rowJob
+	memory      *arena.Arena
+	scratch     [][]float32
+	scratchSize int
+	mu          sync.Mutex
+	closed      bool
+	workers     []executorWorker
+	stop        atomic.Bool
+	pending     atomic.Int32
+	stopped     sync.WaitGroup
+	job         matrixJob
+	rowJob      rowJob
 }
 
 // Give each worker its own publication counter and cache line. A worker only
@@ -124,9 +129,10 @@ func (e *Executor) run(index int) {
 }
 
 // Mul has the same shape, aliasing, and numerical contract as PackedB.Mul.
-// It allocates no memory after construction, including worker dispatch. The
+// After warming the largest K, it allocates no memory, including dispatch. The
 // packed values are read-only until all shards complete and Mul returns.
 func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aStride int, m int) error {
+	defer runtime.KeepAlive(e)
 	if e == nil {
 		return ErrExecutorClosed
 	}
@@ -142,9 +148,30 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 		return ErrShape
 	}
 	parts := e.partitions(m, b.k, b.n)
+	if need := ScratchLen(b.k); need > e.scratchSize {
+		lengths := make([]int, len(e.workers)+1)
+		for i := range lengths {
+			lengths[i] = need
+		}
+		memory, err := arena.New(lengths...)
+		if err != nil {
+			return err
+		}
+		if e.scratch == nil {
+			e.scratch = make([][]float32, len(lengths))
+		}
+		for i := range e.scratch {
+			e.scratch[i] = memory.Take(need)
+		}
+		_ = e.memory.Close()
+		e.memory, e.scratchSize = memory, need
+	}
 	if parts == 1 {
-		b.mul(dst, dstStride, a, aStride, m)
-		return nil
+		var scratch []float32
+		if e.scratch != nil {
+			scratch = e.scratch[0]
+		}
+		return b.MulScratch(dst, dstStride, a, aStride, m, scratch)
 	}
 	e.job = matrixJob{b: b, a: a, dst: dst, aStride: aStride, dstStride: dstStride, m: m, parts: parts}
 	e.execute(parts)
@@ -246,7 +273,13 @@ func (e *Executor) mulShard(index int) {
 		count++
 	}
 	start, end := first*4, min((first+count)*4, j.m)
-	j.b.mul(j.dst[start*j.dstStride:], j.dstStride, j.a[start*j.aStride:], j.aStride, end-start)
+	var scratch []float32
+	if e.scratch != nil {
+		scratch = e.scratch[index]
+	}
+	if err := j.b.MulScratch(j.dst[start*j.dstStride:], j.dstStride, j.a[start*j.aStride:], j.aStride, end-start, scratch); err != nil {
+		panic(err) // The caller validated the matrix and allocated every worker's scratch.
+	}
 }
 
 // Close waits for any active operation and stops the workers. Repeated
@@ -272,5 +305,7 @@ func (e *Executor) Close() error {
 	e.closed = true
 	e.stop.Store(true)
 	e.stopped.Wait()
-	return nil
+	err := e.memory.Close()
+	e.memory, e.scratch = nil, nil
+	return err
 }

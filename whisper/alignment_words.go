@@ -50,7 +50,7 @@ func (t *Transcriber) alignWordsForWindow(windowSeek, segmentFrames int, text []
 		case pos < positions-1:
 			id = t.alignTokens[pos-2]
 		}
-		if err := t.model.LogitsForTokenInto(id, pos, t.decoder, t.logits); err != nil {
+		if err := t.model.decodeTokenInto(id, pos, t.decoder, t.logits, pos >= 1 && pos <= tokenCount); err != nil {
 			t.decoder.alignment = nil
 			return words, err
 		}

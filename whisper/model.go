@@ -13,9 +13,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -59,13 +61,33 @@ func (d Dims) valid() bool {
 
 // Model owns validated FP32 weights for an English OpenAI Whisper model.
 type Model struct {
+	memory  *arena.Arena
 	tensors map[string][]float32
 	dims    Dims
+
+	// Encoder packing is immutable and shared by every lane on this model.
+	encoderMu      sync.Mutex
+	encoderPacking *packedEncoderWeights
 
 	// vectors caches immutable matrix-vector packings shared by every
 	// decoder on this model. It is populated on first use.
 	vectorMu sync.Mutex
 	vectors  map[string]*whispergemm.PackedVector
+}
+
+// Close releases the model's mapped weights. Close every transcriber and
+// stop all encoder/decoder calls first; the model and its scratch must not
+// be used afterwards. Repeated Close calls are harmless.
+func (m *Model) Close() error {
+	if m == nil {
+		return nil
+	}
+	if err := m.memory.Close(); err != nil {
+		return err
+	}
+	m.memory = nil
+	m.tensors, m.vectors, m.encoderPacking = nil, nil, nil
+	return nil
 }
 
 // packedVector returns the shared packing of an N-by-K tensor, or nil when
@@ -202,6 +224,30 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	for _, s := range specs {
 		want[s.name] = s.shape
 	}
+	lengths := make([]int, len(specs))
+	for i, s := range specs {
+		n := 1
+		for _, d := range s.shape {
+			if d <= 0 || n > int(^uint(0)>>1)/d {
+				return nil, arena.ErrSize
+			}
+			n *= d
+		}
+		lengths[i] = n
+	}
+	memory, err := arena.New(lengths...)
+	if err != nil {
+		return nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = memory.Close()
+		}
+		runtime.KeepAlive(memory)
+	}()
+	// Bound transient read storage even for the large vocabulary tensor.
+	buffer := make([]byte, 256<<10)
 	tensors := make(map[string][]float32, len(specs))
 	for range count {
 		var n uint16
@@ -248,13 +294,17 @@ func ReadWeights(r io.Reader) (*Model, error) {
 		if int(values) != length {
 			return nil, fmt.Errorf("tensor %q has wrong element count", name)
 		}
-		data := make([]byte, length*4)
-		if _, err := io.ReadFull(payload, data); err != nil {
-			return nil, err
-		}
-		v := make([]float32, length)
-		if err := decodeFiniteFloat32(data, v); err != nil {
-			return nil, fmt.Errorf("tensor %q: %w", name, err)
+		v := memory.Take(length)
+		for first := 0; first < length; {
+			count := min(length-first, len(buffer)/4)
+			data := buffer[:count*4]
+			if _, err := io.ReadFull(payload, data); err != nil {
+				return nil, err
+			}
+			if err := decodeFiniteFloat32(data, v[first:first+count]); err != nil {
+				return nil, fmt.Errorf("tensor %q: %w", name, err)
+			}
+			first += count
 		}
 		tensors[name] = v
 	}
@@ -269,7 +319,8 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	if n, err := r.Read(trailing[:]); n != 0 || err != io.EOF {
 		return nil, errors.New("Whisper bundle has trailing data")
 	}
-	return &Model{tensors: tensors, dims: dims}, nil
+	committed = true
+	return &Model{tensors: tensors, dims: dims, memory: memory}, nil
 }
 
 func decodeFiniteFloat32(data []byte, dst []float32) error {

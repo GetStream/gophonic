@@ -1,0 +1,222 @@
+{
+  "benchmark": "Benchmark(OfficialTinyEN(Transcribe|Window)$|CPUContextPrompt|CPURepeatedAudio)",
+  "iterations": 10,
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/stt-whisper-reference.test",
+      "sha256": "0f95150cf8028650d7fbdedaea83d2ea3b1c20db63ce475016ea5a98dba0fb60"
+    },
+    "after": {
+      "path": "/private/tmp/stt-whisper-final.test",
+      "sha256": "275888d1383e194d673eb2cf012b049b5eb8583cf5f0c78875cbe290370932d6"
+    }
+  },
+  "samples": [
+    {
+      "block": 0,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 62407312.0,
+        "BenchmarkOfficialTinyENWindow-16": 58419542.0,
+        "BenchmarkCPUContextPrompt/2-16": 7908525.0,
+        "BenchmarkCPUContextPrompt/64-16": 82738483.0,
+        "BenchmarkCPUContextPrompt/128-16": 162516112.0,
+        "BenchmarkCPURepeatedAudio-16": 213985079.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  62407312 ns/op\t     532 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  58419542 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   7908525 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  82738483 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 162516112 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 213985079 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 0,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 66637925.0,
+        "BenchmarkOfficialTinyENWindow-16": 57518600.0,
+        "BenchmarkCPUContextPrompt/2-16": 7039688.0,
+        "BenchmarkCPUContextPrompt/64-16": 36346900.0,
+        "BenchmarkCPUContextPrompt/128-16": 69031650.0,
+        "BenchmarkCPURepeatedAudio-16": 190382175.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  66637925 ns/op\t      24 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  57518600 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   7039688 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  36346900 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  69031650 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 190382175 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 64360392.0,
+        "BenchmarkOfficialTinyENWindow-16": 56175304.0,
+        "BenchmarkCPUContextPrompt/2-16": 6808300.0,
+        "BenchmarkCPUContextPrompt/64-16": 36096146.0,
+        "BenchmarkCPUContextPrompt/128-16": 68871367.0,
+        "BenchmarkCPURepeatedAudio-16": 191101204.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  64360392 ns/op\t      12 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  56175304 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   6808300 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  36096146 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  68871367 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 191101204 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 63616050.0,
+        "BenchmarkOfficialTinyENWindow-16": 55529808.0,
+        "BenchmarkCPUContextPrompt/2-16": 8039325.0,
+        "BenchmarkCPUContextPrompt/64-16": 87209833.0,
+        "BenchmarkCPUContextPrompt/128-16": 169801000.0,
+        "BenchmarkCPURepeatedAudio-16": 213518571.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  63616050 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  55529808 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   8039325 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  87209833 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 169801000 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 213518571 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 63598679.0,
+        "BenchmarkOfficialTinyENWindow-16": 56206583.0,
+        "BenchmarkCPUContextPrompt/2-16": 8599579.0,
+        "BenchmarkCPUContextPrompt/64-16": 87101517.0,
+        "BenchmarkCPUContextPrompt/128-16": 168027042.0,
+        "BenchmarkCPURepeatedAudio-16": 216151817.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  63598679 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  56206583 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   8599579 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  87101517 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 168027042 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 216151817 ns/op\t      12 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 63263075.0,
+        "BenchmarkOfficialTinyENWindow-16": 57142671.0,
+        "BenchmarkCPUContextPrompt/2-16": 7416262.0,
+        "BenchmarkCPUContextPrompt/64-16": 36919729.0,
+        "BenchmarkCPUContextPrompt/128-16": 68726017.0,
+        "BenchmarkCPURepeatedAudio-16": 188018354.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  63263075 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  57142671 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   7416262 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  36919729 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  68726017 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 188018354 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 64060012.0,
+        "BenchmarkOfficialTinyENWindow-16": 59528662.0,
+        "BenchmarkCPUContextPrompt/2-16": 6896796.0,
+        "BenchmarkCPUContextPrompt/64-16": 37035704.0,
+        "BenchmarkCPUContextPrompt/128-16": 70536083.0,
+        "BenchmarkCPURepeatedAudio-16": 191512392.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  64060012 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  59528662 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   6896796 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  37035704 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  70536083 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 191512392 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 65273704.0,
+        "BenchmarkOfficialTinyENWindow-16": 60731138.0,
+        "BenchmarkCPUContextPrompt/2-16": 8041512.0,
+        "BenchmarkCPUContextPrompt/64-16": 84177521.0,
+        "BenchmarkCPUContextPrompt/128-16": 167244821.0,
+        "BenchmarkCPURepeatedAudio-16": 219109612.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  65273704 ns/op\t      24 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  60731138 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   8041512 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  84177521 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 167244821 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 219109612 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 63904842.0,
+        "BenchmarkOfficialTinyENWindow-16": 55246579.0,
+        "BenchmarkCPUContextPrompt/2-16": 8383375.0,
+        "BenchmarkCPUContextPrompt/64-16": 83785304.0,
+        "BenchmarkCPUContextPrompt/128-16": 164733458.0,
+        "BenchmarkCPURepeatedAudio-16": 220792108.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  63904842 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  55246579 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   8383375 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  83785304 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 164733458 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 220792108 ns/op\t      24 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 68797075.0,
+        "BenchmarkOfficialTinyENWindow-16": 55714612.0,
+        "BenchmarkCPUContextPrompt/2-16": 7412800.0,
+        "BenchmarkCPUContextPrompt/64-16": 36024058.0,
+        "BenchmarkCPUContextPrompt/128-16": 68989017.0,
+        "BenchmarkCPURepeatedAudio-16": 192034467.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  68797075 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  55714612 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   7412800 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  36024058 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  68989017 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 192034467 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 65205371.0,
+        "BenchmarkOfficialTinyENWindow-16": 57473725.0,
+        "BenchmarkCPUContextPrompt/2-16": 7651375.0,
+        "BenchmarkCPUContextPrompt/64-16": 36570804.0,
+        "BenchmarkCPUContextPrompt/128-16": 68832908.0,
+        "BenchmarkCPURepeatedAudio-16": 191790842.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  65205371 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  57473725 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   7651375 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  36570804 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t  68832908 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 191790842 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkOfficialTinyENTranscribe-16": 64801062.0,
+        "BenchmarkOfficialTinyENWindow-16": 57822579.0,
+        "BenchmarkCPUContextPrompt/2-16": 8124808.0,
+        "BenchmarkCPUContextPrompt/64-16": 83019046.0,
+        "BenchmarkCPUContextPrompt/128-16": 164017204.0,
+        "BenchmarkCPURepeatedAudio-16": 211994829.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/whisper\ncpu: Apple M4 Max\nBenchmarkOfficialTinyENTranscribe-16    \t      10\t  64801062 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkOfficialTinyENWindow-16        \t      10\t  57822579 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/2-16          \t      10\t   8124808 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/64-16         \t      10\t  83019046 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPUContextPrompt/128-16        \t      10\t 164017204 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkCPURepeatedAudio-16            \t      10\t 211994829 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    }
+  ],
+  "summary": {
+    "BenchmarkOfficialTinyENTranscribe-16": {
+      "before_median_ms": 63.760446,
+      "after_median_ms": 64.7828815,
+      "after_over_before_95pct": [
+        0.9872814531913131,
+        1.0620612660080828
+      ]
+    },
+    "BenchmarkOfficialTinyENWindow-16": {
+      "before_median_ms": 57.014581,
+      "after_median_ms": 57.308198,
+      "after_over_before_95pct": [
+        0.9823465715848202,
+        1.0166544192875058
+      ]
+    },
+    "BenchmarkCPUContextPrompt/2-16": {
+      "before_median_ms": 8.08316,
+      "after_median_ms": 7.226244,
+      "after_over_before_95pct": [
+        0.8523785268041782,
+        0.9272611118933518
+      ]
+    },
+    "BenchmarkCPUContextPrompt/64-16": {
+      "before_median_ms": 83.9814125,
+      "after_median_ms": 36.458852,
+      "after_over_before_95pct": [
+        0.41559569127311563,
+        0.4405110123766057
+      ]
+    },
+    "BenchmarkCPUContextPrompt/128-16": {
+      "before_median_ms": 165.9891395,
+      "after_median_ms": 68.930192,
+      "after_over_before_95pct": [
+        0.4077303150577417,
+        0.4226847927517448
+      ]
+    },
+    "BenchmarkCPURepeatedAudio-16": {
+      "before_median_ms": 215.068448,
+      "after_median_ms": 191.306798,
+      "after_over_before_95pct": [
+        0.8718921558206228,
+        0.9008017937860476
+      ]
+    }
+  }
+}

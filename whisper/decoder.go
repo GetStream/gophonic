@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 
 	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/whispergemm"
@@ -124,9 +125,9 @@ type decoderWeights struct {
 // cross-attention KV cache, and all per-token work buffers. It is mutable and
 // must not be shared by concurrent decodes. Allocate it once per worker.
 //
-// Its constructor allocates about 30 MiB for tiny.en, mostly KV caches,
-// with 4.5 MiB of packed cross-projection weights and a reusable 2.2 MiB
-// value-projection buffer. The vocabulary uses the model's original weights.
+// Immutable weights are shared by all lanes on the model. With packed
+// cross-attention caches, raw projection scratch holds just one layer and is
+// reused while preparing the next layer; it never duplicates the full cache.
 type DecoderScratch struct {
 	weights    decoderWeights
 	weightsFor *Model
@@ -216,14 +217,18 @@ func NewDecoderScratch() *DecoderScratch {
 
 func newDecoderScratch(d Dims) *DecoderScratch {
 	textState, textLayers, textHeads, audioState := d.TextState, d.TextLayers, d.TextHeads, d.AudioState
+	crossLayers := textLayers
+	if whispergemm.PackedVectorAccelerated() {
+		crossLayers = 1
+	}
 	s := &DecoderScratch{
 		dims:        d,
 		crossKey:    make([]*whispergemm.PackedB, textLayers),
 		crossValue:  make([]*whispergemm.PackedB, textLayers),
 		selfKey:     make([]float32, textLayers*TextContext*textState),
 		selfValue:   make([]float32, textLayers*TextContext*textState),
-		crossKeys:   make([]float32, textLayers*AudioFrames*audioState),
-		crossValues: make([]float32, textLayers*AudioFrames*audioState),
+		crossKeys:   make([]float32, crossLayers*AudioFrames*audioState),
+		crossValues: make([]float32, crossLayers*AudioFrames*audioState),
 		crossTemp:   make([]float32, AudioFrames*audioState),
 		x:           make([]float32, textState),
 		normalized:  make([]float32, textState),
@@ -261,6 +266,8 @@ func newDecoderScratch(d Dims) *DecoderScratch {
 // reuse them. Encoder data is time-major [frames,TextState], with 1..1500
 // frames. A normal Whisper tiny.en encoder produces exactly 1500 frames.
 func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
+	defer runtime.KeepAlive(s)
+	defer runtime.KeepAlive(m)
 	if m == nil {
 		return ErrDecoderNilModel
 	}
@@ -311,6 +318,9 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 	}
 	for layer := 0; layer < textLayers; layer++ {
 		base := layer * AudioFrames * audioState
+		if s.crossKeyVec != nil {
+			base = 0
+		}
 		keys := s.crossKeys[base : base+frames*audioState]
 		values := s.crossTemp[:frames*audioState]
 		if err := s.multiply(s.crossKey[layer], keys, audioState, encoder, audioState, frames); err != nil {
@@ -402,6 +412,13 @@ func (s *DecoderScratch) multiply(b *whispergemm.PackedB, dst []float32, dstStri
 // positions 0,1,... without gaps. The logits slice must hold VocabSize values.
 // This operation is allocation-free after NewDecoderScratch and BeginDecode.
 func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, logits []float32) error {
+	return m.decodeTokenInto(tokenID, position, s, logits, true)
+}
+
+// decodeTokenInto may omit the vocabulary projection when only the KV state
+// or alignment is consumed. This never changes the next position's state.
+func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits []float32, project bool) error {
+	defer runtime.KeepAlive(s)
 	if m == nil {
 		return ErrDecoderNilModel
 	}
@@ -417,7 +434,7 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 	if position != s.nextPos || position < 0 || position >= TextContext {
 		return ErrDecoderPosition
 	}
-	if len(logits) < VocabSize {
+	if project && len(logits) < VocabSize {
 		return ErrDecoderLogitsTooSmall
 	}
 
@@ -464,6 +481,9 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 		residualNormInto(s.x, s.normalized, s.projected, lw.crossNorm.weight, lw.crossNorm.bias)
 		linearInto(s.query, s.normalized, &lw.crossQ, state, state)
 		crossBase := layer * AudioFrames * audioState
+		if s.crossKeyVec != nil {
+			crossBase = 0
+		}
 		crossEnd := crossBase + s.audioFrames*audioState
 		s.layerKeys, s.layerValues = nil, nil
 		if s.crossKeyVec != nil {
@@ -489,6 +509,10 @@ func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, log
 		pending = s.projected
 	}
 
+	if !project {
+		s.nextPos++
+		return nil
+	}
 	// Fuse the last MLP block's residual add with the final norm.
 	residualNormInto(s.x, s.normalized, pending, weights.finalNorm.weight, weights.finalNorm.bias)
 	if weights.vocabulary != nil {
@@ -556,7 +580,7 @@ func (m *Model) GreedyDecodeInto(encoder []float32, prompt, output []int, s *Dec
 	n := len(prompt)
 	logits := s.logits
 	for position := 0; position < len(prompt); position++ {
-		if err := m.LogitsForTokenInto(output[position], position, s, logits); err != nil {
+		if err := m.decodeTokenInto(output[position], position, s, logits, position == len(prompt)-1); err != nil {
 			return n, err
 		}
 	}

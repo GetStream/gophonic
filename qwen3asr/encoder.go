@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/safetensors"
@@ -37,6 +38,7 @@ import (
 // activation rows rounded to FP16 after scaling each into FP16's full range;
 // products accumulate in FP32.
 type encoder struct {
+	memory                      *arena.Arena
 	d, heads, headDim, ffn, out int
 	layerCount                  int
 	ch                          int                  // convolution channels
@@ -108,19 +110,8 @@ func loadEncoder(st *safetensors.Checkpoint, c audioConfig, prefix string) (*enc
 		wg    sync.WaitGroup
 		jobs  = make(chan func() error)
 	)
-	for range min(runtime.GOMAXPROCS(0), 8) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobs {
-				if err := job(); err != nil {
-					mu.Lock()
-					first = cmp(first, err)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
+	var sizes []int
+	var regions [][]byte
 	vector := func(name string, n int, dst *[]float32) func() error {
 		return func() (err error) {
 			*dst, err = st.Float32(prefix+name, n)
@@ -134,8 +125,14 @@ func loadEncoder(st *safetensors.Checkpoint, c audioConfig, prefix string) (*enc
 		if shape == nil {
 			shape = []int{n, k}
 		}
+		size, err := q8gemm.WeightsF16Bytes(k, len(names)*n)
+		if err != nil {
+			return func() error { return err }
+		}
+		region := len(sizes)
+		sizes = append(sizes, size)
 		return func() error {
-			w, err := q8gemm.NewWeightsF16(k, len(names)*n)
+			w, err := q8gemm.NewWeightsF16Buffer(k, len(names)*n, regions[region])
 			if err != nil {
 				return err
 			}
@@ -240,12 +237,34 @@ func loadEncoder(st *safetensors.Checkpoint, c audioConfig, prefix string) (*enc
 		vector("ln_post.weight", e.d, &e.postW), vector("ln_post.bias", e.d, &e.postB),
 		linear([]string{"proj1.weight"}, e.d, e.d, &e.proj1, nil), vector("proj1.bias", e.d, &e.proj1B),
 		linear([]string{"proj2.weight"}, e.out, e.d, &e.proj2, nil), vector("proj2.bias", e.out, &e.proj2B))
+	if e.memory, err = arena.NewBytes(sizes...); err != nil {
+		return nil, err
+	}
+	regions = make([][]byte, len(sizes))
+	for i, size := range sizes {
+		regions[i] = e.memory.TakeBytes(size)
+	}
+	for range min(runtime.GOMAXPROCS(0), 8) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := job(); err != nil {
+					mu.Lock()
+					first = cmp(first, err)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
 	for _, job := range sends {
 		jobs <- job
 	}
 	close(jobs)
 	wg.Wait()
+	runtime.KeepAlive(e)
 	if first != nil {
+		_ = e.memory.Close()
 		return nil, fmt.Errorf("qwen3asr: audio encoder: %w", first)
 	}
 	return e, nil
@@ -279,6 +298,7 @@ func sinusoids(length, channels int) []float32 {
 // encoderWorkspace owns one lane's encoder activations and workers. Buffers
 // grow to the longest audio seen and keep that capacity.
 type encoderWorkspace struct {
+	memory  *arena.Arena
 	exec    *whispergemm.Executor
 	workers int
 	cols    []float32 // im2col rows of one chunk
@@ -335,6 +355,39 @@ func (w *encoderWorkspace) close() {
 		_ = w.exec.Close()
 		w.exec = nil
 	}
+	_ = w.memory.Close()
+	w.memory = nil
+	w.cols, w.stacked, w.x, w.norm, w.qkv, w.ctx, w.ffn = nil, nil, nil, nil, nil, nil, nil
+	w.conv = [2][]float32{}
+	w.op, w.lin = encoderRows{}, linearOp{}
+	w.attn, w.tiles, w.scratch = nil, nil, nil
+}
+
+// reserve changes capacity only between encodes, when all workers are idle.
+// Scratch contents do not survive an encode, so growth copies no payload.
+func (w *encoderWorkspace) reserve(lengths [9]int) error {
+	slots := [9]*[]float32{&w.cols, &w.conv[0], &w.conv[1], &w.stacked, &w.x, &w.norm, &w.qkv, &w.ctx, &w.ffn}
+	grow := false
+	var capacities [9]int
+	for i, n := range lengths {
+		grow = grow || n > cap(*slots[i])
+		capacities[i] = max(n, cap(*slots[i]))
+	}
+	if grow {
+		memory, err := arena.New(capacities[:]...)
+		if err != nil {
+			return err
+		}
+		for i, n := range capacities {
+			*slots[i] = memory.Take(n)
+		}
+		_ = w.memory.Close()
+		w.memory = memory
+	}
+	for i, n := range lengths {
+		*slots[i] = (*slots[i])[:n]
+	}
+	return nil
 }
 
 // ensure returns s with length n, reallocating only when it lacks capacity.
@@ -348,6 +401,8 @@ func ensure(s []float32, n int) []float32 {
 // encode runs the encoder on channel-major [bins][frames] features and
 // writes [tokens][out] embeddings to dst, returning the token count.
 func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWorkspace) (int, error) {
+	defer runtime.KeepAlive(e)
+	defer runtime.KeepAlive(w)
 	if frames <= 0 || len(mel) != e.freq[0]*frames {
 		return 0, errors.New("qwen3asr: feature shape does not match the encoder")
 	}
@@ -362,10 +417,10 @@ func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWor
 	if len(dst) < n*e.out {
 		return 0, errors.New("qwen3asr: encoder output buffer too short")
 	}
-	w.cols = ensure(w.cols, max(t1*f1*9, t2*f2*9*e.ch))
-	w.conv[0] = ensure(w.conv[0], t1*f1*e.ch)
-	w.conv[1] = ensure(w.conv[1], t2*f2*e.ch)
-	w.stacked = ensure(w.stacked, chunks*t3*f3*e.ch)
+	if err := w.reserve([9]int{max(t1*f1*9, t2*f2*9*e.ch), t1 * f1 * e.ch, t2 * f2 * e.ch,
+		chunks * t3 * f3 * e.ch, max(chunks*t3, n) * e.d, n * e.d, n * 3 * e.d, n * e.d, n * max(e.ffn, e.d)}); err != nil {
+		return 0, err
+	}
 	op := &w.op
 	for c := range chunks {
 		start := c * e.chunkFrames
@@ -396,11 +451,6 @@ func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWor
 		}
 	}
 	d := e.d
-	w.x = ensure(w.x, max(chunks*t3, n)*d)
-	w.norm = ensure(w.norm, n*d)
-	w.qkv = ensure(w.qkv, n*3*d)
-	w.ctx = ensure(w.ctx, n*d)
-	w.ffn = ensure(w.ffn, n*max(e.ffn, d))
 	if err := w.linear(e.convOut, w.stacked, w.x, chunks*t3, epiStore, nil); err != nil {
 		return 0, err
 	}
