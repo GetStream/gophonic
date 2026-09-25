@@ -36,34 +36,33 @@ type attentionItem struct {
 // layer, so a later sequence that extends it (a growing conversation state)
 // only evaluates its new tokens. Values are FP32, exactly as computed, so an
 // extension yields the same result as evaluating the whole sequence up to
-// floating-point reassociation. It belongs to one Evaluator; it is not safe for
-// concurrent use.
+// floating-point reassociation. It belongs to one Evaluator. Mutation and
+// Close require exclusive access; a prepared cache may have concurrent
+// read-only consumers through HiddenLastSharedInto.
 type PrefixKV struct {
-	memory       *arena.Arena
-	cleanup      runtime.Cleanup
-	owner        *Evaluator
-	tokens       []int
-	keys, values [][]float32 // per layer, [capacity][kvDim]
-	capacity     int
-	packs        []prefixPack // per layer: the same keys and values packed for attention
-	gpu          *gpuPrefix   // GPU models keep keys and values in GPU memory instead
+	memory   *arena.Arena
+	cleanup  runtime.Cleanup
+	owner    *Evaluator
+	tokens   []int
+	capacity int
+	packs    []prefixPack // per layer: canonical packed keys and values
+	gpu      *gpuPrefix   // GPU models keep keys and values in GPU memory instead
 }
 
-// prefixPack keeps one layer's stored keys and values packed per KV group,
-// so attention over a long prefix packs only tokens added since the last
-// call. Keys are packed transposed (positions are output columns, which can
-// be appended); values are packed in chunks of prefixChunk positions.
+// prefixPack is one layer's canonical KV store, packed per KV group.
+// Keys append columns; values append rows in prefixChunk-sized pieces.
+// No duplicate row-major cache or lazy read-side packing is needed.
 type prefixPack struct {
 	keysT  []*whispergemm.PackedB   // per group: K=headDim, N=packed positions
 	values [][]*whispergemm.PackedB // per group, per chunk: K≤prefixChunk positions, N=headDim
-	n      []int                    // per group: positions packed
 }
 
 // prefixChunk is the number of positions per packed value chunk.
 const prefixChunk = 256
 
-// NewPrefixKV allocates storage for up to capacity tokens:
-// 8 bytes × layers × KV width per token (288 KiB for Qwen3-8B).
+// NewPrefixKV reserves storage for up to capacity tokens. On the CPU it
+// keeps one packed copy: approximately 8 bytes × layers × KV width per token,
+// plus matrix-panel padding (288 KiB per token for Qwen3-8B).
 func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 	if e == nil || e.m == nil {
 		return nil, errors.New("qwen3: nil evaluator")
@@ -85,25 +84,7 @@ func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 		kv.cleanup = runtime.AddCleanup(kv, func(p *gpuPrefix) { p.release() }, pre)
 		return kv, nil
 	}
-	// One mapping holds every layer; no per-layer heap payloads or holes.
-	if capacity > int(^uint(0)>>1)/c.kvDim {
-		return nil, arena.ErrSize
-	}
-	lengths := make([]int, 2*c.layers)
-	for i := range lengths {
-		lengths[i] = capacity * c.kvDim
-	}
-	memory, err := arena.New(lengths...)
-	if err != nil {
-		return nil, err
-	}
-	kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity,
-		keys: make([][]float32, c.layers), values: make([][]float32, c.layers), memory: memory}
-	for l := range c.layers {
-		kv.keys[l] = memory.Take(capacity * c.kvDim)
-		kv.values[l] = memory.Take(capacity * c.kvDim)
-	}
-	return kv, nil
+	return e.newPackedPrefix(capacity)
 }
 
 // Close releases the cache's storage. The caller must wait for every
@@ -120,7 +101,7 @@ func (kv *PrefixKV) Close() error {
 	}
 	err := kv.memory.Close()
 	kv.memory = nil
-	kv.keys, kv.values, kv.packs, kv.tokens = nil, nil, nil, nil
+	kv.packs, kv.tokens = nil, nil
 	kv.capacity = 0
 	return err
 }
@@ -129,14 +110,14 @@ func (kv *PrefixKV) Close() error {
 func (kv *PrefixKV) CopyPrefix(src *PrefixKV, p int) {
 	defer runtime.KeepAlive(kv)
 	defer runtime.KeepAlive(src)
-	c := &kv.owner.m.cfg
-	n := p * c.kvDim
-	if kv.gpu != nil {
-		kv.gpu.copyFrom(src.gpu, c.layers, n)
+	if src == nil || kv.owner != src.owner || p < 0 || p > len(src.tokens) || p > kv.capacity {
+		panic("qwen3: invalid prefix copy")
 	}
-	for l := range kv.keys {
-		copy(kv.keys[l][:n], src.keys[l][:n])
-		copy(kv.values[l][:n], src.values[l][:n])
+	if kv.gpu != nil {
+		c := &kv.owner.m.cfg
+		kv.gpu.copyFrom(src.gpu, c.layers, p*c.kvDim)
+	} else {
+		kv.copyPackedPrefix(src, p)
 	}
 	kv.tokens = append(kv.tokens[:0], src.tokens[:p]...)
 }
@@ -202,6 +183,9 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 			return fmt.Errorf("qwen3: %d embedding values for %d placeholders of width %d", len(embeds.Rows), n, e.m.cfg.hidden)
 		}
 		ws.embeds = embeds
+	}
+	if kv.gpu == nil && keep != len(kv.tokens) {
+		kv.copyPackedPrefix(kv, keep)
 	}
 	kv.tokens = kv.tokens[:keep] // the stored suffix is overwritten below
 	ws.prefix, ws.past = kv, keep
@@ -510,24 +494,19 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.addNorm(residual, l.attnNorm, &l.q)
 		ws.project(ws.norm, c.hidden, true, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
-		if kv := ws.prefix; kv != nil && !ws.shared {
-			// Store this layer's new keys and values after the kept prefix;
-			// blocked attention then reads the whole causal range from kv.
-			n := rows * c.kvDim
-			copy(kv.keys[layer][ws.past*c.kvDim:ws.past*c.kvDim+n], ws.keys[:n])
-			copy(kv.values[layer][ws.past*c.kvDim:ws.past*c.kvDim+n], ws.values[:n])
-		}
+
 		ws.run(opAttention, rows*c.kvHeads, 4)
 		if len(ws.attnItems) > 0 {
 			if ws.prefix != nil {
-				// Pack any stored prefix tokens not yet packed for this
-				// layer, then attend to the packed prefix plus own rows.
-				ws.preparePrefixPack(layer)
-				ws.run(opPackPrefix, c.kvHeads, 1)
 				ws.run(opAttentionPrefix, len(ws.attnItems), 1)
 			} else {
 				ws.run(opAttentionGEMM, len(ws.attnItems), 1)
 			}
+		}
+		if ws.prefix != nil && !ws.shared {
+			// Publish this layer's new KV only after attention has consumed
+			// the kept prefix. The packed cache is its sole persistent copy.
+			ws.run(opStorePrefix, c.kvHeads, 1)
 		}
 		if layer == len(m.layers)-1 {
 			// Only each sequence's last row reaches the output, so the final
@@ -568,20 +547,6 @@ func (ws *Workspace) keepLastRows(seqs [][]int, c *modelConfig) {
 		}
 	}
 	ws.op.rows = len(seqs)
-}
-
-// preparePrefixPack allocates the per-group slices of the prefix's packed
-// copy for layer before the parallel pack stage fills them.
-func (ws *Workspace) preparePrefixPack(layer int) {
-	kv, c := ws.prefix, &ws.owner.m.cfg
-	if kv.packs == nil {
-		kv.packs = make([]prefixPack, c.layers)
-	}
-	if pk := &kv.packs[layer]; pk.keysT == nil {
-		pk.keysT = make([]*whispergemm.PackedB, c.kvHeads)
-		pk.values = make([][]*whispergemm.PackedB, c.kvHeads)
-		pk.n = make([]int, c.kvHeads)
-	}
 }
 
 // Reserve allocates storage for batches of up to rows tokens and sequences

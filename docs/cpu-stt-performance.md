@@ -5,7 +5,7 @@ CPU inference payloads outside the Go heap. It preserves existing numerical
 precision. It does not establish a new competitive ranking, and it does not
 speed up Qwen's matrix arithmetic.
 
-## Measurements
+## Initial step measurements
 
 Baseline: `origin/main` at `0b9bb91`. Apple M4 Max, macOS arm64,
 Go 1.27.1, `GOEXPERIMENT=simd`, `CGO_ENABLED=0`, GOMAXPROCS 16. Whisper
@@ -39,9 +39,10 @@ Raw samples, binary hashes, and intervals:
 [Whisper](benchmarks/cpu-stt/whisper.json),
 [Qwen](benchmarks/cpu-stt/qwen.json).
 
-## Memory
+## Initial step memory
 
-These are separate measurements, with explicit GC before each live-heap
+These first-step numbers describe commit `af8387c`, before the single-copy KV
+follow-up below. They are separate measurements, with explicit GC before each live-heap
 snapshot and two warm lanes kept alive on one shared model. Heap figures are
 increases over the empty test process. Peak RSS comes from macOS `time -l` for
 the complete load-and-two-lanes test; it is not steady-state model size.
@@ -66,15 +67,93 @@ The mapped payloads are:
   GEMM executor's private worker scratch regions.
 - Qwen F16 decoder/head weights and CPU encoder weights, packed directly into
   one arena per component with no intermediate packed-weight copy.
-- Qwen decoder and encoder activation slabs and the raw per-layer prefix KV
-  store. Anonymous pages are committed as used, so reserved KV capacity does
+- Qwen decoder and encoder activation slabs and, initially, the raw per-layer prefix KV
+  store (replaced by the canonical packed store below). Anonymous pages are committed as used, so reserved KV capacity does
   not need to be eagerly touched.
 
 This is not a heap-free runtime. Tokenizer data, metadata, quantization tiles,
-packed attention caches, Whisper packed weight copies and decoder buffers,
+temporary attention packing, Whisper packed weight copies and decoder buffers,
 and other small workspaces still use Go allocations. Numeric heap slices are
 already non-scannable; moving their backing storage primarily changes GC
 pacing and heap accounting. The existing CPU int8 decoder format is unchanged.
+
+## Single-copy Qwen KV follow-up
+
+The CPU prefix cache now owns its final attention layout directly in one
+bounded arena per lane. The old path retained both row-major KV and a packed
+copy, then repacked the unfinished value chunk on every decoded token. The
+new path writes each projected row once into the canonical cache after the
+attention stage completes. Worker tasks write disjoint KV-head groups; no
+global cache pool or implicit cross-lane prefix sharing is introduced.
+
+Keys append columns in 16-column panels. Complete new panels use the existing
+SME transpose kernel; partial panels preserve their preceding columns. Values
+use 256-token pages with a fixed physical pitch and a separate logical row
+count. Appending one value row never relocates older rows or repacks the tail.
+The SME kernel takes the physical pitch as an additional argument, while its
+reduction loop still visits only initialized rows in the original order.
+NEON and scalar kernels consume those same pages through one-panel views.
+There is no quantization or changed softmax/chunk reduction order.
+
+A cache reserves virtual storage for its requested capacity once, with pages
+committed on access. In-use keys round to 16 columns; on a 16 KiB-page system,
+touching a value panel can commit its entire 256-token page. That tail waste
+is bounded, but it matters for short prefixes. Truncation reuses capacity;
+Close releases the entire mapping. Headers and token IDs remain on the heap.
+This design avoids numeric-cache heap growth and interior allocation holes,
+not all process allocations or all unused capacity. It preserves the existing
+explicit read-only prefix API for direct evaluator users; STT lanes each own
+an independent cache. Prefix copies into already-used destinations replace
+both payload and dimensions; consumers no longer lazily mutate the cache.
+
+Measurements below compare the preceding commit `af8387c` with this follow-up
+on the same machine and flags. Three paired blocks each load one model and
+keep two JFK transcription lanes alive, with GC before each heap snapshot.
+
+| Qwen F16 memory metric | Previous step | Single-copy KV |
+| --- | ---: | ---: |
+| Go live heap, model + one warm lane | 100.31 MiB | 37.36 MiB |
+| Go live heap, model + two warm lanes | 187.54 MiB | 61.64 MiB |
+| Two-lane live RSS, median | 4,360.55 MiB | 4,383.50 MiB |
+| macOS peak physical footprint, median | 4,269.32 MiB | 4,208.33 MiB |
+
+The two-lane Go heap falls 67.1%, and macOS peak physical footprint falls
+about 61 MiB (1.4% of the model-dominated process). RSS instead rises about
+23 MiB (0.5%); these are different OS accounting metrics, and this result must
+not be described as an RSS reduction. A separate matched diagnostic with
+`debug.FreeOSMemory` after GC retains the same direction: peak physical
+footprint 4,268.91 to 4,194.71 MiB, RSS 4,353.52 to 4,394.31 MiB. Scavenging is
+opt-in measurement code, not production behavior. `vmmap -summary` also
+reported lower dirty memory/physical footprint, without identifying every
+cause of the RSS difference.
+
+Six paired blocks of 16 real cached decode steps, including the vocabulary
+head, give the following synthetic context-length results. Prompts use the
+JFK audio embeddings followed by repeated valid text tokens. Warm steps have
+zero allocations; this is a scaling benchmark, not an accuracy corpus.
+
+| Prefix tokens | Previous median | New median | New/previous, bootstrap 95% interval |
+| --- | ---: | ---: | ---: |
+| 256 | 14.79 ms | 14.88 ms | 0.974–1.033 |
+| 512 | 15.57 ms | 15.92 ms | 0.918–1.101 |
+| 2,048 | 20.72 ms | 20.42 ms | 0.764–1.013 |
+
+These timings do not resolve a latency improvement. A subsequent full-clip
+comparison encountered a roughly tenfold slowdown already in the unchanged
+baseline and was stopped before any paired result; it is not evidence for a
+candidate speed claim. The accepted improvement here is cache ownership,
+duplicate removal and heap/physical-footprint reduction.
+
+Raw reports: [memory](benchmarks/cpu-stt/kv-memory.json),
+[scavenging diagnostic](benchmarks/cpu-stt/kv-memory-scavenged.json),
+[context-length latency](benchmarks/cpu-stt/kv-latency.json).
+
+The design draws on established blocked storage and virtual-memory ideas.
+[PagedAttention](https://arxiv.org/abs/2309.06180) manages KV in blocks;
+[vAttention](https://arxiv.org/abs/2405.04437) separates virtual layout from
+physical allocation. Those papers target GPU serving. This implementation
+uses ordinary CPU anonymous mappings and private lane ownership; it does not
+claim their algorithms, cache-sharing policies or a new competitive record.
 
 ## Ownership and lifetime
 
@@ -145,7 +224,12 @@ these are compilation checks, not measurements on those CPUs.
 The model gates check independent reference encoder activations, exact greedy
 transcripts and warm zero-allocation calls. Off-heap storage has explicit
 zero/overflow, alignment, non-overlap, guard-region, repeated Close, forced-GC,
-workspace growth and prefix-copy coverage.
+workspace growth and prefix-copy coverage. The single-copy cache adds reused
+copy/branch tests at 0/1/15/16/17/255/256/257-token boundaries, forced GC,
+concurrent explicit read-only consumers, and FP16/int8 evaluator reference
+comparisons. Fixed-pitch matrices fill unused rows with NaNs and compare
+live products against an independent FP64 oracle; canaries check output and
+allocation boundaries on SME and portable dispatch.
 
 Build test binaries on the baseline and candidate through the required
 `project-env` wrapper, with the same flags. Copy `whisper/cpu_benchmark_test.go`,
@@ -171,3 +255,17 @@ Run memory reports from the corresponding package directory with
 `GOPHONIC_MEMORY_REPORT=1 GOPHONIC_MODELS=/path/to/models`,
 `-test.run '^TestCPUMemoryFootprint$' -test.v`, and `/usr/bin/time -l` on macOS.
 Do not run benchmarks alongside tests, profiling, or another benchmark process.
+
+For the cache follow-up, copy `qwen3asr/kv_benchmark_test.go` and the updated
+memory report into the reference checkout, build both binaries identically,
+and run:
+
+```sh
+GOMAXPROCS=16 python3 tools/benchmark_stt_cpu_compare.py /tmp/qwen-before.test /tmp/qwen.test \
+  --cwd qwen3asr --models /path/to/models --samples 6 --iterations 16 \
+  --bench '^BenchmarkDecoderPrefixLength$' --output /tmp/kv-latency.json
+```
+
+`GOPHONIC_HEAP_PROFILE=/tmp/live.heap` optionally writes a warm live-heap
+profile. Qwen's report supports `GOPHONIC_MEMORY_SCAVENGE=1` for the separate
+forced-scavenge diagnostic and `GOPHONIC_VMMAP_REPORT=1` for a macOS VM summary.

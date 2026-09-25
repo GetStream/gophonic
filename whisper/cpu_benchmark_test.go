@@ -6,7 +6,11 @@ package whisper
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
+	"runtime/pprof"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/testmodels"
@@ -111,8 +115,28 @@ func TestCPUMemoryFootprint(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("lanes=%d live_heap_mib=%.3f", i+1, float64(heap()-start)/(1<<20))
+		// Peak RSS includes model-load transients; sample the live process too.
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+			rss, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("lanes=%d live_rss_kib=%s", i+1, strings.TrimSpace(string(rss)))
+		}
 	}
 	t.Logf("loaded_model_heap_mib=%.3f", float64(loaded-start)/(1<<20))
+	if path := os.Getenv("GOPHONIC_HEAP_PROFILE"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	runtime.KeepAlive(m)
 	runtime.KeepAlive(lanes)
 }

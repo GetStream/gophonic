@@ -11,11 +11,11 @@ var smeRetries atomic.Int64
 
 const smeEnabled = false
 
-func mulSME([]float32, int, []float32, int, []float32, int, int, int) bool { return false }
+func mulSME([]float32, int, []float32, int, []float32, int, int, int, int) bool { return false }
 
 func scratchLen(int) int { return 0 }
 
-func mulSMEScratch([]float32, int, []float32, int, []float32, int, int, int, []float32) bool {
+func mulSMEScratch([]float32, int, []float32, int, []float32, int, int, int, int, []float32) bool {
 	return false
 }
 

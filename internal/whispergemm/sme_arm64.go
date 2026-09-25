@@ -18,7 +18,7 @@ const smeBlockRows = 32
 // lanes of the Z registers.
 //
 //go:noescape
-func smeMulBlock(a *float32, lda, rows, k int, b *float32, n int, c *float32, ldc int, scratch *float32) (retries int)
+func smeMulBlock(a *float32, lda, rows, k int, b *float32, n int, c *float32, ldc int, scratch *float32, panelK int) (retries int)
 
 // smeVectorBytes executes RDSVL. Call it only after smeSupported reports SME.
 func smeVectorBytes() int
@@ -46,7 +46,7 @@ func scratchLen(k int) int {
 }
 
 // mulSMEScratch is mulSME with caller-owned scratch of at least scratchLen(k).
-func mulSMEScratch(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int, scratch []float32) bool {
+func mulSMEScratch(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n, panelK int, scratch []float32) bool {
 	if !smeEnabled {
 		return false
 	}
@@ -54,7 +54,7 @@ func mulSMEScratch(dst []float32, dstStride int, a []float32, aStride int, packe
 	retries := 0
 	for r := 0; r < m; r += smeBlockRows {
 		rows := min(smeBlockRows, m-r)
-		retries += smeMulBlock(&a[r*aStride], aStride*4, rows, k, &packed[0], n, &dst[r*dstStride], dstStride*4, &scratch[0])
+		retries += smeMulBlock(&a[r*aStride], aStride*4, rows, k, &packed[0], n, &dst[r*dstStride], dstStride*4, &scratch[0], panelK)
 	}
 	if retries != 0 {
 		smeRetries.Add(int64(retries))
@@ -62,7 +62,7 @@ func mulSMEScratch(dst []float32, dstStride int, a []float32, aStride int, packe
 	return true
 }
 
-func mulSME(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n int) bool {
+func mulSME(dst []float32, dstStride int, a []float32, aStride int, packed []float32, m, k, n, panelK int) bool {
 	if !smeEnabled {
 		return false
 	}
@@ -80,7 +80,7 @@ func mulSME(dst []float32, dstStride int, a []float32, aStride int, packed []flo
 	retries := 0
 	for r := 0; r < m; r += smeBlockRows {
 		rows := min(smeBlockRows, m-r)
-		retries += smeMulBlock(&a[r*aStride], aStride*4, rows, k, &packed[0], n, &dst[r*dstStride], dstStride*4, &scratch[0])
+		retries += smeMulBlock(&a[r*aStride], aStride*4, rows, k, &packed[0], n, &dst[r*dstStride], dstStride*4, &scratch[0], panelK)
 	}
 	select {
 	case smeScratch <- buffer:

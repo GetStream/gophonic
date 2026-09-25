@@ -303,7 +303,7 @@ func TestSharedPrefixMatchesFullEvaluation(t *testing.T) {
 			if err := e.HiddenLastExtendInto(kv, 0, prefix, scratch, ws); err != nil {
 				t.Fatal(err)
 			}
-			before := slices.Clone(kv.keys[1][:prefixLen*m.cfg.kvDim])
+			before := packedPrefixKeys(t, kv, 1)
 			seqs := [][]int{mk(1, 2), mk(9, 3), mk(130, 4), mk(3, 5)}
 			got := make([][]float32, len(seqs))
 			for i := range got {
@@ -312,7 +312,7 @@ func TestSharedPrefixMatchesFullEvaluation(t *testing.T) {
 			if err := e.HiddenLastSharedInto(kv, seqs, got, ws); err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(before, kv.keys[1][:prefixLen*m.cfg.kvDim]) || !slices.Equal(kv.Tokens(), prefix) {
+			if !slices.Equal(before, packedPrefixKeys(t, kv, 1)) || !slices.Equal(kv.Tokens(), prefix) {
 				t.Fatalf("%s prefix %d: shared evaluation modified the prefix", format, prefixLen)
 			}
 			want := make([]float32, lmtest.Shape.Hidden)
