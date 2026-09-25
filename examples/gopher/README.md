@@ -48,5 +48,11 @@ Inside, the cascade listens continuously while it thinks and speaks:
 - Its memory holds only what you heard: an interrupted answer is cut where
   it stopped.
 
+Gopher also watches the call's text chat over Stream Chat's realtime API:
+what people type joins its conversation as silent context — never spoken or
+answered on its own — so it can answer "what did Alice write?" or summarize
+the meeting later. It loads the channel's recent history on join and keeps
+listening for new messages for as long as it is in the call.
+
 The example is its own module, so its WebRTC dependencies stay out of
 gophonic's.

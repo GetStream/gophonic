@@ -26,6 +26,11 @@ const (
 	// may generate newTokensPerSecond per second of speech.
 	minNewTokens       = 512
 	newTokensPerSecond = 16
+	// maxDraft bounds the tokens of a partial transcript checked in one
+	// pass, and verifyRows the draft positions whose logits are computed
+	// at a time.
+	maxDraft   = 192
+	verifyRows = 32
 )
 
 var _ speech.Transcriber = (*Transcriber)(nil)
@@ -51,6 +56,9 @@ type Transcriber struct {
 	hidden   []float32
 	logits   []float32
 	gen      []int
+	draft    []int     // a partial transcript's tokens
+	tail     []float32 // the states that check the draft
+	vlogits  []float32 // their logits, verifyRows at a time
 	raw      []byte
 	runes    []rune
 	fixed    []rune
@@ -145,7 +153,11 @@ func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech
 				piece = t.pcm
 			}
 		}
-		lang, err := t.transcribe(ctx, piece, opts.Context, language)
+		partial := opts.Partial
+		if start > 0 || end < len(pcm) {
+			partial = nil
+		}
+		lang, err := t.transcribe(ctx, piece, opts.Context, language, partial)
 		if err != nil {
 			return err
 		}
@@ -195,8 +207,9 @@ func quietCut(pcm []float32, start int) int {
 }
 
 // transcribe runs one pass and leaves the text in t.text, returning the
-// language.
-func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, language string) (string, error) {
+// language. A partial transcript of the audio's beginning is checked and
+// continued rather than decoded again.
+func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, language string, partial *speech.Transcript) (string, error) {
 	t.text = t.text[:0]
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -242,6 +255,9 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if err := t.draftFrom(partial, language); err != nil {
+		return "", err
+	}
 	maxNew := max(minNewTokens, len(pcm)/sampleRate*newTokensPerSecond)
 	if err := t.generate(ctx, maxNew); err != nil {
 		return "", err
@@ -280,8 +296,9 @@ func (t *Transcriber) buildPrompt(context, language string, audio int) error {
 		b = append(b, "<asr_text>"...)
 	}
 	t.prompt = b
-	// Tokens never outnumber bytes; the audio placeholder expands below.
-	need := len(b) + audio
+	// Tokens never outnumber bytes; the audio placeholder expands below,
+	// and a draft may follow.
+	need := len(b) + audio + maxDraft
 	if cap(t.ids) < need {
 		t.ids = make([]int, 0, need)
 	}
@@ -309,11 +326,43 @@ func (t *Transcriber) buildPrompt(context, language string, audio int) error {
 	return nil
 }
 
+// draftFrom sets t.draft to the tokens the model wrote for partial: its
+// text, after the language header unless the prompt forces the language.
+// Without a partial transcript, or one with no language to continue, the
+// draft is empty.
+func (t *Transcriber) draftFrom(partial *speech.Transcript, forced string) error {
+	t.draft = t.draft[:0]
+	if partial == nil || len(partial.Text) == 0 || forced == "" && !t.m.languages[partial.Language] {
+		return nil
+	}
+	b := t.prompt[:0]
+	if forced == "" {
+		b = append(b, "language "...)
+		b = append(b, partial.Language...)
+		b = append(b, "<asr_text>"...)
+	}
+	b = append(b, partial.Text...)
+	t.prompt = b
+	if cap(t.draft) < len(b) {
+		t.draft = make([]int, 0, len(b))
+	}
+	draft, err := t.m.tok.EncodeInto(unsafe.String(unsafe.SliceData(b), len(b)), t.draft, &t.tokWS)
+	if err != nil {
+		return fmt.Errorf("qwen3asr: partial transcript: %w", err)
+	}
+	t.draft = draft[:min(len(draft), maxDraft)]
+	return nil
+}
+
 // generate decodes greedily from the prompt in t.ids into t.gen, stopping at
-// an end token or after maxNew tokens. The key-value cache keeps the prompt
-// prefix that does not depend on the audio for the next call.
+// an end token or after maxNew tokens. A draft in t.draft is checked in the
+// prompt's pass: the tokens the model would write itself are kept, and
+// decoding goes on from the first it would not. The key-value cache keeps
+// the prompt prefix that does not depend on the audio for the next call.
 func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 	ev := t.m.eval
+	prompt := len(t.ids)
+	t.ids = append(t.ids, t.draft...)
 	need := len(t.ids) + maxNew
 	if t.kv == nil || t.kv.Capacity() < need {
 		capacity := 1024
@@ -326,12 +375,19 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 		}
 		t.kv = kv
 	}
-	keep := min(t.kv.CommonPrefix(t.ids), len(t.ids)-1)
+	keep := min(t.kv.CommonPrefix(t.ids), prompt-1)
 	embeds := qwen3lm.Embeds{Token: t.m.ids.audioPad, Rows: t.embeds}
-	if err := ev.HiddenLastExtendEmbedInto(t.kv, keep, t.ids[keep:], embeds, t.hidden, t.lm); err != nil {
-		return fmt.Errorf("qwen3asr: prefill: %w", err)
+	t.gen = grow(t.gen, maxNew+maxDraft)
+	if len(t.draft) == 0 {
+		if err := ev.HiddenLastExtendEmbedInto(t.kv, keep, t.ids[keep:], embeds, t.hidden, t.lm); err != nil {
+			return fmt.Errorf("qwen3asr: prefill: %w", err)
+		}
+	} else {
+		done, err := t.verify(prompt, keep, embeds, maxNew)
+		if err != nil || done {
+			return err
+		}
 	}
-	t.gen = grow(t.gen, maxNew)
 	for {
 		if err := ev.LogitsInto(t.hidden, t.logits, t.lm); err != nil {
 			return err
@@ -341,7 +397,7 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 			return nil
 		}
 		t.gen = append(t.gen, next)
-		if len(t.gen) == maxNew {
+		if len(t.gen) >= maxNew {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -351,6 +407,47 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 			return fmt.Errorf("qwen3asr: decode: %w", err)
 		}
 	}
+}
+
+// verify evaluates the prompt and the draft after it in one pass, keeps the
+// draft's longest prefix the model agrees with, and appends the model's own
+// token after it. It reports whether that ends the transcript; otherwise
+// t.hidden is the state after the appended token.
+func (t *Transcriber) verify(prompt, keep int, embeds qwen3lm.Embeds, maxNew int) (bool, error) {
+	ev, h, vocab := t.m.eval, len(t.hidden), len(t.logits)
+	k := len(t.draft) + 1 // the prompt's last position, then each draft token's
+	t.tail = grow(t.tail, k*h)[:k*h]
+	if err := ev.HiddenTailExtendEmbedInto(t.kv, keep, t.ids[keep:], embeds, t.tail, t.lm); err != nil {
+		return false, fmt.Errorf("qwen3asr: prefill: %w", err)
+	}
+	t.vlogits = grow(t.vlogits, verifyRows*vocab)
+	agreed, next := -1, 0
+	for r0 := 0; r0 < k && agreed < 0; r0 += verifyRows {
+		n := min(verifyRows, k-r0)
+		logits := t.vlogits[:n*vocab]
+		if err := ev.LogitsRowsInto(t.tail[r0*h:(r0+n)*h], logits, t.lm); err != nil {
+			return false, err
+		}
+		for j := range n {
+			if a := argmax(logits[j*vocab : (j+1)*vocab]); r0+j == len(t.draft) || a != t.draft[r0+j] {
+				agreed, next = r0+j, a
+				break
+			}
+		}
+	}
+	t.gen = append(t.gen, t.draft[:agreed]...)
+	if next == t.m.ids.eos[0] || next == t.m.ids.eos[1] {
+		return true, nil
+	}
+	t.gen = append(t.gen, next)
+	if len(t.gen) >= maxNew {
+		return true, nil
+	}
+	// The cache holds the whole draft: continue after the agreed part.
+	if err := ev.HiddenLastExtendInto(t.kv, prompt+agreed, t.gen[len(t.gen)-1:], t.hidden, t.lm); err != nil {
+		return false, fmt.Errorf("qwen3asr: decode: %w", err)
+	}
+	return false, nil
 }
 
 // argmax returns the first index of the largest value.

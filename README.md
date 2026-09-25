@@ -159,9 +159,26 @@ for { // every 20 ms
 }
 ```
 
-It keeps listening while it thinks and speaks, drops an answer when you were
-not finished, stops when you talk over it, and remembers only what you
-heard. [`examples/gopher`](examples/gopher) puts it in a video call.
+It works while you talk, so that almost nothing is left when you stop:
+
+- **It transcribes as you speak.** Each pass checks the last transcript
+  against the audio in one step and decodes only what changed; the result is
+  exactly the offline transcript. The conversation is evaluated up to what
+  you have said so far.
+- **It drafts the answer at your first pause.** The answer is transcribed,
+  judged, written, and voiced while the turn is still open, and held.
+- **It judges the turn by sound and by words.** Smart Turn hears whether
+  you sound finished; the language model reads whether your words are (the
+  probability that your message ends there). A finished question plays at
+  once; "Give me a quick…" waits for the rest.
+- **It lets you go on.** Speech before or just as the answer starts means
+  you were not done: the draft is dropped and forgotten, and your whole
+  utterance is heard again. Talk over it later and it judges, in context,
+  whether you are interrupting or just saying "mm-hmm".
+
+It remembers only what you heard, keeps a meeting's typed chat as context
+([`Add`](duplex)), and [`examples/gopher`](examples/gopher) puts it in a
+video call.
 
 ## Example: an AI listener on a video call
 

@@ -15,13 +15,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -59,7 +57,11 @@ const prompt = `You are Gopher, a friendly voice assistant taking part in a live
 Everything you write is spoken aloud, so answer in one to three short, natural sentences.
 Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
 Today is %s. Your knowledge may be older than that: when someone tells you about something
-newer, believe them rather than insisting on what you knew.`
+newer, believe them rather than insisting on what you knew.
+In a meeting, what people say reaches you as "name said: ..." and you answer only what is meant
+for you. Messages marked "wrote in the chat" are the call's text chat, typed rather than spoken.
+Use both when asked about them or when summarizing the meeting, but never read a chat message
+out loud or answer it unless someone asks you to.`
 
 func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
@@ -110,9 +112,13 @@ func main() {
 		Listen: speech.Options{Language: *language},
 		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
 		// Alone with one person Gopher answers everything; in a meeting,
-		// only what is addressed to it.
-		Addressed: func(text string) bool {
-			return humans.count() <= 1 || strings.Contains(strings.ToLower(text), "gopher")
+		// only what is addressed to it, and it keeps track of who said
+		// what, for when it is asked about the meeting.
+		Heard: func(text string) (string, bool) {
+			if humans.count() <= 1 {
+				return text, true
+			}
+			return mix.loudest() + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
 		},
 		OnText: func(role chat.Role, text string, final bool) {
 			if role == chat.Assistant {
@@ -124,9 +130,9 @@ func main() {
 			if !final {
 				return
 			}
-			who := "🧑"
+			who := mix.loudest() + ":"
 			if role == chat.Assistant {
-				who = "🐹 Gopher:"
+				who = "Gopher:"
 			}
 			fmt.Printf("%s %s\n", who, text)
 			if room != nil && captions.call == nil {
@@ -164,6 +170,26 @@ func main() {
 	if err := room.open(); err != nil {
 		log.Printf("chat is off: %v", err)
 		room = nil
+	}
+	if room != nil {
+		// The call's chat is silent context: what people type joins the
+		// conversation without being spoken or answered, so a later
+		// question or summary can draw on it. Gopher's own captions and
+		// replies land in the same channel, so its own messages are
+		// skipped; they are already in the conversation.
+		if err := room.watch(ctx, func(userID, name, text string) {
+			if userID == self {
+				return
+			}
+			if name == "" {
+				name = userID
+			}
+			if err := agent.Add(chat.User, name+" wrote in the chat: "+text); err != nil {
+				log.Printf("chat: %v", err)
+			}
+		}); err != nil {
+			log.Printf("chat history and live updates are off: %v", err)
+		}
 	}
 
 	// Gopher's voice: the writer encodes and paces what the agent says.
@@ -488,42 +514,6 @@ func prontoToken(pronto, user string) (apiKey, token string, err error) {
 		return "", "", fmt.Errorf("pronto token: %s: %v", resp.Status, r.Err())
 	}
 	return v.APIKey, v.Token, nil
-}
-
-// chatChannel posts to one Stream Chat channel as the token's user, through
-// the chat REST API.
-type chatChannel struct{ apiKey, token, path string }
-
-// open creates the channel if nobody has opened the call's chat yet.
-func (c *chatChannel) open() error { return c.post("/query", map[string]any{"state": false}) }
-
-func (c *chatChannel) send(text string) error {
-	return c.post("/message", map[string]any{"message": map[string]any{"text": text}})
-}
-
-func (c *chatChannel) post(endpoint string, body any) error {
-	payload, err := vibejson.Marshal(&body)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost,
-		"https://chat.stream-io-api.com"+c.path+endpoint+"?api_key="+url.QueryEscape(c.apiKey), bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", c.token)
-	req.Header.Set("Stream-Auth-Type", "jwt")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s: %s", resp.Status, msg)
-	}
-	return nil
 }
 
 func randomHex(n int) string {

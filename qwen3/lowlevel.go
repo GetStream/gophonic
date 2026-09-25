@@ -12,6 +12,8 @@ type (
 	Weights = qwen3lm.Weights
 	// Evaluator computes last-token hidden states over Weights.
 	Evaluator = qwen3lm.Evaluator
+	// Embeds replaces the input embeddings of a placeholder token.
+	Embeds = qwen3lm.Embeds
 	// Workspace owns the activations of one concurrent evaluation.
 	Workspace = qwen3lm.Workspace
 	// PrefixKV stores a token sequence's keys and values for extension.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"unicode/utf8"
 
@@ -194,10 +195,15 @@ func (c *Chat) NewSession(system string) (chat.Session, error) {
 
 // Session is one conversation of a Chat; see chat.Session.
 type Session struct {
-	c      *Chat
-	kv     *PrefixKV
-	ids    []int // the conversation's tokens; kv holds a prefix of them
-	reply  int   // where the last reply's tokens start in ids, or -1
+	c     *Chat
+	kv    *PrefixKV
+	ids   []int // the conversation's tokens; kv holds a prefix of them
+	probe []int // Finished's tokens
+	// ready is the number of stored tokens after which hidden is the model
+	// state, so that a Reply they begin samples at once.
+	ready  int
+	tail   []float32 // Finished's states
+	reply  int       // where the last reply's tokens start in ids, or -1
 	hidden []float32
 	logits []float32
 	tws    TokenizerWorkspace
@@ -260,10 +266,14 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 	if err := s.reserve(len(s.ids)+min(room, 256)+2, limit); err != nil {
 		return err
 	}
-	keep := min(s.kv.CommonPrefix(s.ids), len(s.ids)-1)
-	if err := c.eval.HiddenLastExtendInto(s.kv, keep, s.ids[keep:], s.hidden, c.ws); err != nil {
-		return err
+	if s.ready != len(s.ids) || len(s.kv.Tokens()) != len(s.ids) || s.kv.CommonPrefix(s.ids) != len(s.ids) {
+		keep := min(s.kv.CommonPrefix(s.ids), len(s.ids)-1)
+		if err := c.eval.HiddenLastExtendInto(s.kv, keep, s.ids[keep:], s.hidden, c.ws); err != nil {
+			s.ready = 0
+			return err
+		}
 	}
+	s.ready = 0
 	s.sample.reset(opts)
 	s.text = s.text[:0]
 	var err error
@@ -297,6 +307,104 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 	s.ids = append(s.ids, c.imEnd)
 	s.ids = append(s.ids, c.newline...)
 	return err
+}
+
+// Finished evaluates the conversation followed by a message of role holding
+// text, and returns the probability of the message's end token after the
+// text. The same pass evaluates the end and the assistant's header, as a
+// reply to the message would begin, so that Add and Reply next start
+// sampling at once.
+func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (float32, error) {
+	if s.closed {
+		return 0, chat.ErrClosed
+	}
+	if role > chat.Assistant {
+		return 0, fmt.Errorf("qwen3: unknown role %d", role)
+	}
+	c := s.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, chat.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	probe := append(append(s.probe[:0], s.ids...), c.header[role]...)
+	start := len(probe)
+	if need := start + len(text); cap(probe) < need {
+		probe = append(make([]int, 0, 2*need), probe...)
+	}
+	body, err := c.tokens.EncodeInto(text, probe[start:start], &s.tws)
+	if err != nil {
+		return 0, fmt.Errorf("qwen3: tokenize message: %w", err)
+	}
+	probe = probe[:start+len(body)]
+	end := len(probe) // the state after the text predicts the end
+	probe = append(probe, c.imEnd)
+	probe = append(probe, c.newline...)
+	probe = append(probe, c.answer...)
+	s.probe = probe
+	limit := c.weights.Config().MaxPositions
+	if len(probe)+4 > limit {
+		return 0, errors.New("qwen3: the conversation fills the context")
+	}
+	if err := s.reserve(min(len(probe)+256+4, limit), limit); err != nil {
+		return 0, err
+	}
+	keep := min(s.kv.CommonPrefix(probe), end-1)
+	h := len(s.hidden)
+	k := len(probe) - end + 1
+	s.tail = slices.Grow(s.tail[:0], k*h)[:k*h]
+	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, keep, probe[keep:], Embeds{}, s.tail, c.ws); err != nil {
+		s.ready = 0
+		return 0, err
+	}
+	copy(s.hidden, s.tail[(k-1)*h:])
+	s.ready = len(probe)
+	if err := c.eval.LogitsInto(s.tail[:h], s.logits, c.ws); err != nil {
+		return 0, err
+	}
+	// Softmax probability of the end token.
+	top := s.logits[0]
+	for _, v := range s.logits {
+		top = max(top, v)
+	}
+	var sum float64
+	for _, v := range s.logits {
+		sum += math.Exp(float64(v - top))
+	}
+	return float32(math.Exp(float64(s.logits[c.imEnd]-top)) / sum), nil
+}
+
+// Prefill evaluates the conversation so far.
+func (s *Session) Prefill(ctx context.Context) error {
+	if s.closed {
+		return chat.ErrClosed
+	}
+	c := s.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return chat.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	limit := c.weights.Config().MaxPositions
+	if len(s.ids)+len(c.answer)+2 > limit {
+		return errors.New("qwen3: the conversation fills the context")
+	}
+	// Room for the reply that follows, as Reply reserves it.
+	if err := s.reserve(min(len(s.ids)+len(c.answer)+256+2, limit), limit); err != nil {
+		return err
+	}
+	keep := s.kv.CommonPrefix(s.ids)
+	if keep == len(s.ids) {
+		return nil
+	}
+	s.ready = 0
+	return c.eval.HiddenLastExtendInto(s.kv, keep, s.ids[keep:], s.hidden, c.ws)
 }
 
 // emit passes the complete UTF-8 prefix of the text decoded so far, plus

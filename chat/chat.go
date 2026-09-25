@@ -60,6 +60,16 @@ type Session interface {
 	// the conversation as a complete message. Warm replies allocate
 	// nothing.
 	Reply(ctx context.Context, opts Options, sink func(piece []byte) error) error
+	// Finished returns the probability that a message of role ends after
+	// text rather than going on: the model's sense, from the words and the
+	// conversation, of whether a speaker is done. What it evaluates is
+	// kept, as by Prefill, so adding the message next costs nothing more.
+	Finished(ctx context.Context, role Role, text string) (float32, error)
+	// Prefill evaluates the conversation as it stands, so that the next
+	// Reply starts at once. A message added speculatively, prefilled, and
+	// dropped by Restore leaves what it shares with the message that
+	// replaces it evaluated, as when a transcript grows while it is spoken.
+	Prefill(ctx context.Context) error
 	// Truncate shortens the last reply to its first n bytes (rounded down
 	// to a token boundary), as when a listener interrupts spoken output
 	// and only part of it was heard.

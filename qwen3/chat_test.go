@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/internal/testmodels"
@@ -115,6 +116,61 @@ func TestChatOfficial(t *testing.T) {
 	if seeded[0] != seeded[1] || seeded[0] == "" {
 		t.Fatalf("seeded replies %q and %q", seeded[0], seeded[1])
 	}
+	// A transcript prefilled while it grows, then replaced by the whole
+	// one, changes nothing but how soon the reply starts.
+	var replies [3]string
+	var first [3]time.Duration
+	var finished float32
+	for i := range replies {
+		other, err := g.NewSession("Answer in one short sentence.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := other.Prefill(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			for _, partial := range []string{"What is", "What is the tallest", "What is the tallest mountain in"} {
+				mark := other.Checkpoint()
+				other.Add(chat.User, partial)
+				if err := other.Prefill(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if err := other.Restore(mark); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		question := "What is the tallest mountain in Europe?"
+		began := time.Now()
+		if i == 2 {
+			// Judging whether the words are finished evaluates the start of
+			// the reply as well.
+			if finished, err = other.Finished(context.Background(), chat.User, question); err != nil {
+				t.Fatal(err)
+			}
+		}
+		other.Add(chat.User, question)
+		var b strings.Builder
+		if err := other.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 3, MaxTokens: 24}, func(p []byte) error {
+			if b.Len() == 0 {
+				first[i] = time.Since(began)
+			}
+			b.Write(p)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		other.Close()
+		replies[i] = b.String()
+	}
+	if replies[0] != replies[1] || replies[0] != replies[2] {
+		t.Fatalf("plain reply %q, prefilled %q, after Finished %q", replies[0], replies[1], replies[2])
+	}
+	if finished < 0.01 {
+		t.Fatalf("a whole question ends with probability %g", finished)
+	}
+	t.Logf("first text after %v, %v when prefilled, %v after Finished (%.3f): %q", first[0], first[1], first[2], finished, replies[1])
 	s.Add(chat.User, "Say hi.")
 	allocs := testing.AllocsPerRun(3, func() {
 		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, TopK: 40, MaxTokens: 16}, func([]byte) error { return nil }); err != nil {

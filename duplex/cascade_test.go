@@ -67,6 +67,10 @@ func (s *fakeSession) Truncate(n int) error {
 	s.mu.Unlock()
 	return nil
 }
+func (s *fakeSession) Prefill(ctx context.Context) error { return ctx.Err() }
+func (s *fakeSession) Finished(ctx context.Context, _ chat.Role, _ string) (float32, error) {
+	return 1, ctx.Err()
+}
 func (s *fakeSession) Checkpoint() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.messages) }
 func (s *fakeSession) Restore(mark int) error {
 	s.mu.Lock()
@@ -76,7 +80,7 @@ func (s *fakeSession) Restore(mark int) error {
 }
 func (s *fakeSession) Close() error { return nil }
 
-// fakeSynth speaks two seconds of a constant for any text.
+// fakeSynth speaks five seconds of a constant for any text.
 type fakeSynth struct{}
 
 func (fakeSynth) SampleRate() int  { return 24000 }
@@ -93,7 +97,7 @@ func (fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() (
 	for i := range frame {
 		frame[i] = 0.5
 	}
-	for range 25 {
+	for range 62 {
 		if err := out(frame); err != nil {
 			return err
 		}
@@ -159,7 +163,9 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 	if !run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking && out[0] == 0.5 }, 5*time.Second) {
 		t.Fatal("the agent never spoke")
 	}
-	// Speech over the answer interrupts it: its audio stops.
+	// Speech over the answer, once it is under way, interrupts it: its
+	// audio stops.
+	run(t, c, nil, func(speech.DuplexState, []float32) bool { return false }, resumeWindow+200*time.Millisecond)
 	stopped := run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return s != speech.Speaking }, 2*time.Second)
 	if !stopped {
 		t.Fatal("the agent kept speaking over the user")
@@ -175,6 +181,55 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 	}
 	if session.truncated > len("Hi there, friend.") {
 		t.Fatalf("truncated to %d bytes", session.truncated)
+	}
+}
+
+// Speech just as the answer begins continues the speaker's turn: the answer
+// stops and leaves no trace, and the whole utterance is answered once.
+func TestCascadeLetsTheSpeakerGoOn(t *testing.T) {
+	session := &fakeSession{}
+	var mu sync.Mutex
+	var said []string
+	c, err := New(Config{Transcriber: fakeTranscriber{}, TurnDetector: fakeTurns{}, Session: session, Synthesizer: fakeSynth{},
+		OnText: func(role chat.Role, text string, final bool) {
+			if final {
+				mu.Lock()
+				said = append(said, text)
+				mu.Unlock()
+			}
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	clip := speechClip(t)
+	speaking := func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking && out[0] == 0.5 }
+	if !run(t, c, clip, speaking, 5*time.Second) {
+		t.Fatal("the agent never spoke")
+	}
+	mu.Lock()
+	if len(said) != 0 {
+		t.Fatalf("captions %q before the answer was under way", said)
+	}
+	mu.Unlock()
+	// The speaker goes on at once: the answer stops, then comes again.
+	if !run(t, c, clip, func(s speech.DuplexState, _ []float32) bool { return s != speech.Speaking }, time.Second) {
+		t.Fatal("the agent kept speaking over the speaker going on")
+	}
+	if !run(t, c, clip[:0], speaking, 5*time.Second) {
+		t.Fatal("the agent never answered the whole utterance")
+	}
+	run(t, c, nil, func(speech.DuplexState, []float32) bool { return false }, resumeWindow+200*time.Millisecond)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	// The first answer was forgotten; the second is under way.
+	if got := strings.Join(session.messages, "|"); got != "hello gopher|Hi there, friend." {
+		t.Fatalf("conversation %q", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(said) != 1 || said[0] != "hello gopher" {
+		t.Fatalf("captions %q; want the utterance once", said)
 	}
 }
 

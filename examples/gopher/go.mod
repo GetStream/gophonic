@@ -9,6 +9,7 @@ require (
 	github.com/GetStream/getstream-go/v5 v5.2.0
 	github.com/GetStream/gophonic v0.0.0
 	github.com/GetStream/protocol v1.49.0
+	github.com/gobwas/ws v1.4.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/thesyncim/vibejson v0.1.0
 )
@@ -18,7 +19,6 @@ require (
 	github.com/gammazero/deque v1.1.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect

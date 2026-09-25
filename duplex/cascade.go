@@ -4,10 +4,13 @@
 // Package duplex builds speech.Duplex agents from gophonic's lanes. A
 // Cascade listens with a voice detector and a turn detector, understands
 // with a transcriber, thinks with a chat session, and speaks with a
-// synthesizer, all concurrently: it keeps listening while it thinks and
-// speaks, drops a reply when the speaker turns out not to be finished,
-// stops within one frame when interrupted, and remembers only what was
-// actually heard. The application sees no turns, only audio in and out:
+// synthesizer, all concurrently. It transcribes speech while it is spoken,
+// keeping the conversation evaluated up to what has been said, and prepares
+// its answer at the speaker's first pause, playing it the moment the turn
+// detector agrees the turn is over: almost nothing is left to compute once
+// the speaker is done. It drops the answer when the speaker goes on, stops
+// within one frame when interrupted, and remembers only what was actually
+// heard. The application sees no turns, only audio in and out:
 //
 //	agent, err := duplex.New(duplex.Config{Prompt: "You are Gopher."}, asr, turn, llm, tts)
 //	for each 20 ms frame { state, err := agent.Step(ctx, in, out) }
@@ -22,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"regexp"
 	"strings"
@@ -47,11 +51,23 @@ const (
 	voiced = 96
 	quiet  = 0.0056
 	// Turn taking.
-	preroll  = 300 * time.Millisecond  // audio kept before speech is detected: the detector fires late
-	pause    = 100 * time.Millisecond  // silence after which the turn detector is asked, and again as it grows
-	giveUp   = 1500 * time.Millisecond // silence that ends a turn whatever the detector says
-	shortest = 300 * time.Millisecond  // speech an utterance needs
-	resume   = 160 * time.Millisecond  // speech that shows a speaker was not finished after all
+	preroll = 300 * time.Millisecond  // audio kept before speech is detected: the detector fires late
+	pause   = 100 * time.Millisecond  // silence that ends a turn the detector is sure of, when the words are unknown
+	check   = 40 * time.Millisecond   // the turn is judged this often in a pause
+	giveUp  = 1500 * time.Millisecond // silence that ends a turn whatever the detector says
+	// The language model's log10 probability that the words end where the
+	// speaker paused: above finishedWords they ask or say something whole;
+	// below unfinishedWords they stop mid-thought, and the turn waits for
+	// more, up to giveUpUnfinished.
+	finishedWords    = -2.5
+	unfinishedWords  = -7
+	giveUpUnfinished = 3 * time.Second
+	shortest         = 300 * time.Millisecond // speech an utterance needs
+	resume           = 160 * time.Millisecond // speech that shows a speaker was not finished after all
+	// Speech this soon into the agent's answer continues the speaker's
+	// turn: the answer stops and is forgotten, and the whole utterance is
+	// heard again.
+	resumeWindow = 800 * time.Millisecond
 	// Speech over the agent: after a short pause it is transcribed and
 	// judged (an acknowledgement lets the agent go on; anything addressed
 	// to it stops it), and talking over it this long stops it outright.
@@ -60,6 +76,11 @@ const (
 	overlapLong = 1500 * time.Millisecond
 	// Text speed, for estimating how much of an interrupted reply was heard.
 	charsPerSecond = 14
+	// Transcription while speaking: the speech an utterance needs before it
+	// is first transcribed, and the new speech that starts another pass.
+	scribeFirst = inRate / 2
+	longest     = 60 * inRate // samples of an utterance heard; more is dropped
+	scribeStep  = inRate * 160 / 1000
 )
 
 // Config shapes a Cascade. Every field is optional.
@@ -84,10 +105,15 @@ type Config struct {
 	// shot classifier from New's models when one provides it, and
 	// otherwise a lexicon of acknowledgements and stop words.
 	Interruptions speech.TextClassifier
-	// Addressed, when not nil, decides whether an utterance is meant for
-	// the agent, as in a meeting where people also talk to each other; it
-	// runs on the transcript. Nil answers everything.
-	Addressed func(text string) bool
+	// Heard, when not nil, sees each transcribed utterance, and what has
+	// been said so far while it is spoken, before it joins the
+	// conversation: it returns the message to add, such as the text with
+	// its speaker's name, and whether the agent should answer it, as in a
+	// meeting where people also talk to each other. Utterances left
+	// unanswered still join the conversation, so the agent knows them when
+	// asked. It runs on a worker goroutine. Nil adds the text and answers
+	// everything.
+	Heard func(text string) (message string, answer bool)
 	// OnText, when not nil, receives what is said, from a worker
 	// goroutine: each transcribed utterance (chat.User), and each reply
 	// (chat.Assistant) as it grows, then once more, final, when it is
@@ -97,7 +123,10 @@ type Config struct {
 	// OnError, when not nil, receives errors of the workers.
 	OnError func(error)
 	// OnStage, when not nil, receives each reply's progress from the
-	// moment the turn ended: "transcribed", "first text", "first audio".
+	// speaker's pause: "transcribed", "judged" (whether the words are
+	// finished), "first text", "first audio", and "turn" when the turn is
+	// found over, followed by its evidence; the answer plays from the later
+	// of the last two.
 	OnStage func(stage string, elapsed time.Duration)
 }
 
@@ -111,16 +140,41 @@ type Cascade struct {
 	inReady chan struct{}
 	play    *ring[float32] // synthesized samples waiting to be played
 	played  atomic.Int64   // samples of the current reply played
-	speaker atomic.Uint32  // current reply generation; 0 when none
+	// A reply prepared at a pause is held, unplayed, until the turn ends.
+	held     atomic.Bool
+	resumed  atomic.Bool   // the current reply was cut by its speaker going on
+	seq      atomic.Uint32 // the last job's id
+	released atomic.Uint32 // the id of the job whose turn ended
+	release  chan struct{} // signals released
 
 	mu    sync.Mutex
 	state speech.DuplexState
 
-	asr    sync.Mutex // the transcriber serves the listener and the responder
+	asr    sync.Mutex // the transcriber serves the scribe, listener, and responder
 	saying string     // what the agent is saying; guarded by mu
 	probs  []float32  // Interruptions' output
 
+	// The utterance being heard, written by the listener and transcribed
+	// by the scribe as it grows; partial is the scribe's latest transcript
+	// of it.
+	utt       utterance
+	uttReady  chan struct{}
+	pauses    atomic.Uint32 // speaker pauses so far: each aborts the scribe's pass
+	pass      passContext
+	partialMu sync.Mutex
+	partial   speech.Transcript
+	partialOf uint32 // the utterance generation partial transcribes
+	partialN  int    // its samples
+	prefill   chan struct{}
+	// The language model's judgment of the pending answer's words: the
+	// log10 probability that they end the speaker's message.
+	wordsMu  sync.Mutex
+	wordsJob uint32
+	words    float32
+
 	jobs   chan job
+	notes  []note             // messages to add between replies; guarded by mu
+	noted  chan struct{}      // signals notes
 	cancel context.CancelFunc // cancels the current reply; guarded by mu
 	busy   atomic.Bool        // a reply is being prepared or spoken
 	stop   chan struct{}
@@ -128,12 +182,60 @@ type Cascade struct {
 	closed bool
 }
 
+// note is a message added without a reply.
+type note struct {
+	role chat.Role
+	text string
+}
+
 // job is one reply to produce: an utterance to transcribe and answer, or
-// text to say.
+// text to say. A held job plays only once its turn is released.
 type job struct {
 	audio []float32
 	say   string
-	gen   uint32
+	utt   uint32    // the utterance generation of audio
+	id    uint32    // set by dispatch
+	held  bool      // prepared at a pause, before the turn is known to be over
+	at    time.Time // the speaker's pause
+}
+
+// utterance is the audio of the speech being heard. Only the listener
+// writes it; it reads without the lock, the scribe with it.
+type utterance struct {
+	mu  sync.Mutex
+	pcm []float32
+	gen uint32 // counts utterances
+}
+
+func (u *utterance) append(v []float32) {
+	u.mu.Lock()
+	if len(u.pcm)+len(v) <= cap(u.pcm) {
+		u.pcm = append(u.pcm, v...)
+	}
+	u.mu.Unlock()
+}
+
+func (u *utterance) reset() {
+	u.mu.Lock()
+	u.pcm = u.pcm[:0]
+	u.gen++
+	u.mu.Unlock()
+}
+
+// passContext is the context of the scribe's passes: its Err reports a
+// pass aborted once the speaker pauses, so the transcription of the answer
+// need not wait for it. It allocates nothing per pass.
+type passContext struct {
+	context.Context
+	c      *Cascade
+	pauses uint32 // the pauses when the pass began
+}
+
+func (p *passContext) Err() error {
+	if p.c.pauses.Load() != p.pauses {
+		return context.Canceled
+	}
+	return p.Context.Err()
 }
 
 var _ speech.Duplex = (*Cascade)(nil)
@@ -182,7 +284,10 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 	out := cfg.Synthesizer.SampleRate()
 	c := &Cascade{cfg: cfg, outRate: out, outSize: out / 50,
 		in: newRing[float32](2 * inRate), inReady: make(chan struct{}, 1),
-		play: newRing[float32](120 * out), jobs: make(chan job, 4), stop: make(chan struct{}), probs: make([]float32, 2)}
+		play: newRing[float32](120 * out), release: make(chan struct{}, 1),
+		utt: utterance{pcm: make([]float32, 0, longest)}, uttReady: make(chan struct{}, 1), prefill: make(chan struct{}, 1),
+		jobs: make(chan job, 4), noted: make(chan struct{}, 1), stop: make(chan struct{}), probs: make([]float32, 2)}
+	c.pass = passContext{Context: context.Background(), c: c}
 	vad, err := gopus.NewVAD(inRate)
 	if err != nil {
 		return nil, err
@@ -190,8 +295,9 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 	if err := c.warm(); err != nil {
 		return nil, err
 	}
-	c.wg.Add(2)
+	c.wg.Add(3)
 	go c.listen(vad)
+	go c.scribe()
 	go c.respond()
 	return c, nil
 }
@@ -249,7 +355,10 @@ func (c *Cascade) Step(ctx context.Context, in, out []float32) (speech.DuplexSta
 	case c.inReady <- struct{}{}:
 	default:
 	}
-	n := c.play.read(out)
+	n := 0
+	if !c.held.Load() {
+		n = c.play.read(out)
+	}
 	clear(out[n:])
 	c.played.Add(int64(n))
 	c.mu.Lock()
@@ -278,6 +387,36 @@ func (c *Cascade) Say(text string) error {
 		return nil
 	default:
 		return errors.New("duplex: too many replies queued")
+	}
+}
+
+// Add adds a message to the conversation without answering it, such as a
+// participant's chat message, so that the agent knows it when asked. It
+// joins the conversation between replies.
+func (c *Cascade) Add(role chat.Role, text string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return chat.ErrClosed
+	}
+	c.notes = append(c.notes, note{role, text})
+	select {
+	case c.noted <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// addNotes adds the messages waiting to the conversation.
+func (c *Cascade) addNotes() {
+	c.mu.Lock()
+	notes := c.notes
+	c.notes = nil
+	c.mu.Unlock()
+	for _, n := range notes {
+		if err := c.cfg.Session.Add(n.role, n.text); err != nil {
+			c.fail(err)
+		}
 	}
 }
 
@@ -310,25 +449,35 @@ func (c *Cascade) interrupt() {
 	c.play.reset()
 }
 
+// audible reports whether the agent's voice is playing, or about to.
+func (c *Cascade) audible() bool {
+	return c.busy.Load() && !c.held.Load() && (c.played.Load() > 0 || c.play.len() > 0)
+}
+
 // listen follows the room's audio frame by frame: voice activity marks
-// speech, a pause asks the turn detector whether the speaker is done, and
-// speech over the agent either lets it go on (an acknowledgement) or
-// interrupts it.
+// speech; at a pause the answer is prepared and the turn detector asked
+// whether the speaker is done, which releases it; and speech over the
+// agent either lets it go on (an acknowledgement) or interrupts it.
 func (c *Cascade) listen(vad *gopus.VAD) {
 	defer c.wg.Done()
 	var (
-		frame      = make([]float32, inFrame)
-		pcm16      = make([]int16, inFrame)
-		keep       = int(preroll/frameTime) * inFrame
-		early      = make([]float32, 0, keep)
-		utterance  = make([]float32, 0, 60*inRate)
-		talked     time.Duration
-		silence    time.Duration
-		overlap    time.Duration // continuous speech so far
-		dispatched bool          // the utterance was handed to the responder
-		stopped    bool          // speech over the agent stopped it
+		frame    = make([]float32, inFrame)
+		pcm16    = make([]int16, inFrame)
+		keep     = int(preroll/frameTime) * inFrame
+		early    = make([]float32, 0, keep)
+		talked   time.Duration
+		silence  time.Duration
+		overlap  time.Duration // continuous speech so far
+		paused   time.Time     // when the speaker last paused
+		heardAt  time.Time     // when the agent's voice became audible
+		pending  uint32        // the answer prepared at the pause, held until the turn ends
+		answered bool          // the turn ended and its answer was released
+		stopped  bool          // speech over the agent stopped it
 	)
-	reset := func() { utterance, talked, silence, dispatched = utterance[:0], 0, 0, false }
+	reset := func() {
+		c.utt.reset()
+		talked, silence, pending, answered = 0, 0, 0, false
+	}
 	for {
 		select {
 		case <-c.stop:
@@ -349,40 +498,60 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 			} else {
 				overlap = 0
 			}
-			audible := c.busy.Load() && (c.played.Load() > 0 || c.play.len() > 0)
+			audible := c.audible()
+			switch {
+			case !audible:
+				heardAt = time.Time{}
+			case heardAt.IsZero():
+				heardAt = time.Now()
+			}
+			fresh := audible && time.Since(heardAt) < resumeWindow
 			switch {
 			case !audible:
 				stopped = false
-			case dispatched:
-				// The agent is answering: the utterance is done.
+			case answered && !fresh:
+				// The agent's answer is under way: the utterance is done.
 				reset()
 			}
-			if dispatched && c.busy.Load() && !audible && overlap >= resume {
-				// Speech before the answer is heard: the speaker was not
-				// finished. Drop the answer and hear the whole utterance.
-				c.interrupt()
-				dispatched = false
+			if answered && !c.busy.Load() {
+				reset() // answered without a sound, or not to be answered
 			}
-			if len(utterance) == 0 && !speaking {
+			if speaking && pending != 0 {
+				// The speaker goes on: the answer prepared at the pause is
+				// stale. Drop it and hear the whole utterance.
+				c.interrupt()
+				pending = 0
+			}
+			if answered && c.busy.Load() && (!audible || fresh) && overlap >= resume {
+				// Speech before the answer is heard, or as it begins: the
+				// speaker was not finished after all.
+				c.resumed.Store(true)
+				c.interrupt()
+				answered = false
+			}
+			if len(c.utt.pcm) == 0 && !speaking {
 				early = append(early, frame...)
 				if over := len(early) - keep; over > 0 {
 					early = early[:copy(early, early[over:])]
 				}
 				continue
 			}
-			if len(utterance) == 0 {
-				utterance = append(utterance, early...)
+			if len(c.utt.pcm) == 0 {
+				c.utt.append(early)
 				early = early[:0]
 			}
-			if len(utterance)+inFrame <= cap(utterance) {
-				utterance = append(utterance, frame...)
-			}
+			c.utt.append(frame)
 			if speaking {
 				talked, silence = talked+frameTime, 0
+				select {
+				case c.uttReady <- struct{}{}:
+				default:
+				}
 			} else {
 				silence += frameTime
 			}
-			if audible && !stopped {
+			utterance := c.utt.pcm
+			if audible && !stopped && !answered {
 				// Speech over the agent is judged once it pauses, or stops
 				// the agent if it goes on; turns wait until the agent is
 				// silent.
@@ -407,13 +576,17 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 				}
 				continue
 			}
-			if speaking {
+			if speaking || answered {
 				continue
 			}
-			if dispatched || silence%pause != 0 && silence < giveUp {
-				if silence >= giveUp && !dispatched {
-					reset()
-				}
+			if pending == 0 && talked >= shortest {
+				// The speaker paused: prepare the answer now, and play it
+				// if the turn turns out to be over.
+				paused = time.Now()
+				c.pauses.Add(1)
+				pending = c.dispatch(job{audio: append([]float32(nil), utterance...), utt: c.utt.gen, held: true, at: paused})
+			}
+			if silence%check != 0 && silence < giveUp {
 				continue
 			}
 			p, err := c.cfg.TurnDetector.PredictInto(utterance, inRate, 1)
@@ -421,17 +594,192 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 				c.fail(err)
 				continue
 			}
-			if !p.Complete && silence < giveUp {
+			words, known := c.wordsOf(pending)
+			if !turnOver(silence, p, words, known) {
 				continue
+			}
+			if c.cfg.OnStage != nil && !paused.IsZero() {
+				detail := fmt.Sprintf("turn (sound %.2f)", p.Probability)
+				if known {
+					detail = fmt.Sprintf("turn (sound %.2f, words %.1f)", p.Probability, words)
+				}
+				c.cfg.OnStage(detail, time.Since(paused))
 			}
 			if talked < shortest {
 				reset() // a cough or a click
 				continue
 			}
-			c.dispatch(job{audio: append([]float32(nil), utterance...)})
-			dispatched = true
+			if pending == 0 {
+				paused = time.Now()
+				pending = c.dispatch(job{audio: append([]float32(nil), utterance...), utt: c.utt.gen, at: paused})
+			}
+			c.releaseTurn(pending)
+			pending, answered = 0, true
 		}
 	}
+}
+
+// turnOver decides whether a pause of silence ends the speaker's turn, from
+// the turn detector's prediction and, when known, the language model's
+// log10 probability that the words end there: finished words need little
+// from the detector, unfinished ones wait for it to be sure.
+func turnOver(silence time.Duration, p speech.Prediction, words float32, known bool) bool {
+	switch {
+	case !known:
+		return silence >= pause && p.Complete || silence >= giveUp
+	case words >= finishedWords:
+		// Whole words; the detector can hold the turn open a little
+		// while, as a speaker pausing mid-sentence sounds unfinished.
+		return p.Probability >= 0.2 || silence >= 4*check
+	case words > unfinishedWords:
+		return silence >= 2*check && p.Complete || silence >= giveUp
+	default:
+		return silence >= 500*time.Millisecond && p.Probability >= 0.9 || silence >= giveUpUnfinished
+	}
+}
+
+// wordsOf returns the language model's judgment of job id's words, once
+// the responder has it.
+func (c *Cascade) wordsOf(id uint32) (float32, bool) {
+	c.wordsMu.Lock()
+	defer c.wordsMu.Unlock()
+	return c.words, id != 0 && c.wordsJob == id
+}
+
+// scribe transcribes the utterance while it is spoken, each pass
+// continuing the last, so that at a pause only its end is left to
+// transcribe, and has the responder evaluate the conversation up to what
+// has been said.
+func (c *Cascade) scribe() {
+	defer c.wg.Done()
+	var (
+		pcm       = make([]float32, 0, longest)
+		prev, cur speech.Transcript
+		gen       uint32
+		done      int // samples transcribed
+		// New speech that starts a pass: at least twice the last pass's
+		// time, so that long speech leaves the GPU half free.
+		step = scribeStep
+	)
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-c.uttReady:
+		}
+		c.utt.mu.Lock()
+		if c.utt.gen != gen {
+			gen, done = c.utt.gen, 0
+			prev.Reset()
+		}
+		n := len(c.utt.pcm)
+		if n < scribeFirst || n-done < step {
+			c.utt.mu.Unlock()
+			continue
+		}
+		pcm = append(pcm[:0], c.utt.pcm...)
+		c.utt.mu.Unlock()
+		opts := c.cfg.Listen
+		if len(prev.Text) > 0 {
+			opts.Partial = &prev
+		}
+		c.pass.pauses = c.pauses.Load()
+		began := time.Now()
+		c.asr.Lock()
+		err := c.cfg.Transcriber.Transcribe(&c.pass, pcm, opts, &cur)
+		c.asr.Unlock()
+		step = max(scribeStep, int(2*time.Since(began)*inRate/time.Second))
+		if err != nil {
+			if c.pass.Err() == nil {
+				c.fail(err)
+			}
+			continue
+		}
+		done = n
+		prev, cur = cur, prev
+		c.partialMu.Lock()
+		changed := c.partialOf != gen || string(c.partial.Text) != string(prev.Text)
+		c.partial.Text = append(c.partial.Text[:0], prev.Text...)
+		c.partial.Language, c.partialOf, c.partialN = prev.Language, gen, n
+		c.partialMu.Unlock()
+		if changed {
+			select {
+			case c.prefill <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// partialFor copies the scribe's latest transcript of utterance gen, if
+// any, to dst.
+func (c *Cascade) partialFor(gen uint32, dst *speech.Transcript) bool {
+	c.partialMu.Lock()
+	defer c.partialMu.Unlock()
+	if c.partialOf != gen || len(c.partial.Text) == 0 {
+		return false
+	}
+	dst.Text = append(dst.Text[:0], c.partial.Text...)
+	dst.Language = c.partial.Language
+	return true
+}
+
+// heard applies Config.Heard to text.
+func (c *Cascade) heard(text string) (string, bool) {
+	if c.cfg.Heard == nil {
+		return text, true
+	}
+	return c.cfg.Heard(text)
+}
+
+// prefillPartial evaluates the conversation up to what the speaker has
+// said so far, so that the answer's evaluation starts from there.
+func (c *Cascade) prefillPartial() {
+	c.partialMu.Lock()
+	text := strings.TrimSpace(string(c.partial.Text))
+	c.partialMu.Unlock()
+	if text == "" {
+		return
+	}
+	message, _ := c.heard(text)
+	s := c.cfg.Session
+	mark := s.Checkpoint()
+	if err := s.Add(chat.User, message); err != nil {
+		c.fail(err)
+		return
+	}
+	if err := s.Prefill(context.Background()); err != nil {
+		c.fail(err)
+	}
+	if err := s.Restore(mark); err != nil {
+		c.fail(err)
+	}
+}
+
+// releaseTurn lets the answer of job id play: its speaker is done.
+func (c *Cascade) releaseTurn(id uint32) {
+	if id == 0 {
+		return
+	}
+	c.released.Store(id)
+	c.held.Store(false)
+	select {
+	case c.release <- struct{}{}:
+	default:
+	}
+}
+
+// awaitTurn waits for job id's turn to end, reporting false if the job is
+// dropped first.
+func (c *Cascade) awaitTurn(ctx context.Context, id uint32) bool {
+	for c.released.Load() != id {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.release:
+		}
+	}
+	return true
 }
 
 // The zero-shot question that judges speech over the agent.
@@ -447,9 +795,13 @@ var interruptLabels = []string{
 // stop: acknowledgements and noise do not; stop words do; anything else is
 // judged in the context of what the agent is saying.
 func (c *Cascade) interrupts(audio []float32) bool {
-	var t speech.Transcript
+	var t, partial speech.Transcript
+	opts := c.cfg.Listen
+	if c.partialFor(c.utt.gen, &partial) {
+		opts.Partial = &partial
+	}
 	c.asr.Lock()
-	err := c.cfg.Transcriber.Transcribe(context.Background(), audio, c.cfg.Listen, &t)
+	err := c.cfg.Transcriber.Transcribe(context.Background(), audio, opts, &t)
 	c.asr.Unlock()
 	if err != nil {
 		c.fail(err)
@@ -527,14 +879,19 @@ func init() {
 // stopWords always stop the agent.
 var stopWords = regexp.MustCompile(`\b(stop|wait|hold on|hang on|shut up|enough|pause|be quiet|excuse me|sorry|para|espera|arrête|halt)\b`)
 
-// dispatch replaces any reply in preparation with j.
-func (c *Cascade) dispatch(j job) {
+// dispatch replaces any reply in preparation with j and returns its id, or
+// zero if it was dropped.
+func (c *Cascade) dispatch(j job) uint32 {
 	c.interrupt()
+	j.id = c.seq.Add(1)
+	c.held.Store(j.held)
 	c.busy.Store(true)
 	select {
 	case c.jobs <- j:
+		return j.id
 	default:
 		c.fail(errors.New("duplex: responder is behind; utterance dropped"))
+		return 0
 	}
 }
 
@@ -543,7 +900,7 @@ func (c *Cascade) dispatch(j job) {
 // audio queues for Step.
 func (c *Cascade) respond() {
 	defer c.wg.Done()
-	var t speech.Transcript
+	var t, partial speech.Transcript
 	// The language model runs only a couple of pieces ahead of the voice:
 	// the voice synthesizes faster than real time, so the two alternate on
 	// the GPU instead of queueing behind each other, and the first audio
@@ -555,50 +912,105 @@ func (c *Cascade) respond() {
 		select {
 		case <-c.stop:
 			return
+		case <-c.noted:
+			c.addNotes()
+			continue
+		case <-c.prefill:
+			c.prefillPartial()
+			continue
 		case j = <-c.jobs:
 		}
 		// A newer job waiting supersedes this one.
 		for len(c.jobs) > 0 {
 			j = <-c.jobs
 		}
+		c.addNotes()
+		c.resumed.Store(false)
+		if !j.held {
+			c.held.Store(false)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		c.mu.Lock()
 		c.cancel = cancel
 		c.mu.Unlock()
-		began := time.Now()
+		if j.at.IsZero() {
+			j.at = time.Now()
+		}
 		trace := func(stage string) {
 			if c.cfg.OnStage != nil {
-				c.cfg.OnStage(stage, time.Since(began))
+				c.cfg.OnStage(stage, time.Since(j.at))
 			}
 		}
 		c.played.Store(0)
 		mark := c.cfg.Session.Checkpoint()
 		text := j.say
 		if j.audio != nil {
+			opts := c.cfg.Listen
+			if c.partialFor(j.utt, &partial) {
+				opts.Partial = &partial
+			}
 			c.asr.Lock()
-			err := c.cfg.Transcriber.Transcribe(ctx, j.audio, c.cfg.Listen, &t)
+			err := c.cfg.Transcriber.Transcribe(ctx, j.audio, opts, &t)
 			c.asr.Unlock()
 			if err != nil {
+				if ctx.Err() != nil {
+					err = nil // superseded
+				}
 				c.finish(cancel, err)
 				continue
 			}
 			trace("transcribed")
 			text = strings.TrimSpace(string(t.Text))
-			if text == "" || c.cfg.Addressed != nil && !c.cfg.Addressed(text) {
-				if text != "" && c.cfg.OnText != nil {
-					c.cfg.OnText(chat.User, text, true)
-				}
+			if text == "" {
 				c.finish(cancel, nil)
 				continue
 			}
-			if err := c.cfg.Session.Add(chat.User, text); err != nil {
+			message, answer := c.heard(text)
+			// Whether the words are finished helps judge the turn; their
+			// evaluation is the reply's first step anyway.
+			if p, err := c.cfg.Session.Finished(ctx, chat.User, message); err == nil {
+				c.wordsMu.Lock()
+				c.wordsJob, c.words = j.id, float32(math.Log10(max(float64(p), 1e-30)))
+				c.wordsMu.Unlock()
+				trace("judged")
+			} else if ctx.Err() == nil {
+				c.fail(err)
+			}
+			if err := c.cfg.Session.Add(chat.User, message); err != nil {
 				c.finish(cancel, err)
+				continue
+			}
+			if !answer {
+				// Not meant for the agent: it joins the conversation, and
+				// shows, once the turn is over.
+				if c.awaitTurn(ctx, j.id) {
+					if c.cfg.OnText != nil {
+						c.cfg.OnText(chat.User, text, true)
+					}
+					if err := c.cfg.Session.Prefill(ctx); err != nil && ctx.Err() == nil {
+						c.fail(err)
+					}
+				} else {
+					c.cfg.Session.Restore(mark)
+				}
+				c.finish(cancel, nil)
 				continue
 			}
 		}
 		// The synthesizer reads text as the model writes it.
 		var reply strings.Builder
+		// The utterance is shown once its answer is certain to be heard,
+		// not while it might still be superseded or continued, and the
+		// answer's captions follow it.
 		userShown := false
+		showUser := func() {
+			if !userShown && j.audio != nil && c.cfg.OnText != nil &&
+				c.played.Load() >= int64(resumeWindow)*int64(c.outRate)/int64(time.Second) {
+				userShown = true
+				c.cfg.OnText(chat.User, text, true)
+				c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
+			}
+		}
 		done := make(chan error, 1)
 		go func() {
 			done <- c.cfg.Synthesizer.Speak(ctx, c.cfg.Voice, func() ([]byte, error) {
@@ -630,16 +1042,9 @@ func (c *Cascade) respond() {
 				c.mu.Lock()
 				c.saying = reply.String()
 				c.mu.Unlock()
-				if c.cfg.OnText != nil {
-					// The utterance is shown once its answer is certain to
-					// be heard, not while it might still be superseded.
-					if !userShown && c.played.Load() > 0 {
-						userShown = true
-						c.cfg.OnText(chat.User, text, true)
-					}
-					if userShown && strings.ContainsAny(string(p), " .,!?;:") {
-						c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
-					}
+				showUser()
+				if userShown && strings.ContainsAny(string(p), " .,!?;:") {
+					c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
 				}
 				if spoken == "" {
 					return nil
@@ -666,9 +1071,10 @@ func (c *Cascade) respond() {
 			case <-ctx.Done():
 				interrupted = true
 			case <-time.After(frameTime):
+				showUser()
 			}
 		}
-		if c.cfg.OnText != nil && j.audio != nil && !userShown && text != "" && c.played.Load() > 0 {
+		if c.cfg.OnText != nil && j.audio != nil && !userShown && text != "" && c.played.Load() > 0 && !c.resumed.Load() {
 			// A reply heard only after the model finished writing it.
 			c.cfg.OnText(chat.User, text, true)
 		}
@@ -678,6 +1084,12 @@ func (c *Cascade) respond() {
 			// Superseded before a sound: the conversation never had it.
 			c.cfg.Session.Restore(mark)
 			said, text = "", ""
+		case interrupted && c.resumed.Load():
+			// Cut as it began by the speaker going on: the utterance is
+			// heard again whole, so the conversation and the captions
+			// forget both.
+			c.cfg.Session.Restore(mark)
+			said = ""
 		case interrupted:
 			heard := min(len(reply.String()), int(time.Duration(played)*time.Second/time.Duration(c.outRate)*charsPerSecond/time.Second))
 			if j.audio != nil {

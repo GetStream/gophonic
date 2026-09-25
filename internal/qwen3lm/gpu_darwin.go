@@ -57,6 +57,8 @@ type gpuModel struct {
 	attendFlash, gemvHead        *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
+	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
+	finishHead                   *metal.Pipeline
 	layers                       []gpuLayer
 	norms, signs, rope           *metal.Buffer
 	hidden, inter, head          *rotation
@@ -141,6 +143,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
+		{&g.mmHead[0], "mm_head_w"}, {&g.mmHead[1], "mm_head_16"}, {&g.finishHead, "mm_finish_store_q8"},
 		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
 		if *p.dst, err = dev.Pipeline(lib, p.name); err != nil {
 			return err
@@ -544,7 +547,9 @@ type gpuWorkspace struct {
 	embeds                                  Embeds
 	spliced                                 int // embeds rows used so far
 	logits                                  *metal.Buffer
+	logitRows                               int // rows the logits buffer holds
 	headArgs                                gemvArgs
+	tail                                    []float32 // a single sequence's last states, when set
 	oneSeq                                  [1][]int
 }
 
@@ -651,6 +656,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 			return nil, err
 		}
 	}
+	w.logitRows = 1
 	eps := float32(c.eps)
 	parts := uint32(c.hidden / rows)
 	w.qkv0Args = gemvArgs{uint32(c.hidden), uint32(qdim + 2*c.kvDim), eps, 1}
@@ -706,8 +712,13 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 	defer func() { w.embeds, w.oneSeq[0] = Embeds{}, nil }()
 	if pre != nil && !shared && len(seqs) == 1 && len(seqs[0]) > w.rows {
 		ids := seqs[0]
-		for off := 0; off < len(ids); off += w.rows {
-			w.oneSeq[0] = ids[off:min(off+w.rows, len(ids))]
+		k := len(w.tail) / c.hidden
+		for off := 0; off < len(ids); off += len(w.oneSeq[0]) {
+			n := min(w.rows, len(ids)-off)
+			if rest := len(ids) - off - n; rest > 0 && rest < k {
+				n = len(ids) - off - k // the last pass holds the whole tail
+			}
+			w.oneSeq[0] = ids[off : off+n]
 			if err := w.pass(m, w.oneSeq[:], dst, len(w.oneSeq[0])); err != nil {
 				return err
 			}
@@ -729,6 +740,44 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 			return err
 		}
 		start = end
+	}
+	return nil
+}
+
+// logitsRowsInto writes the head's logits for k post-final-norm states, all
+// in one command buffer.
+func (w *gpuWorkspace) logitsRowsInto(m *Weights, hidden, dst []float32, k int) error {
+	g, c := w.g, &m.cfg
+	if k > w.logitRows {
+		b, err := g.dev.Buffer(4 * k * g.lmRows)
+		if err != nil {
+			return err
+		}
+		w.logits.Release()
+		w.logits, w.logitRows = b, k
+	}
+	x := floats(w.h.Bytes())[:k*c.hidden]
+	copy(x, hidden)
+	for r := range k {
+		g.hidden.apply(x[r*c.hidden : (r+1)*c.hidden])
+	}
+	e := &w.enc
+	g.dev.Begin(e, false)
+	if g.lmRows%mmColumns == 0 {
+		// One GEMM reads the head once for every row; its grid is wide
+		// enough that it never splits K.
+		w.mmRun(g.mmHead[0], g.mmHead[1], g.finishHead, g.lm, 0, g.lmScale, w.h, w.logits, w.attnParts, w.attnParts, c.hidden, g.lmRows, k, 0)
+	} else {
+		for r := range k {
+			w.gemv(g.gemvHead, g.lm, 0, g.lmScale, w.h, 4*r*c.hidden, w.logits, 4*r*g.lmRows, w.attnParts, w.attnParts, 0, &w.headArgs)
+		}
+	}
+	if err := e.Wait(); err != nil {
+		return err
+	}
+	out := floats(w.logits.Bytes())
+	for r := range k {
+		copy(dst[r*c.vocab:(r+1)*c.vocab], out[r*g.lmRows:r*g.lmRows+c.vocab])
 	}
 	return nil
 }
@@ -784,6 +833,20 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 	if err := e.Wait(); err != nil {
 		return err
 	}
+	if k := len(w.tail) / c.hidden; k > 1 && len(seqs) == 1 && rows >= k {
+		for i := range k {
+			out := w.tail[i*c.hidden : (i+1)*c.hidden]
+			copy(out, hs[(rows-k+i)*c.hidden:(rows-k+i+1)*c.hidden])
+			g.hidden.unapply(out)
+			rmsNorm32(out, out, m.finalNorm, c.eps)
+			for _, v := range out {
+				if !finite32(v) {
+					return errors.New("qwen3: non-finite hidden state")
+				}
+			}
+		}
+		return nil
+	}
 	r = 0
 	for s, ids := range seqs {
 		r += len(ids)
@@ -803,11 +866,18 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 // mm encodes one batched projection over rows tokens.
 func (w *gpuWorkspace) mmDispatch(kind int, buf *metal.Buffer, wOff, sOff int, x, y, in, out *metal.Buffer,
 	k, n, rows, parts int) {
+	w.mmRun(w.g.mm[0][kind], w.g.mm[1][kind], w.g.finish[[4]int{0, 1, 2, 1}[kind]], buf, wOff, sOff, x, y, in, out, k, n, rows, parts)
+}
+
+// mmRun encodes one GEMM with the given 32- and 16-token tile pipelines and
+// split-K epilogue.
+func (w *gpuWorkspace) mmRun(p32, p16, finish *metal.Pipeline, buf *metal.Buffer, wOff, sOff int, x, y, in, out *metal.Buffer,
+	k, n, rows, parts int) {
 	e := &w.enc
 	// Up to 16 tokens use the 16-token tile, which wastes no rows.
-	tile, p := 32, w.g.mm[0][kind]
+	tile, p := 32, p32
 	if rows <= 16 {
-		tile, p = 16, w.g.mm[1][kind]
+		tile, p = 16, p16
 	}
 	groups := n / mmColumns * ((rows + tile - 1) / tile)
 	// Small grids leave GPU cores idle; split K so at least mmMinGroups
@@ -830,7 +900,7 @@ func (w *gpuWorkspace) mmDispatch(kind int, buf *metal.Buffer, wOff, sOff int, x
 	e.SetBuffer(w.scratch, 0, 7)
 	e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: splits}, metal.Size{X: mmThreads, Y: 1, Z: 1})
 	if splits > 1 {
-		e.SetPipeline(w.g.finish[[4]int{0, 1, 2, 1}[kind]])
+		e.SetPipeline(finish)
 		e.Dispatch(metal.Size{X: n / mmColumns, Y: rows, Z: 1}, metal.Size{X: mmColumns, Y: 1, Z: 1})
 	}
 }
