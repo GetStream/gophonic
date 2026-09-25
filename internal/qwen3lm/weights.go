@@ -100,6 +100,10 @@ type modelConfig struct {
 	intermediate, vocab, maxPositions              int
 	eps, attnScale                                 float64
 	invFreq                                        []float64
+	// A mixture of experts (Qwen3-MoE) replaces every layer's MLP with
+	// experts of intermediate width, of which topK take each token, weighted
+	// by the router's renormalized probabilities.
+	experts, topK int
 }
 
 // TextConfig is a Qwen3 decoder's Hugging Face configuration: the
@@ -121,6 +125,13 @@ type TextConfig struct {
 	AttentionBias    bool    `json:"attention_bias"`
 	HiddenAct        string  `json:"hidden_act"`
 	UseSlidingWindow bool    `json:"use_sliding_window"`
+	// Qwen3-MoE (model_type qwen3_moe).
+	Experts         int   `json:"num_experts"`
+	ExpertsPerToken int   `json:"num_experts_per_tok"`
+	ExpertWidth     int   `json:"moe_intermediate_size"`
+	NormTopK        bool  `json:"norm_topk_prob"`
+	SparseStep      int   `json:"decoder_sparse_step"`
+	MLPOnlyLayers   []int `json:"mlp_only_layers"`
 }
 
 // LoadWeights reads an official Qwen3 safetensors snapshot directory
@@ -183,6 +194,9 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 	}
 	if format != WeightsF16 && format != WeightsInt8 && format != WeightsGPU && format != WeightsGPUQ8 && format != WeightsGPUQ4 {
 		return nil, fmt.Errorf("qwen3: unsupported weight format %q", format)
+	}
+	if cfg.experts > 0 && format != WeightsGPUQ8 {
+		return nil, fmt.Errorf("qwen3: a mixture of experts runs in the %s format, not %s", WeightsGPUQ8, format)
 	}
 	prefix := opts.Prefix
 	if prefix == "" {
@@ -419,8 +433,19 @@ func readConfig(path string) (modelConfig, error) {
 
 // model validates the configuration and derives the evaluator's geometry.
 func (c TextConfig) model() (modelConfig, error) {
-	if c.ModelType != "qwen3" {
-		return modelConfig{}, fmt.Errorf("qwen3: expected model_type qwen3, got %q", c.ModelType)
+	experts, topK := 0, 0
+	switch c.ModelType {
+	case "qwen3":
+	case "qwen3_moe":
+		// Every layer sparse, with renormalized top-k weights: Qwen3-30B-A3B
+		// and Qwen3-235B-A22B.
+		if c.Experts <= 0 || c.ExpertsPerToken <= 0 || c.ExpertsPerToken > c.Experts || c.ExpertWidth <= 0 ||
+			!c.NormTopK || c.SparseStep != 1 || len(c.MLPOnlyLayers) != 0 {
+			return modelConfig{}, errors.New("qwen3: unsupported Qwen3-MoE layout (dense layers, or experts without renormalized top-k)")
+		}
+		experts, topK, c.Intermediate = c.Experts, c.ExpertsPerToken, c.ExpertWidth
+	default:
+		return modelConfig{}, fmt.Errorf("qwen3: expected model_type qwen3 or qwen3_moe, got %q", c.ModelType)
 	}
 	if c.HiddenAct != "" && c.HiddenAct != "silu" || c.AttentionBias || c.UseSlidingWindow || c.RopeScaling != nil {
 		return modelConfig{}, errors.New("qwen3: unsupported Qwen3 variant (activation, attention bias, sliding window, or scaled RoPE)")
@@ -446,6 +471,7 @@ func (c TextConfig) model() (modelConfig, error) {
 		headDim: c.HeadDim, kvDim: c.KVHeads * c.HeadDim, intermediate: c.Intermediate,
 		vocab: c.Vocab, maxPositions: c.MaxPositions, eps: c.RMSNormEps,
 		attnScale: 1 / math.Sqrt(float64(c.HeadDim)), invFreq: inv,
+		experts: experts, topK: topK,
 	}, nil
 }
 

@@ -44,6 +44,9 @@ const (
 type gpuLayer struct {
 	buf                                              *metal.Buffer
 	qkv, qkvScale, o, oScale, gu, guScale, d, dScale int
+	// router is the FP32 router of a mixture of experts; gu and d then hold
+	// every expert's gate/up and down rows, expert after expert.
+	router int
 }
 
 // gpuModel is a Qwen3 model resident in GPU-visible memory. The residual
@@ -59,13 +62,19 @@ type gpuModel struct {
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
 	finishHead                   *metal.Pipeline
-	layers                       []gpuLayer
-	norms, signs, rope           *metal.Buffer
-	hidden, inter, head          *rotation
-	cfg                          *modelConfig
-	noInter                      bool // down's inputs are not rotated
-	bits                         int  // weight scheme, as in gpu.metal: 8 (Q8), 9 (Q8B), or 4 (Q4)
-	positions                    int  // RoPE table rows
+	moeRouter, moeRoute          *metal.Pipeline // a mixture of experts' router and top-k
+	moeGateUp, moeDown           *metal.Pipeline // one row's experts
+	// Batches grouped by expert: the tiles, the 32- and 16-pair GEMMs, and
+	// the sum of each row's experts.
+	moeTiles, moeCombine   *metal.Pipeline
+	moeGateUpMM, moeDownMM [2]*metal.Pipeline
+	layers                 []gpuLayer
+	norms, signs, rope     *metal.Buffer
+	hidden, inter, head    *rotation
+	cfg                    *modelConfig
+	noInter                bool // down's inputs are not rotated
+	bits                   int  // weight scheme, as in gpu.metal: 8 (Q8), 9 (Q8B), or 4 (Q4)
+	positions              int  // RoPE table rows
 	// lm is the language-model head W·Rᵀ as Q8B int8 blocks with FP16
 	// scales, padded with zero rows to lmRows; nil unless loaded.
 	lm      *metal.Buffer
@@ -144,7 +153,11 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
 		{&g.mmHead[0], "mm_head_w"}, {&g.mmHead[1], "mm_head_16"}, {&g.finishHead, "mm_finish_store_q8"},
-		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
+		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"},
+		{&g.moeRouter, "moe_router"}, {&g.moeRoute, "moe_route"}, {&g.moeGateUp, "moe_gateup_q8"}, {&g.moeDown, "moe_down_q8"},
+		{&g.moeTiles, "moe_tiles"}, {&g.moeCombine, "moe_combine"},
+		{&g.moeGateUpMM[0], "moe_gateup_mm_w"}, {&g.moeGateUpMM[1], "moe_gateup_mm_16"},
+		{&g.moeDownMM[0], "moe_down_mm_w"}, {&g.moeDownMM[1], "moe_down_mm_16"}} {
 		if *p.dst, err = dev.Pipeline(lib, p.name); err != nil {
 			return err
 		}
@@ -212,8 +225,15 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	}
 	shape.qkv, shape.qkvScale = place(qdim+2*kv, h)
 	shape.o, shape.oScale = place(h, qdim)
-	shape.gu, shape.guScale = place(2*inter, h)
-	shape.d, shape.dScale = place(h, inter)
+	if e := c.experts; e > 0 {
+		shape.router = layerBytes
+		layerBytes = alignUp(layerBytes + 4*e*h)
+		shape.gu, shape.guScale = place(e*2*inter, h)
+		shape.d, shape.dScale = place(e*h, inter)
+	} else {
+		shape.gu, shape.guScale = place(2*inter, h)
+		shape.d, shape.dScale = place(h, inter)
+	}
 	headBytes := 0
 	if headName != "" {
 		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
@@ -289,25 +309,43 @@ func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuL
 		scaleMul float32
 		row0     int    // destination row of source row 0
 		rows     [2]int // for a chunk of a large matrix: its source rows
+		f32      bool   // stored as FP32 rows at base, unquantized
 	}
 	var jobs []job
 	for i := range m.layers {
 		l, gl, buf := &m.layers[i], &shape, layers[i]
 		p := fmt.Sprintf("%slayers.%d.", m.prefix, i)
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}},
-			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}},
-			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}},
-			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}},
-			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}},
-			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}},
-			job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}},
+			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}, false},
+			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}, false},
+			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}, false},
+			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}, false},
 		)
+		if c.experts == 0 {
+			jobs = append(jobs,
+				job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}, false},
+				job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}, false},
+				job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}, false},
+			)
+			continue
+		}
+		// The router reads the normalized residual as gate/up does; each
+		// expert's gate and up rows alternate, expert after expert.
+		jobs = append(jobs, job{p + "mlp.gate.weight", c.experts, h, l.mlpNorm, g.hidden, nil, buf, gl.router, 0, 1, 1, 0, [2]int{}, true})
+		for e := range c.experts {
+			q := fmt.Sprintf("%smlp.experts.%d.", p, e)
+			jobs = append(jobs,
+				job{q + "gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, e * 2 * inter, [2]int{}, false},
+				job{q + "up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, e*2*inter + 1, [2]int{}, false},
+				job{q + "down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, e * h, [2]int{}, false},
+			)
+		}
 	}
 	// The head, the largest matrix, is read in chunks of at most one
 	// projection.
-	for r := 0; headName != "" && r < c.vocab; r += inter {
-		jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+inter, c.vocab)}})
+	chunk := max(inter, 4096)
+	for r := 0; headName != "" && r < c.vocab; r += chunk {
+		jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+chunk, c.vocab)}, false})
 	}
 	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
 	var pre *gptqFile
@@ -404,6 +442,11 @@ func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuL
 					j.out.applyRows(mat, j.n, j.k)
 				}
 				buf := j.buf
+				if j.f32 {
+					copy(floats(buf[j.base:])[(j.row0+r0*j.step)*j.k:], mat[:n*j.k])
+					finish(j)
+					continue
+				}
 				for r := range n {
 					row := mat[r*j.k : (r+1)*j.k]
 					dst := j.row0 + (r0+r)*j.step
@@ -551,6 +594,35 @@ type gpuWorkspace struct {
 	headArgs                                gemvArgs
 	tail                                    []float32 // a single sequence's last states, when set
 	oneSeq                                  [1][]int
+	// A mixture of experts: the router's logits, each row's experts and
+	// weights, and the arguments of its kernels. Batches group their (row,
+	// slot) pairs by expert: each expert's count, each pair's rank among its
+	// expert's, the pairs expert after expert, the GEMM tiles over them, and
+	// each pair's weighted output.
+	route, ids, wts               *metal.Buffer
+	counts, rank, list, tiles     *metal.Buffer
+	moeOut                        *metal.Buffer
+	moeRouter, moeGateUp, moeDown moeArgs
+	moeTiles                      moeTileArgs
+}
+
+// moeTileArgs is MoeTileArgs in gpu.metal.
+type moeTileArgs struct {
+	pairs, tile, tiles uint32
+}
+
+// moeGroupRows is the batch size from which experts run grouped: below it,
+// each row streams its own experts' weights.
+var moeGroupRows = 16
+
+// moeArgs is MoeArgs in gpu.metal.
+type moeArgs struct {
+	k, n     uint32
+	eps      float32
+	parts    uint32
+	experts  uint32
+	topK     uint32
+	partsOut uint32
 }
 
 // gpuTokenByToken forces the single-token kernels and gpuScalarAttention
@@ -635,6 +707,15 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	rows := gpuRows(g.bits)
 	w := &gpuWorkspace{g: g, rows: gpuPositions}
 	var err error
+	// Each row's experts write their own activations; their down kernel
+	// publishes a partial sum per 16 rows of the residual.
+	// Grouped, each (row, slot) pair keeps its expert's output.
+	perRow, rowParts, experts, pairs, pairOut := c.intermediate, c.hidden/mmColumns, 1, gpuPositions, 1
+	if c.experts > 0 {
+		perRow, rowParts, experts = c.topK*c.intermediate, c.hidden/rows, c.experts
+		pairs *= c.topK
+		pairOut = pairs * c.hidden
+	}
 	for _, b := range []struct {
 		dst **metal.Buffer
 		n   int
@@ -642,15 +723,23 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.h, 4 * gpuPositions * c.hidden},
 		{&w.qkv, 4 * gpuPositions * (qdim + 2*c.kvDim)},
 		{&w.ctx, 4 * gpuPositions * qdim},
-		{&w.act, 4 * gpuPositions * c.intermediate},
+		{&w.act, 4 * gpuPositions * perRow},
 		{&w.kc, 4 * c.layers * gpuPositions * c.kvDim},
 		{&w.vc, 4 * c.layers * gpuPositions * c.kvDim},
 		{&w.embedParts, 4 * gpuPositions},
 		{&w.info, 8 * gpuPositions},
 		{&w.scratch, 4 * mmScratchFloats},
-		{&w.attnParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
+		{&w.attnParts, 4 * max(c.hidden/rows, gpuPositions*rowParts)},
 		{&w.mlpParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
 		{&w.logits, 4 * max(g.lmRows, 1)},
+		{&w.route, 4 * gpuPositions * experts},
+		{&w.ids, 4 * pairs},
+		{&w.wts, 4 * pairs},
+		{&w.counts, 4 * experts},
+		{&w.rank, 4 * pairs},
+		{&w.list, 4 * pairs},
+		{&w.tiles, 16 * (pairs/16 + experts)},
+		{&w.moeOut, 4 * pairOut},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
 			return nil, err
@@ -666,7 +755,116 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	w.dArgs = gemvArgs{uint32(c.intermediate), uint32(c.hidden), eps, 0}
 	w.headArgs = gemvArgs{uint32(c.hidden), uint32(g.lmRows), eps, 0}
 	w.attn = attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: eps, scale: float32(c.attnScale)}
+	if c.experts > 0 {
+		e, k := uint32(c.experts), uint32(c.topK)
+		w.moeRouter = moeArgs{k: uint32(c.hidden), n: e, eps: eps, experts: e, topK: k}
+		w.moeGateUp = moeArgs{k: uint32(c.hidden), n: uint32(2 * c.intermediate), eps: eps, experts: e, topK: k}
+		w.moeDown = moeArgs{k: uint32(c.intermediate), n: uint32(c.hidden), eps: eps, experts: e, topK: k, partsOut: uint32(c.hidden / rows)}
+	}
 	return w, nil
+}
+
+// encodeMoE encodes a layer's mixture of experts for rows rows of the
+// residual at hOff: the router over the normalized residual (parts partial
+// sums per row in mlpParts), each row's top experts, their SwiGLU, and the
+// weighted sum of their down projections into the residual, which publishes
+// hidden/16 partial sums per row in attnParts.
+func (w *gpuWorkspace) encodeMoE(gl *gpuLayer, rows, hOff, parts int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	w.moeRouter.parts, w.moeGateUp.parts = uint32(parts), uint32(parts)
+	e.SetPipeline(g.moeRouter)
+	e.SetBuffer(gl.buf, gl.router, 0)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.route, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeRouter), int(unsafe.Sizeof(w.moeRouter)), 5)
+	e.SetBuffer(w.counts, 0, 6)
+	e.Dispatch(metal.Size{X: c.experts / 16, Y: rows, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeRoute)
+	e.SetBuffer(w.route, 0, 0)
+	e.SetBuffer(w.ids, 0, 1)
+	e.SetBuffer(w.wts, 0, 2)
+	e.SetBytes(unsafe.Pointer(&w.moeRouter), int(unsafe.Sizeof(w.moeRouter)), 3)
+	e.SetBuffer(w.counts, 0, 4)
+	e.SetBuffer(w.rank, 0, 5)
+	e.Dispatch(metal.Size{X: rows, Y: 1, Z: 1}, metal.Size{X: c.experts, Y: 1, Z: 1})
+	if rows >= moeGroupRows {
+		w.encodeGroupedExperts(gl, rows, hOff)
+		return
+	}
+
+	e.SetPipeline(g.moeGateUp)
+	e.SetBuffer(gl.buf, gl.gu, 0)
+	e.SetBuffer(gl.buf, gl.guScale, 1)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.act, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeGateUp), int(unsafe.Sizeof(w.moeGateUp)), 5)
+	e.SetBuffer(w.ids, 0, 6)
+	e.Dispatch(metal.Size{X: 2 * c.intermediate / 16, Y: c.topK, Z: rows}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeDown)
+	e.SetBuffer(gl.buf, gl.d, 0)
+	e.SetBuffer(gl.buf, gl.dScale, 1)
+	e.SetBuffer(w.act, 0, 2)
+	e.SetBuffer(w.h, hOff, 3)
+	e.SetBytes(unsafe.Pointer(&w.moeDown), int(unsafe.Sizeof(w.moeDown)), 5)
+	e.SetBuffer(w.attnParts, 0, 6)
+	e.SetBuffer(w.ids, 0, 7)
+	e.SetBuffer(w.wts, 0, 8)
+	e.Dispatch(metal.Size{X: c.hidden / 16, Y: rows, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+}
+
+// encodeGroupedExperts encodes the experts of a batch grouped by expert:
+// each expert multiplies all the rows routed to it as one GEMM, so its
+// weights stream once per tile of pairs rather than once per row, and each
+// row then sums its experts' weighted outputs into the residual.
+func (w *gpuWorkspace) encodeGroupedExperts(gl *gpuLayer, rows, hOff int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	pairs := rows * c.topK
+	// Wide tiles once experts average 24 pairs or more.
+	tile, kind := 16, 1
+	if pairs >= 24*min(c.experts, pairs) {
+		tile, kind = 32, 0
+	}
+	tiles := (pairs+tile-1)/tile + min(c.experts, pairs)
+	w.moeTiles = moeTileArgs{pairs: uint32(pairs), tile: uint32(tile), tiles: uint32(tiles)}
+	e.SetPipeline(g.moeTiles)
+	e.SetBuffer(w.ids, 0, 0)
+	e.SetBuffer(w.rank, 0, 1)
+	e.SetBuffer(w.counts, 0, 2)
+	e.SetBuffer(w.list, 0, 3)
+	e.SetBuffer(w.tiles, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeRouter), int(unsafe.Sizeof(w.moeRouter)), 5)
+	e.SetBytes(unsafe.Pointer(&w.moeTiles), int(unsafe.Sizeof(w.moeTiles)), 6)
+	e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeGateUpMM[kind])
+	e.SetBuffer(gl.buf, gl.gu, 0)
+	e.SetBuffer(gl.buf, gl.guScale, 1)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.act, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeGateUp), int(unsafe.Sizeof(w.moeGateUp)), 5)
+	e.SetBuffer(w.list, 0, 6)
+	e.SetBuffer(w.tiles, 0, 7)
+	e.SetBuffer(w.wts, 0, 8)
+	e.Dispatch(metal.Size{X: 2 * c.intermediate / mmColumns, Y: tiles, Z: 1}, metal.Size{X: mmThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeDownMM[kind])
+	e.SetBuffer(gl.buf, gl.d, 0)
+	e.SetBuffer(gl.buf, gl.dScale, 1)
+	e.SetBuffer(w.act, 0, 2)
+	e.SetBuffer(w.moeOut, 0, 3)
+	e.SetBytes(unsafe.Pointer(&w.moeDown), int(unsafe.Sizeof(w.moeDown)), 5)
+	e.Dispatch(metal.Size{X: c.hidden / mmColumns, Y: tiles, Z: 1}, metal.Size{X: mmThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeCombine)
+	e.SetBuffer(w.moeOut, 0, 0)
+	e.SetBuffer(w.h, hOff, 3)
+	e.SetBuffer(w.attnParts, 0, 6)
+	e.Dispatch(metal.Size{X: c.hidden / mmColumns, Y: rows, Z: 1}, metal.Size{X: mmColumns, Y: 1, Z: 1})
 }
 
 // gemv encodes one projection: weights at wOff and scales at sOff in buf,
@@ -911,6 +1109,12 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 	g, c, e := w.g, w.g.cfg, &w.enc
 	qdim := c.heads * c.headDim
 	parts := c.hidden / mmColumns
+	// The partial sums the next layer's QKV reads: the down projection's,
+	// or the experts' (one per 16 rows).
+	qkvParts := parts
+	if c.experts > 0 {
+		qkvParts = c.hidden / 16
+	}
 	w.attn.pos = 0
 	w.perRow = uint32(c.intermediate / g.inter.block)
 	for i := range g.layers {
@@ -918,7 +1122,7 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		if i == 0 {
 			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.embedParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, 1)
 		} else {
-			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, parts)
+			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, qkvParts)
 		}
 		e.SetPipeline(g.qkRope)
 		e.SetBuffer(w.qkv, 0, 0)
@@ -946,6 +1150,10 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		}
 
 		w.mmDispatch(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, qdim, c.hidden, rows, 0)
+		if c.experts > 0 {
+			w.encodeMoE(gl, rows, 0, parts)
+			continue
+		}
 		w.mmDispatch(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, c.hidden, 2*c.intermediate, rows, parts)
 
 		if !g.noInter {
@@ -988,6 +1196,10 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
 
 			w.gemv(g.o, gl.buf, gl.o, gl.oScale, w.ctx, 0, w.h, hOff, w.mlpParts, w.mlpParts, 0, &w.oArgs)
+			if c.experts > 0 {
+				w.encodeMoE(gl, 1, hOff, c.hidden/gpuRows(g.bits))
+				continue
+			}
 			w.gemv(g.gateup, gl.buf, gl.gu, gl.guScale, w.h, hOff, w.act, 0, w.mlpParts, w.mlpParts, 0, &w.guArgs)
 
 			if !g.noInter {
@@ -1004,7 +1216,7 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 }
 
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut} {
 		b.Release()
 	}
 }

@@ -25,6 +25,11 @@ const (
 	TinyMel        = "tinymel.gophonic"
 	// Qwen3 is the official Qwen/Qwen3-8B snapshot directory.
 	Qwen3 = "Qwen3-8B"
+	// Qwen3MoE is the official Qwen/Qwen3-30B-A3B-Instruct-2507 snapshot
+	// directory, and Qwen3MoEReference the post-final-norm state of its
+	// reference prompt from internal/qwen3lm/tools/moe_reference.py.
+	Qwen3MoE          = "Qwen3-30B-A3B-Instruct-2507"
+	Qwen3MoEReference = "qwen3-30b-a3b-reference.f32"
 	// Qwen3HelloReference is the BF16 PyTorch hidden state of "hello" that
 	// qwen3/tools/reference_hidden.py writes.
 	Qwen3HelloReference = "qwen3-8b-hello-reference.f32"
