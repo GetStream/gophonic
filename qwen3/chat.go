@@ -357,6 +357,22 @@ func (s *Session) Truncate(n int) error {
 	return nil
 }
 
+// Checkpoint marks the conversation.
+func (s *Session) Checkpoint() int { return len(s.ids) }
+
+// Restore returns the conversation to a mark from Checkpoint.
+func (s *Session) Restore(mark int) error {
+	if s.closed {
+		return chat.ErrClosed
+	}
+	if mark < 0 || mark > len(s.ids) {
+		return fmt.Errorf("qwen3: mark %d outside the conversation's %d tokens", mark, len(s.ids))
+	}
+	s.ids = s.ids[:mark]
+	s.reply = -1
+	return nil
+}
+
 // reserve makes the key and value store hold need tokens, growing it by
 // doubling up to limit.
 func (s *Session) reserve(need, limit int) error {

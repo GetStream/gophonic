@@ -64,6 +64,11 @@ type Session interface {
 	// to a token boundary), as when a listener interrupts spoken output
 	// and only part of it was heard.
 	Truncate(n int) error
+	// Checkpoint marks the conversation as it is; Restore returns to a
+	// mark, forgetting everything added since, as when a reply prepared
+	// speculatively is dropped. What stays evaluated is reused.
+	Checkpoint() int
+	Restore(mark int) error
 	Close() error
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/qwen3"
 	"github.com/GetStream/gophonic/qwen3asr"
+	"github.com/GetStream/gophonic/qwen3tts"
 	"github.com/GetStream/gophonic/smartturn"
 	"github.com/GetStream/gophonic/speech"
 	"github.com/GetStream/gophonic/tinymel"
@@ -25,6 +26,7 @@ func builtinFormats() []Format {
 	turns := []reflect.Type{reflect.TypeFor[speech.TurnDetector](), reflect.TypeFor[speech.AudioClassifier]()}
 	return []Format{
 		{Name: "qwen3-asr", Match: qwen3asr.IsModelDir, Open: openQwen3ASR, Provides: transcriber},
+		{Name: "qwen3-tts", Match: qwen3tts.IsModelDir, Open: openQwen3TTS, Provides: []reflect.Type{reflect.TypeFor[speech.Synthesizer]()}},
 		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3, Provides: []reflect.Type{reflect.TypeFor[chat.Generator](), reflect.TypeFor[speech.ZeroShot]()}},
 		{Name: "whisper", Match: signature(whisper.BundleMagic), Open: openWhisper, Provides: transcriber},
 		{Name: "smart-turn", Match: signature(smartturn.BundleMagic), Open: openSmartTurn, Provides: turns},
@@ -40,6 +42,17 @@ func openQwen3ASR(path string, opts Options) (*Model, error) {
 	release := func() error { m.Release(); return nil }
 	return Provide(NewModel("qwen3-asr", release), func() (speech.Transcriber, error) {
 		return qwen3asr.NewTranscriber(m, opts.Threads)
+	}), nil
+}
+
+func openQwen3TTS(path string, opts Options) (*Model, error) {
+	m, err := qwen3tts.Load(path, qwen3tts.Options{Threads: opts.Threads})
+	if err != nil {
+		return nil, err
+	}
+	release := func() error { m.Release(); return nil }
+	return Provide(NewModel("qwen3-tts", release), func() (speech.Synthesizer, error) {
+		return qwen3tts.NewSynthesizer(m)
 	}), nil
 }
 
