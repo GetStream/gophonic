@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -62,5 +63,45 @@ func BenchmarkEncoder(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// BenchmarkDecoder measures the decoder on the JFK clip's prompt: a fresh
+// prefill of all 158 tokens, and one decoding step with its logits.
+func BenchmarkDecoder(b *testing.B) {
+	for _, format := range []string{FormatF16, FormatGPU} {
+		m := loadModel(b, format)
+		tr, err := NewTranscriber(m, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		var dst speech.Transcript
+		if err := tr.Transcribe(context.Background(), clipPCM(b, "jfk"), speech.Options{}, &dst); err != nil {
+			b.Fatal(err)
+		}
+		embeds := qwen3lm.Embeds{Token: m.ids.audioPad, Rows: tr.embeds}
+		kv, err := m.eval.NewPrefixKV(len(tr.ids) + 64)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(format+"/prefill", func(b *testing.B) {
+			for b.Loop() {
+				if err := m.eval.HiddenLastExtendEmbedInto(kv, 0, tr.ids, embeds, tr.hidden, tr.lm); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(format+"/token", func(b *testing.B) {
+			step := tr.gen[:1]
+			for b.Loop() {
+				if err := m.eval.HiddenLastExtendInto(kv, len(tr.ids), step, tr.hidden, tr.lm); err != nil {
+					b.Fatal(err)
+				}
+				if err := m.eval.LogitsInto(tr.hidden, tr.logits, tr.lm); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		tr.Close()
 	}
 }

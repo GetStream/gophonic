@@ -15,10 +15,12 @@
 // recognition with context text, and cuts audio longer than 20 minutes at
 // quiet points.
 //
-// The encoder runs in FP32 on the CPU. The decoder runs on the Apple GPU
-// with int8 weights in blocks of 32 (FormatGPU, the default where a Metal
-// GPU is present) or on the CPU's matrix units with every BF16 weight kept
-// exactly (FormatF16). Warm transcriptions allocate nothing.
+// With FormatGPU, the default where a Metal GPU is present, both run on the
+// Apple GPU: the encoder with every BF16 weight exact, the decoder with int8
+// weights in blocks of 32. With FormatF16 both run on the CPU's SME matrix
+// units with every BF16 weight exact. The encoders round activations to FP16
+// for their matrix products, which accumulate in FP32. Warm transcriptions
+// allocate nothing.
 //
 // Outputs match the official qwen-asr package: the tests compare features,
 // encoder rows, prompt ids, first-step logits, and transcripts with its FP32
