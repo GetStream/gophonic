@@ -903,8 +903,9 @@ func (c *Cascade) respond() {
 	var t, partial speech.Transcript
 	// The language model runs only a couple of pieces ahead of the voice:
 	// the voice synthesizes faster than real time, so the two alternate on
-	// the GPU instead of queueing behind each other, and the first audio
-	// waits for two tokens, not for a burst of them.
+	// the GPU instead of queueing behind each other. Until the first audio
+	// it writes only what the voice asks for, since the listener waits for
+	// that frame and not for the words after it.
 	const ahead = 2
 	pieces := make(chan string, ahead)
 	for {
@@ -1011,9 +1012,23 @@ func (c *Cascade) respond() {
 				c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
 			}
 		}
+		var (
+			asked  atomic.Int32             // pieces the synthesizer has asked for
+			wanted = make(chan struct{}, 1) // signals asked
+			sound  = make(chan struct{})    // closed at the first audio, or when the voice ends
+			once   sync.Once
+			sent   int32 // pieces written
+		)
+		sounded := func() { once.Do(func() { close(sound) }) }
 		done := make(chan error, 1)
 		go func() {
+			defer sounded()
 			done <- c.cfg.Synthesizer.Speak(ctx, c.cfg.Voice, func() ([]byte, error) {
+				asked.Add(1)
+				select {
+				case wanted <- struct{}{}:
+				default:
+				}
 				select {
 				case p, ok := <-pieces:
 					if !ok {
@@ -1028,6 +1043,7 @@ func (c *Cascade) respond() {
 					trace("first audio")
 				}
 				c.play.write(pcm)
+				sounded()
 				return ctx.Err()
 			})
 		}()
@@ -1051,10 +1067,22 @@ func (c *Cascade) respond() {
 				}
 				select {
 				case pieces <- spoken:
-					return nil
+					sent++
 				case <-ctx.Done():
 					return ctx.Err()
 				}
+				// Before the first audio, wait until it sounds or the voice
+				// needs more text.
+				for asked.Load() <= sent {
+					select {
+					case <-sound:
+						return nil
+					case <-wanted:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				return nil
 			})
 		} else {
 			reply.WriteString(text)
