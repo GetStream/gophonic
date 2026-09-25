@@ -57,8 +57,9 @@ flowchart TB
 - **The root package only dispatches.** `gophonic.Open` asks each
   registered `Format` whether it matches the path and lets the first one load
   it; the built-in formats are one table in `formats.go`, and `Register` adds
-  third-party ones. The loaded `Model` hands back lanes typed as `speech`
-  interfaces. The package also hosts the turn detectors' standalone frontend,
+  third-party ones. A loaded `Model` provides lanes of the interface types
+  its format declares, `speech`'s or any other, so a new capability needs no
+  change to gophonic. The package also hosts the turn detectors' standalone frontend,
   which external backends reuse.
 - **Numerical work is shared, not duplicated.** One FFT, one mel-bank
   builder, and one resampling filter serve every model; one Qwen3 core serves

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/GetStream/gophonic/qwen3"
 	"github.com/GetStream/gophonic/qwen3asr"
 	"github.com/GetStream/gophonic/smartturn"
 	"github.com/GetStream/gophonic/speech"
@@ -19,6 +20,7 @@ import (
 func builtinFormats() []Format {
 	return []Format{
 		{Name: "qwen3-asr", Match: qwen3asr.IsModelDir, Open: openQwen3ASR},
+		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3},
 		{Name: "whisper", Match: signature(whisper.BundleMagic), Open: openWhisper},
 		{Name: "smart-turn", Match: signature(smartturn.BundleMagic), Open: openSmartTurn},
 		{Name: "tinymel", Match: signature(tinymel.BundleMagic), Open: openTinyMel},
@@ -30,32 +32,56 @@ func openQwen3ASR(path string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewTranscriptionModel("qwen3-asr", func() (speech.Transcriber, error) {
+	release := func() error { m.Release(); return nil }
+	return Provide(NewModel("qwen3-asr", release), func() (speech.Transcriber, error) {
 		return qwen3asr.NewTranscriber(m, opts.Threads)
-	}, func() error { m.Release(); return nil }), nil
+	}), nil
 }
+
+// A Qwen3 language model answers questions about text: it provides
+// speech.ZeroShot, whose classifiers are prepared multiple-choice questions.
+func openQwen3(path string, opts Options) (*Model, error) {
+	m, err := qwen3.Open(path, qwen3.Options{Threads: opts.Threads})
+	if err != nil {
+		return nil, err
+	}
+	return Provide(NewModel("qwen3", m.Close), func() (speech.ZeroShot, error) {
+		return zeroShot{m}, nil
+	}), nil
+}
+
+// zeroShot is one lane of a shared Qwen3 model, which serializes its calls;
+// closing the lane leaves the model open.
+type zeroShot struct{ m *qwen3.Model }
+
+func (z zeroShot) Classifier(question string, labels []string) (speech.TextClassifier, error) {
+	return z.m.Classifier(question, labels)
+}
+
+func (zeroShot) Close() error { return nil }
 
 func openWhisper(path string, opts Options) (*Model, error) {
 	m, err := whisper.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return NewTranscriptionModel("whisper", func() (speech.Transcriber, error) {
+	return Provide(NewModel("whisper", nil), func() (speech.Transcriber, error) {
 		if opts.Threads == 0 {
 			return whisper.NewTranscriber(m)
 		}
 		return whisper.NewTranscriberWithWorkers(m, opts.Threads)
-	}, nil), nil
+	}), nil
 }
 
+// The turn detectors are also binary audio classifiers.
 func openSmartTurn(path string, _ Options) (*Model, error) {
 	m, err := smartturn.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return NewTurnDetectionModel("smart-turn", func() (speech.TurnDetector, error) {
-		return smartturn.NewSession(m)
-	}, nil), nil
+	model := NewModel("smart-turn", nil)
+	Provide(model, func() (speech.TurnDetector, error) { return smartturn.NewSession(m) })
+	return Provide(model, func() (speech.AudioClassifier, error) { return smartturn.NewSession(m) }), nil
 }
 
 func openTinyMel(path string, opts Options) (*Model, error) {
@@ -64,9 +90,9 @@ func openTinyMel(path string, opts Options) (*Model, error) {
 		return nil, err
 	}
 	helpers := max(opts.Threads-1, 0)
-	return NewTurnDetectionModel("tinymel", func() (speech.TurnDetector, error) {
-		return tinymel.NewSession(m, helpers)
-	}, nil), nil
+	model := NewModel("tinymel", nil)
+	Provide(model, func() (speech.TurnDetector, error) { return tinymel.NewSession(m, helpers) })
+	return Provide(model, func() (speech.AudioClassifier, error) { return tinymel.NewSession(m, helpers) }), nil
 }
 
 // signature matches files that start with the eight bytes magic.

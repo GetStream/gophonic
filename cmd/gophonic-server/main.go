@@ -19,6 +19,7 @@ import (
 
 	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/internal/httpserver"
+	"github.com/GetStream/gophonic/speech"
 )
 
 func main() {
@@ -36,8 +37,8 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	if model.Kind() != gophonic.Transcription {
-		fatal(fmt.Errorf("%s is a %s model; the server needs a transcription model", model.Name(), model.Kind()))
+	if !gophonic.Supports[speech.Transcriber](model) {
+		fatal(fmt.Errorf("%s does not transcribe; the server needs a transcription model", model.Name()))
 	}
 	handler, err := httpserver.NewServer(model.NewTranscriber, *workers, *maxSeconds)
 	if err != nil {

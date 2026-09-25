@@ -39,7 +39,6 @@ import (
 	"github.com/thesyncim/gopus"
 
 	"github.com/GetStream/gophonic"
-	"github.com/GetStream/gophonic/qwen3"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -87,12 +86,15 @@ func main() {
 		log.Printf("chat is off: %v", err)
 		chat = nil
 	}
-	llm, err := qwen3.Open(*llmPath, qwen3.Options{})
+	// Any model that answers questions about text will do; Qwen3 does.
+	llm, err := gophonic.Open(*llmPath, gophonic.Options{})
 	check(err)
 	defer llm.Close()
-	question, err := llm.Question("What is the speaker's mood?", moods)
+	zeroShot, err := gophonic.Lane[speech.ZeroShot](llm)
 	check(err)
-	judge := &analyst{question: question, probs: make([]float32, len(moods)), chat: chat}
+	mood, err := zeroShot.Classifier("What is the speaker's mood?", moods)
+	check(err)
+	judge := &analyst{mood: mood, probs: make([]float32, len(moods)), chat: chat}
 	join, err := call.Join(ctx, rtc.WithOnTrack(rtc.SubscriberFunc(func(t rtc.OnTrackReceived) {
 		if t.TrackType == sfu_models.TrackType_TRACK_TYPE_AUDIO {
 			go listen(ctx, t, turn, stt, judge)
@@ -213,14 +215,15 @@ func listen(ctx context.Context, t rtc.OnTrackReceived, turn, stt *gophonic.Mode
 	}
 }
 
-// analyst judges each finished turn with Qwen3-8B: one prefill of the turn
-// against a prepared zero-shot question, then a softmax over the answer
-// letters. One Question serves every speaker, one turn at a time.
+// analyst judges each finished turn with a zero-shot text classifier: for
+// Qwen3-8B, one prefill of the turn against a prepared multiple-choice
+// question, then a softmax over the answer letters. One classifier serves
+// every speaker, one turn at a time.
 type analyst struct {
-	mu       sync.Mutex
-	question *qwen3.Question
-	probs    []float32
-	chat     *chatChannel // nil when the call has no chat
+	mu    sync.Mutex
+	mood  speech.TextClassifier
+	probs []float32
+	chat  *chatChannel // nil when the call has no chat
 }
 
 // moods are the answers Qwen3-8B chooses between. Asking for the speaker's
@@ -234,7 +237,7 @@ var (
 func (a *analyst) analyze(ctx context.Context, speaker, language, text string, turn float32) {
 	a.mu.Lock()
 	start := time.Now()
-	err := a.question.Choose(ctx, text, a.probs)
+	err := a.mood.ClassifyInto(ctx, text, a.probs)
 	best := slices.Index(a.probs, slices.Max(a.probs))
 	feeling := fmt.Sprintf("%s %s %.2f (Qwen3-8B, %v)", faces[best], moods[best], a.probs[best],
 		time.Since(start).Round(time.Millisecond))

@@ -1,8 +1,11 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-// Command gophonic transcribes an audio file or predicts whether its speaker
-// has finished their turn, with any model gophonic.Open recognizes.
+// Command gophonic runs any model gophonic.Open recognizes on one input: it
+// transcribes an audio file, predicts whether its speaker has finished their
+// turn, or classifies it, according to what the model provides. A language
+// model classifies the text argument instead, answering -question with one
+// of -labels.
 package main
 
 import (
@@ -12,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/internal/audiofile"
@@ -20,14 +24,17 @@ import (
 )
 
 func main() {
-	modelPath := flag.String("model", "", "model: a converted .gophonic bundle (Whisper, Smart Turn, TinyMelNet) or a Qwen3-ASR checkpoint directory")
+	modelPath := flag.String("model", "", "model: a Qwen3-ASR or Qwen3 checkpoint directory, or a converted .gophonic bundle (Whisper, Smart Turn, TinyMelNet)")
+	question := flag.String("question", "", "for a language model: the question to answer about the text argument")
+	labels := flag.String("labels", "", "for a language model: the comma-separated answers to choose from")
 	responseFormat := flag.String("response-format", "json", "transcript output: json, text, verbose_json, srt, or vtt")
 	wordTimestamps := flag.Bool("word-timestamps", false, "include word timestamps in verbose_json output")
 	language := flag.String("language", "", "spoken language as a code or English name (default: detect)")
 	contextText := flag.String("context", "", "text that primes transcription, such as names or terms")
 	threads := flag.Int("threads", 0, "CPU workers per lane (0: model default)")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: gophonic -model PATH [flags] audio.wav|audio.ogg|audio.opus\n\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: gophonic -model PATH [flags] audio.wav|audio.ogg|audio.opus\n"+
+			"       gophonic -model LANGUAGE-MODEL -question Q -labels A,B,... text\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -52,11 +59,29 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	if gophonic.Supports[speech.ZeroShot](model) {
+		classifyText(model, *question, strings.Split(*labels, ","), flag.Arg(0))
+		return
+	}
 	pcm, rate, channels, err := audiofile.ReadPath(flag.Arg(0))
 	if err != nil {
 		fatal(err)
 	}
-	if model.Kind() == gophonic.TurnDetection {
+	if !gophonic.Supports[speech.Transcriber](model) && !gophonic.Supports[speech.TurnDetector](model) &&
+		gophonic.Supports[speech.AudioClassifier](model) {
+		classifier, err := gophonic.Lane[speech.AudioClassifier](model)
+		if err != nil {
+			fatal(err)
+		}
+		defer classifier.Close()
+		probs := make([]float32, len(classifier.Labels()))
+		if err := classifier.ClassifyInto(pcm, rate, channels, probs); err != nil {
+			fatal(err)
+		}
+		printClasses(classifier.Labels(), probs)
+		return
+	}
+	if gophonic.Supports[speech.TurnDetector](model) {
 		detector, err := model.NewTurnDetector()
 		if err != nil {
 			fatal(err)
@@ -121,4 +146,41 @@ func main() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "gophonic:", err)
 	os.Exit(1)
+}
+
+// classifyText answers question about text with one of labels.
+func classifyText(model *gophonic.Model, question string, labels []string, text string) {
+	if question == "" || len(labels) < 2 {
+		fatal(fmt.Errorf("%s answers questions about text: give -question and at least two -labels", model.Name()))
+	}
+	zeroShot, err := gophonic.Lane[speech.ZeroShot](model)
+	if err != nil {
+		fatal(err)
+	}
+	defer zeroShot.Close()
+	classifier, err := zeroShot.Classifier(question, labels)
+	if err != nil {
+		fatal(err)
+	}
+	defer classifier.Close()
+	probs := make([]float32, len(labels))
+	if err := classifier.ClassifyInto(context.Background(), text, probs); err != nil {
+		fatal(err)
+	}
+	printClasses(labels, probs)
+}
+
+// printClasses writes each label's probability, in order, as JSON.
+func printClasses(labels []string, probs []float32) {
+	type class struct {
+		Label       string  `json:"label"`
+		Probability float32 `json:"probability"`
+	}
+	classes := make([]class, len(labels))
+	for i := range labels {
+		classes[i] = class{labels[i], probs[i]}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(classes); err != nil {
+		fatal(err)
+	}
 }

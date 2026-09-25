@@ -17,10 +17,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 
 	"github.com/GetStream/gophonic/internal/qwen3lm"
+	"github.com/thesyncim/vibejson"
 )
 
 const (
@@ -98,6 +101,19 @@ func (o Options) threads() int {
 		n = runtime.NumCPU()
 	}
 	return max(1, min(n, runtime.GOMAXPROCS(0), defaultMaxThreads))
+}
+
+// IsModelDir reports whether dir holds a Qwen3 checkpoint: a config.json
+// whose model_type is qwen3.
+func IsModelDir(dir string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return false
+	}
+	var c struct {
+		ModelType string `json:"model_type"`
+	}
+	return vibejson.Unmarshal(raw, &c) == nil && c.ModelType == "qwen3"
 }
 
 // Open loads an official Qwen3 safetensors snapshot directory, such as
