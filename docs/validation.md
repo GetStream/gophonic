@@ -1,9 +1,9 @@
 # Numerical and allocation validation
 
 The tests keep the model checkpoint, input fixture, and expected execution
-semantics explicit. Most tests run without weights. Tests needing a model skip
-unless a bundle is supplied through the corresponding environment variable;
-they never download one.
+semantics explicit. Most tests run without weights. Tests needing a model find
+it by name in [`models/`](../models) (or `$GOPHONIC_MODELS`) and skip when it is
+absent; they never download one.
 
 ## Run the gates
 
@@ -14,13 +14,12 @@ CGO_ENABLED=0 go test ./...
 CGO_ENABLED=0 GOEXPERIMENT=simd go test ./...
 ```
 
-Run with converted models to include model-level parity and allocation
+Fetch the official models to include model-level parity and allocation
 checks:
 
 ```sh
-export GOPHONIC_TEST_MODEL="$PWD/smart-turn-v3.2.gophonic"
-export GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic"
-export GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic"
+tools/fetch-models.sh               # Whisper, Smart Turn, TinyMelNet
+tools/fetch-models.sh qwen3 clm     # Qwen3-8B, its BF16 reference vector, the CLM head
 
 go test ./...
 GOEXPERIMENT=simd go test ./...
@@ -51,21 +50,24 @@ built with `CGO_ENABLED=0`.
 | TinyMelNet GRU | ONNX equation reference, gate/direction semantics, full saved GRU outputs within `2e-5` |
 | SIMD kernels | Scalar comparisons, tails/ranges, quantization rounding and saturation |
 | Reused workspaces | Warm public prediction allocation assertions and benchmark allocation reports |
-| Built-in session adapters | Direct-call prediction parity, nil/closed lifecycle checks, warm allocations through `AudioSession` |
+| Built-in lanes | Direct-call prediction parity, nil/closed lifecycle checks, warm allocations through `speech.TurnDetector` and `speech.Transcriber` |
+| Model dispatch | `gophonic.Open` format detection, unknown formats, Whisper transcription with words through `speech.Transcriber` |
+| Mel frontends | One FFT and mel bank for every model: direct-DFT comparison in float32 and float64, bitwise sharded-versus-serial output |
+| Qwen3 core | Every weight format and kernel path against a float64 forward pass over random checkpoints (`internal/qwen3lm/lmtest`), prefix extension and shared prefixes, tokenizer goldens from the official Hugging Face tokenizer |
 | Whisper bundles | Official checkpoint SHA-256, exact tensor manifest and shapes for the model's dimensions, bundle checksum, finite FP32 validation |
 | Whisper whole-file frontend | Pinned PyTorch JFK and long-file mel samples; separate single-window full-array oracle |
 | Whisper encoder and decoder | Pinned PyTorch stem, all four encoder blocks, final encoder, prefix/next-token logits, cache reset, and JFK token sequence; scalar/SIMD worker parity |
 | Whisper full transcription | Pinned OpenAI JFK, silence, and JFK plus 35 seconds of silence transcripts; warm allocation checks |
 
-An external-package conformance test also implements `AudioSession` using only
-the standalone Whisper frontend. Its model head is a test stand-in; this proves
+An external-package conformance test also implements `speech.TurnDetector`
+using only the standalone Whisper frontend. Its model head is a test stand-in; this proves
 that another package can implement the interface without access to internal
 model types, not that a third model architecture has been ported.
 
 “Zero features” means an all-zero input tensor. It is distinct from the
 frontend's representation of silent PCM, which is `-1.5` in every feature bin.
 
-The TinyMelNet manifest at `testdata/tinymel_oracle.json` records the source
+The TinyMelNet manifest at `tinymel/testdata/oracle.json` records the source
 checkpoint SHA-256, tensor shapes, stage hashes, quantization metadata, and
 oracle runtime. The checked-in oracle was generated with ONNX Runtime 1.30.0,
 `CPUExecutionProvider`, sequential graph execution, eight intra-op threads, and

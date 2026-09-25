@@ -83,7 +83,7 @@ scoring, and ranking. It also includes an optional gate against the official
 PyTorch checkpoint's projected vectors and scores:
 
 ```sh
-GOPHONIC_CLM_BUNDLE=CLM_v0.1-8B.gclm go test ./clm -run TestReferenceHeadOfficialCheckpointOracle
+go test ./clm -run TestReferenceHeadOfficialCheckpointOracle   # with models/CLM_v0.1-8B.gclm
 ```
 
 That oracle pins the reference checkpoint SHA-256. The standalone head package

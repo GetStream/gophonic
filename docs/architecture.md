@@ -1,33 +1,67 @@
-# Runtime architecture
+# Architecture
 
-Gophonic separates an extensible audio boundary from specialized model execution.
-An application can use `AudioSession` for the two built-in models or another
-audio turn-detector architecture. Each backend owns its loader, preprocessing,
-operator sequence, and scratch. Built-in converters extract audited weights;
-there is no runtime graph interpreter or operator registry.
+gophonic has three layers. Applications program against model-independent
+interfaces; each model family lives in its own package; the numerical work
+those packages share lives in internal packages. There is no runtime graph
+interpreter or operator registry: each model is a specialized Go
+implementation of one audited architecture.
 
 ```mermaid
-flowchart LR
-    A[PCM] --> B[AudioSession]
-    B --> C[Built-in session]
-    B --> D[External backend session]
-    C --> E[Whisper frontend]
-    E --> F[Specialized model graph]
-    D --> G[Backend frontend and graph]
-    F --> H[Prediction]
-    G --> H
+flowchart TB
+    subgraph app [Applications, cmd/gophonic, cmd/gophonic-server]
+    end
+    app --> open[gophonic.Open]
+    app --> speech[speech: Transcriber, TurnDetector, Transcript, Resampler]
+    open --> whisper
+    open --> smartturn
+    open --> tinymel
+    whisper & smartturn & tinymel -.implement.-> speech
+    qwen3 --> qwen3lm
+    clm -.embeddings from.-> qwen3
+    subgraph models [Model packages]
+        whisper
+        smartturn
+        tinymel
+        qwen3
+        clm
+    end
+    subgraph internal [internal]
+        mel[mel: log-mel frontends]
+        resample[resample: 16 kHz filter]
+        qwen3lm[qwen3lm: Qwen3 transformer]
+        kernels[whispergemm, q8gemm, q8gemv, vec, metal]
+        safetensors
+    end
+    whisper --> mel
+    smartturn --> mel
+    tinymel --> mel
+    mel --> resample
+    speech --> resample
+    qwen3lm --> safetensors
+    whisper & smartturn & tinymel & qwen3lm --> kernels
 ```
 
-`AudioSession` exposes PCM prediction and close operations. Concrete built-in
-sessions pair a shared immutable model with a private workspace and delegate to
-the existing specialized code. Interface dispatch occurs at the prediction
-boundary; inner kernels keep concrete types and their current SIMD dispatch.
+## Dependency rules
 
-Full speech-to-text uses the separate `whisper` package. Its `Transcriber`
-owns a whole-file mel workspace, encoder scratch, incremental decoder KV
-caches, a greedy token policy, and BPE tokenizer. The immutable `whisper.Model`
-is shareable across workers; each transcriber and its persistent CPU helpers
-belong to one concurrent lane. This text path is separate from `AudioSession`.
+- **`speech` is a leaf.** It holds the interfaces, result types, the language
+  table, and the resampler, and imports no model code, so any package,
+  including a third-party backend, can implement its interfaces.
+- **Model packages never import each other.** Whatever two models share (a
+  frontend, a filter, a kernel, a transformer core) lives in `internal`.
+- **The root package only dispatches.** `gophonic.Open` reads a file's
+  signature and hands back lanes typed as `speech` interfaces. It also hosts
+  the turn detectors' standalone frontend, which external backends reuse.
+- **Numerical work is shared, not duplicated.** One FFT, one mel-bank
+  builder, and one resampling filter serve every model; one Qwen3 core serves
+  every Qwen3 model.
+
+## Transcription
+
+`whisper.Transcriber` owns a whole-file mel workspace, encoder scratch,
+incremental decoder key/value caches, a greedy token policy, and the BPE
+tokenizer. The immutable `whisper.Model` is shared by any number of
+transcribers; each transcriber and its persistent CPU helpers belong to one
+lane. `Transcribe` adapts it to `speech.Transcriber`.
 
 ```mermaid
 flowchart LR
@@ -41,43 +75,21 @@ flowchart LR
 
 The decoder borrows the encoder workspace's persistent worker executor.
 Matrix and row operations publish a generation to each helper, use atomic
-completion, and write disjoint output ranges. No worker pool is created per
-token. `internal/whispergemm` holds Apple SME, Go 1.27 ARM64 SIMD, and scalar kernels;
-model loading and first weight packing occur outside warm inference.
+completion, and write disjoint output ranges; no worker pool is created per
+token. `internal/whispergemm` holds the Apple SME, Go 1.27 SIMD, and scalar
+kernels. Model loading and first weight packing happen outside warm
+inference. [Whisper design](whisper-design.md) covers the graph and kernels.
 
-An external backend can reuse `WhisperFeatureWorkspace` when its model expects
-the same log-mel representation, or supply its own frontend. Its graph does not
-need to resemble either built-in model. See the
-[backend adapter example](api.md#add-an-audio-backend).
+## Turn detection
 
-The direct built-in `PredictFeaturesInto` methods start at the log-mel tensor.
-WAV and Ogg Opus decoding belong to the CLI; applications pass PCM directly.
-
-## Frontend
-
-`features.go` implements the built-in models' shared frontend;
-`WhisperFeatureWorkspace` exposes that frontend independently of model scratch:
-
-1. Average stereo channels, resample when necessary, and right-align an
-   eight-second window of 128,000 samples.
-2. Normalize the waveform, then apply centered reflection padding and a Hann
-   window.
-3. Compute the 400-point power STFT with a 160-sample hop. A mixed-radix
-   `2×2×2×2×5×5` FFT produces 800 retained frames.
-4. Apply the 80-band mel filterbank, logarithm, dynamic-range floor, and output
-   normalization to obtain `[80,800]` float32 features.
-
-The transform uses float64 scratch to preserve the frontend's numerical
-behavior. TinyMelNet helpers process distinct FFT frame ranges with private
-real/imaginary arrays, then distinct mel rows. Per-row accumulation order stays
-the same as the serial implementation. A global maximum determines the final
-log-mel floor, so the output step waits for all row maxima.
-
-The resampler is a 32-tap windowed-sinc implementation with cached polyphase
-coefficients. It is separate from the 16 kHz Whisper oracle coverage; see
-[validation limits](validation.md#what-the-tests-do-not-establish).
-
-## Model graphs
+```mermaid
+flowchart LR
+    A[PCM, 8–96 kHz, mono or stereo] --> R[Resample and right-align 8 s]
+    R --> N[Normalize waveform]
+    N --> F[80-band log-mel, float64]
+    F --> G[Smart Turn or TinyMelNet graph]
+    G --> H[speech.Prediction]
+```
 
 Smart Turn uses two convolutions, positional embeddings, four Whisper encoder
 layers, attention pooling, and a classifier. Encoder width is 384, with six
@@ -89,74 +101,104 @@ TinyMelNet uses a stride-two convolution stem, three depthwise-separable
 convolution blocks, a bidirectional GRU, attention pooling, and a classifier.
 The convolution channels are 192; the recurrent sequence has 100 steps and 128
 hidden values per direction. Dynamic affine quantization preserves the ONNX
-scale, zero-point, saturation, and ties-to-even rounding rules. Integer products
-accumulate into `int32`; the graph returns to floating point where specified.
-The GRU directions use independent state and run concurrently when helpers are
-available. TinyMelNet's GELU uses the standard-library error function.
+scale, zero-point, saturation, and ties-to-even rounding rules. Integer
+products accumulate into `int32`; the graph returns to floating point where
+specified. The GRU directions run concurrently when helpers are available.
 
-Weights become immutable after loading. TinyMelNet pre-packs convolution
-weights into kernel-friendly layouts during setup. Prediction alternates
-between preallocated activation buffers, reuses quantization storage, and
-performs layout conversion into dedicated scratch.
+Weights are immutable after loading. TinyMelNet pre-packs convolution weights
+into kernel-friendly layouts during setup; prediction alternates between
+preallocated activation buffers and reuses quantization storage.
+
+## Frontends
+
+`internal/mel` implements every log-mel frontend on one 400-point
+mixed-radix (`2×2×2×2×5×5`) FFT, written once for float32 and float64, and
+one Slaney mel-bank builder for any number of bands. All frontends use a
+periodic Hann window, centered reflection padding, a 160-sample hop, the
+power spectrum, and a dropped final STFT frame, then Whisper's 1e-10 log
+floor, max-minus-8 dynamic floor, and `(log10(mel)+4)/4` scaling.
+
+| Frontend | Precision | Used by | Input and output |
+| --- | --- | --- | --- |
+| `mel.Turn` | float64 | Smart Turn, TinyMelNet, `ExtractWhisperFeaturesInto` | Last 8 s at 8–96 kHz, normalized, `[80,800]` |
+| `mel.Window` | float32 | Whisper windows | First 30 s at 16 kHz, `[bands,3000]` |
+| `mel.Spectrogram` | float32 | Whisper whole-file | Any length plus configurable silence, `[bands,frames]` |
+
+`mel.Turn` exposes its stages (`Normalize`, `PowerFrames`, `MelRows`,
+`LogMelRows`, `Finish`) so TinyMelNet's helpers can split FFT frames and mel
+rows across goroutines with private FFT scratch; each value is computed by the
+same operations as the serial pass, so the output does not depend on the
+helper count. `mel.Window` shards across a `whispergemm.Executor` and, on SME
+machines, computes the STFT and mel projection as matrix products: the frame
+matrix is the padded signal read with a 160-sample row stride.
+
+`internal/resample` builds the 32-tap Hann-windowed sinc polyphase filter that
+brings PCM to 16 kHz. `speech.Resampler` applies it to whole recordings;
+`mel.Turn` applies it only to the eight-second window it keeps.
+
+## Qwen3
+
+`internal/qwen3lm` is the Qwen3 dense transformer: the safetensors loader and
+weight formats (exact FP16, rotated int8, GPU int8 and 4-bit with optional
+GPTQ rounding), the byte-level BPE tokenizer, and a batched forward pass with
+stored key/value prefixes on SME tiles, portable kernels, or the GPU through
+`internal/metal`. `qwen3` builds its text tasks on it (embeddings, zero-shot
+questions, growing contexts, the exact embedding cache) and re-exports the
+low-level types. Its random-checkpoint oracle, `internal/qwen3lm/lmtest`,
+writes small Qwen3 checkpoints and evaluates them with a float64 forward
+pass for the tests of every package on the core. The
+[qwen3 README](../qwen3/README.md) and the
+[performance report](clm-performance.md) describe the kernels and results.
 
 ## SIMD dispatch
 
-`GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and AMD64. ARM64 also
-uses Go 1.27's 128-bit NEON operations through `simd/archsimd` for TinyMelNet
-quantization, dense and depthwise integer convolutions, mel-layout conversion,
-and selected GRU projection tiles. TinyMelNet's integer stages use scalar Go
-fallbacks on AMD64; other architectures use scalar Go kernels throughout.
+`GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and AMD64 through Go
+1.27's `simd/archsimd` intrinsics: the shared dot products in `internal/vec`,
+TinyMelNet's quantization, dense and depthwise integer convolutions,
+mel-layout conversion, and GRU projection tiles, and Qwen3's elementwise
+stages. TinyMelNet's integer stages use scalar Go on AMD64; other
+architectures use scalar Go throughout. SME kernels are Go assembly selected
+at run time when the CPU reports SME.
 
-These are Go compiler intrinsics expressed in Go source. SIMD support is
-experimental in Go 1.27, so changing the toolchain requires rebuilding and
-checking the numerical and performance gates. The development performance
-numbers are for ARM64; they do not establish AMD64 speed.
+SIMD support is experimental in Go 1.27, so changing the toolchain requires
+rebuilding and checking the numerical and performance gates. The development
+performance numbers are for ARM64; they do not establish AMD64 speed.
 [Go 1.27 SIMD documentation](https://go.dev/doc/go1.27).
 
 ## Concurrency and ownership
 
-For built-in sessions, the model is shared read-only and one session owns one
-workspace. A caller may also manage the workspace directly. Each helper
-has a fixed identity and a private completion signal. TinyMelNet helpers also
-have private FFT scratch.
-A dispatched stage has one job descriptor that stays unchanged until all
-helpers finish. Output ranges do not overlap; the caller participates in the
-same partitioned work.
+A model is shared read-only; a lane or workspace owns its scratch and
+helpers. Each helper has a fixed identity and a private completion signal. A
+dispatched stage has one job descriptor that stays unchanged until all
+helpers finish, output ranges do not overlap, and the caller works on its own
+share of the same partition.
 
-Persistent helpers use channels to wait for work and report completion. Idle
-workers block. The caller waits at data dependencies before republishing the
-job or reusing a buffer. This is a blocking channel protocol, with no library
-global work queue or shared atomic completion counter.
-
-TinyMelNet fuses work when the same lane can consume its own output immediately:
-convolution plus GELU, and a mel row plus its logarithm. This removes whole
-dispatch/completion rounds while retaining each lane's output range. Reduction
-and tensor dependencies still have explicit barriers.
-
-The design minimizes shared mutable ownership rather than duplicating the
-model or every tensor for each helper. Read-only inputs and disjoint output
-ranges remain in common backing arrays. Numerical reduction order is preserved
-where it affects quantization or recurrence.
+TinyMelNet fuses work when a lane can consume its own output immediately
+(convolution plus GELU, a mel row plus its logarithm), removing whole
+dispatch rounds while keeping each lane's output range. Reductions keep
+explicit barriers, and numerical reduction order is preserved where it
+affects quantization or recurrence.
 
 ## Source map
 
-| Concern | Main files |
+| Concern | Location |
 | --- | --- |
-| PCM session interface and built-in adapters | `session.go` |
-| Standalone Whisper frontend API | `whisper_features.go` |
-| PCM, resampling, FFT, mel | `features.go` |
-| Smart Turn weights and graph | `model.go`, `inference.go` |
-| Smart Turn scratch and workers | `workspace.go`, `parallel.go` |
-| TinyMelNet weights and graph | `tinymel_model.go`, `tinymel_inference.go` |
-| TinyMelNet scratch and workers | `tinymel_workspace.go` |
-| Quantization and layouts | `tinymel_quant*`, `tinymel_mel_quant*`, `tinymel_conv_pack.go` |
-| SIMD kernels and dispatch | `*_simd.go`, `*_dispatch_*.go` |
-| Recurrent math | `tinymel_gru*` |
-| Offline conversion | `tools/onnx_to_gophonic.py`, `tools/tinymel_to_gophonic.py` |
-| File decoding and JSON CLI | `cmd/gophonic/` |
-| Whisper bundles, audio, encoder, decoder, tokenizer, transcription | `whisper/` |
-| Whisper SME, NEON, and scalar GEMM/GEMV kernels, worker executor | `internal/whispergemm/` |
-| Whisper checkpoint and oracle tools | `tools/whisper_pt_to_gophonic.py`, `tools/whisper_oracle.py` |
+| Model-independent interfaces, transcripts, languages, resampler | `speech/` |
+| Format detection and lanes; standalone turn frontend | `gophonic.go`, `features.go` |
+| Log-mel frontends, FFT, mel banks | `internal/mel/` |
+| 16 kHz polyphase filter | `internal/resample/` |
+| Whisper bundles, encoder, decoder, tokenizer, transcription | `whisper/` |
+| Smart Turn weights, graph, scratch, workers | `smartturn/` |
+| TinyMelNet weights, graph, quantization, GRU, workers | `tinymel/` |
+| Qwen3 text tasks and cache | `qwen3/` |
+| Qwen3 transformer, loader, tokenizer, GPU, GPTQ | `internal/qwen3lm/` |
+| Safetensors reader | `internal/safetensors/` |
+| CLM ranking heads | `clm/` |
+| SME, NEON, and scalar kernels | `internal/whispergemm/`, `internal/q8gemm/`, `internal/q8gemv/`, `internal/vec/` |
+| Pure-Go Metal binding | `internal/metal/` |
+| WAV and Ogg Opus decoding, transcript formats, HTTP server | `internal/audiofile/`, `internal/transcriptformat/`, `internal/httpserver/` |
+| CLI, server, GPTQ tool | `cmd/` |
+| Offline converters and oracle tools | `tools/`, `qwen3/tools/` |
 
-`internal/int8probe` is an isolated Smart Turn GEMM experiment. It is not called
-by the production inference graph.
+`internal/int8probe` is an isolated Smart Turn GEMM experiment that the
+production graph does not call.

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 func TestConv1DChannelMajor(t *testing.T) {
@@ -111,10 +113,7 @@ func TestEncoderPrimitiveKernelsDoNotAllocate(t *testing.T) {
 }
 
 func TestEncoderMatchesOfficialPyTorch(t *testing.T) {
-	modelPath := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if modelPath == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en bundle")
-	}
+	modelPath := testmodels.Path(t, testmodels.WhisperTinyEN)
 	m, err := Load(modelPath)
 	if err != nil {
 		t.Fatal(err)
@@ -194,13 +193,7 @@ func TestEncoderMatchesOfficialPyTorch(t *testing.T) {
 }
 
 func TestEncoderWarmCallDoesNotAllocate(t *testing.T) {
-	if os.Getenv("GOPHONIC_TEST_ENCODER_ALLOCS") != "1" {
-		t.Skip("set GOPHONIC_TEST_ENCODER_ALLOCS=1 to run two full encoder calls")
-	}
-	modelPath := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if modelPath == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en bundle")
-	}
+	modelPath := testmodels.Path(t, testmodels.WhisperTinyEN)
 	m, err := Load(modelPath)
 	if err != nil {
 		t.Fatal(err)

@@ -9,9 +9,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -28,7 +28,9 @@ var utterances = []string{
 }
 
 func main() {
-	m, err := qwen3.Open(os.Getenv("GOPHONIC_QWEN3_MODEL"), qwen3.Options{})
+	modelPath := flag.String("model", "models/Qwen3-8B", "official Qwen3-8B safetensors directory")
+	flag.Parse()
+	m, err := qwen3.Open(*modelPath, qwen3.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}

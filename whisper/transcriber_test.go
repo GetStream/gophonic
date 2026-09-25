@@ -12,13 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 func TestTranscriberOfficialJFK(t *testing.T) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL to converted official tiny.en weights")
-	}
+	path := testmodels.Path(t, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -307,10 +306,7 @@ func TestSegmentTimestampOffsets(t *testing.T) {
 }
 
 func TestOfficialJFKSegmentTimestamps(t *testing.T) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL")
-	}
+	path := testmodels.Path(t, testmodels.WhisperTinyEN)
 	model, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -338,10 +334,7 @@ func TestOfficialJFKSegmentTimestamps(t *testing.T) {
 }
 
 func TestOfficialJFKWordTimestamps(t *testing.T) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL")
-	}
+	path := testmodels.Path(t, testmodels.WhisperTinyEN)
 	model, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -375,10 +368,7 @@ func TestOfficialJFKWordTimestamps(t *testing.T) {
 }
 
 func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL")
-	}
+	path := testmodels.Path(t, testmodels.WhisperTinyEN)
 	model, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -435,12 +425,9 @@ func TestOfficialOtherEnglishModelWordTimestamps(t *testing.T) {
 	for i := range pcm {
 		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
 	}
-	for _, name := range []string{"BASE", "SMALL"} {
-		path := os.Getenv("GOPHONIC_WHISPER_" + name + "_MODEL")
-		if path == "" {
-			continue
-		}
+	for _, name := range []string{testmodels.WhisperBaseEN, testmodels.WhisperSmallEN} {
 		t.Run(name, func(t *testing.T) {
+			path := testmodels.Path(t, name)
 			model, err := Load(path)
 			if err != nil {
 				t.Fatal(err)

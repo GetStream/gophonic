@@ -5,16 +5,17 @@ package transcriptformat
 
 import (
 	"bytes"
-	"github.com/GetStream/gophonic/whisper"
 	"math"
 	"strconv"
+
+	"github.com/GetStream/gophonic/speech"
 )
 
-func AppendSubtitles(dst, raw []byte, segments []whisper.Segment, vtt bool) []byte {
+func AppendSubtitles(dst []byte, t *speech.Transcript, vtt bool) []byte {
 	if vtt {
 		dst = append(dst, "WEBVTT\n\n"...)
 	}
-	for i, segment := range segments {
+	for i, segment := range t.Segments {
 		if !vtt {
 			dst = strconv.AppendInt(dst, int64(i+1), 10)
 			dst = append(dst, '\n')
@@ -23,7 +24,7 @@ func AppendSubtitles(dst, raw []byte, segments []whisper.Segment, vtt bool) []by
 		dst = append(dst, " --> "...)
 		dst = appendSubtitleTime(dst, segment.End, vtt)
 		dst = append(dst, '\n')
-		dst = append(dst, bytes.TrimSpace(raw[segment.TextStart:segment.TextEnd])...)
+		dst = append(dst, bytes.TrimSpace(t.Text[segment.TextStart:segment.TextEnd])...)
 		dst = append(dst, '\n', '\n')
 	}
 	return dst

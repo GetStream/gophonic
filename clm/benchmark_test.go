@@ -4,15 +4,13 @@
 package clm
 
 import (
-	"os"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 func BenchmarkOfficialHeadScore(b *testing.B) {
-	path := os.Getenv("GOPHONIC_CLM_BUNDLE")
-	if path == "" {
-		b.Skip("set GOPHONIC_CLM_BUNDLE to the converted official head")
-	}
+	path := testmodels.Path(b, testmodels.CLMHead)
 	h, err := Load(path)
 	if err != nil {
 		b.Fatal(err)

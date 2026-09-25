@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	bundleMagic   = "WHISPER1"
+	BundleMagic   = "WHISPER1"
 	bundleVersion = uint32(1)
 	// bundleVersionDims adds explicit model dimensions for larger checkpoints.
 	bundleVersionDims = uint32(2)
@@ -167,7 +167,7 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	if _, err := io.ReadFull(r, magic[:]); err != nil {
 		return nil, fmt.Errorf("read Whisper header: %w", err)
 	}
-	if string(magic[:]) != bundleMagic {
+	if string(magic[:]) != BundleMagic {
 		return nil, errors.New("invalid Whisper bundle magic")
 	}
 	var version, count uint32

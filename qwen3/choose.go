@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
+	"github.com/GetStream/gophonic/internal/safetensors"
 )
 
 // maxChoices is the number of answer letters Choose can offer (A–Z).
@@ -32,25 +34,23 @@ func loadLetterHead(dir string, tokens *Tokenizer, hidden, vocab int) (*letterHe
 		}
 		ids[i] = got[0]
 	}
-	st, err := openSafetensors(dir)
+	st, err := safetensors.Open(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("qwen3: %w", err)
 	}
-	defer st.close()
-	t, err := st.lookup("lm_head.weight", vocab, hidden)
+	defer st.Close()
+	t, err := st.Lookup("lm_head.weight", vocab, hidden)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("qwen3: %w", err)
 	}
-	if t.dtype != "BF16" {
-		return nil, fmt.Errorf("qwen3: lm_head.weight is %s; the loader expects BF16", t.dtype)
+	if t.DType != "BF16" {
+		return nil, fmt.Errorf("qwen3: lm_head.weight is %s; the loader expects BF16", t.DType)
 	}
 	h := &letterHead{rows: make([]float32, maxChoices*hidden)}
 	raw := make([]uint16, hidden)
 	for i, id := range ids {
-		row := t
-		row.offset += int64(id) * int64(hidden) * 2
-		if err := readInto(row, raw); err != nil {
-			return nil, err
+		if err := t.ReadBits(raw, int64(id)*int64(hidden)); err != nil {
+			return nil, fmt.Errorf("qwen3: %w", err)
 		}
 		for j, b := range raw {
 			h.rows[i*hidden+j] = q8gemm.BF16ToF32(b)
@@ -120,7 +120,7 @@ func (e *Model) Question(question string, options []string) (*Question, error) {
 	if q.kv, err = e.eval.NewPrefixKV(len(prefix)); err != nil {
 		return nil, err
 	}
-	scratch := make([]float32, e.model.cfg.hidden)
+	scratch := make([]float32, e.model.Config().Hidden)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -195,10 +195,10 @@ func (q *Question) growBatch(n int) {
 	}
 	n = max(n, 2*len(q.seqs))
 	q.seqs = make([][]int, n)
-	hidden := make([]float32, n*q.m.model.cfg.hidden)
+	hidden := make([]float32, n*q.m.model.Config().Hidden)
 	q.hidden = make([][]float32, n)
 	for i := range q.hidden {
-		q.hidden[i] = hidden[i*q.m.model.cfg.hidden : (i+1)*q.m.model.cfg.hidden]
+		q.hidden[i] = hidden[i*q.m.model.Config().Hidden : (i+1)*q.m.model.Config().Hidden]
 	}
 }
 
@@ -214,7 +214,7 @@ func (q *Question) chooseTokens(ctx context.Context, inputs [][]int, probs [][]f
 		}
 	}
 	q.growBatch(len(inputs))
-	room := maxTokens - len(q.kv.tokens) - len(q.suffix)
+	room := maxTokens - len(q.kv.Tokens()) - len(q.suffix)
 	need := 0
 	for _, in := range inputs {
 		need += min(len(in), room) + len(q.suffix)
@@ -272,7 +272,7 @@ func (e *Model) letterProbs(hidden, probs []float32) {
 	rows := e.letters.rows
 	maxLogit := math.Inf(-1)
 	for i := range probs {
-		probs[i] = dot32(hidden, rows[i*len(hidden):(i+1)*len(hidden)])
+		probs[i] = qwen3lm.Dot32(hidden, rows[i*len(hidden):(i+1)*len(hidden)])
 		maxLogit = max(maxLogit, float64(probs[i]))
 	}
 	var sum float64
@@ -310,7 +310,7 @@ func (q *Question) NewStream(maxInputTokens int) (*Stream, error) {
 	if q == nil {
 		return nil, errors.New("qwen3: nil question")
 	}
-	p := len(q.kv.tokens)
+	p := len(q.kv.Tokens())
 	if maxInputTokens < 1 || p+maxInputTokens+len(q.suffix) > maxTokens {
 		return nil, fmt.Errorf("qwen3: stream input limit %d outside [1,%d]", maxInputTokens, maxTokens-p-len(q.suffix))
 	}
@@ -318,13 +318,13 @@ func (q *Question) NewStream(maxInputTokens int) (*Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	kv.copyPrefix(q.kv, p)
+	kv.CopyPrefix(q.kv, p)
 	return &Stream{
 		q: q, kv: kv,
 		input:  make([]int, 0, maxInputTokens),
 		ids:    make([]int, 0, 4*maxInputTokens),
 		seq:    make([]int, 0, maxInputTokens+len(q.suffix)),
-		hidden: make([]float32, q.m.model.cfg.hidden),
+		hidden: make([]float32, q.m.model.Config().Hidden),
 		last:   make([]float32, q.options),
 	}, nil
 }
@@ -357,7 +357,7 @@ func (s *Stream) UpdateTokens(ctx context.Context, input []int, probs []float32)
 	if len(probs) != q.options {
 		return fmt.Errorf("qwen3: %d probabilities for %d options", len(probs), q.options)
 	}
-	p := len(q.kv.tokens)
+	p := len(q.kv.Tokens())
 	if len(input) > cap(s.input) {
 		return fmt.Errorf("qwen3: stream input of %d tokens exceeds its limit %d", len(input), cap(s.input))
 	}

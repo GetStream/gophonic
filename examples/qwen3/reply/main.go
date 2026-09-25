@@ -7,9 +7,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/GetStream/gophonic/clm"
 	"github.com/GetStream/gophonic/qwen3"
@@ -49,12 +49,15 @@ var conversations = []struct {
 }
 
 func main() {
-	m, err := qwen3.Open(os.Getenv("GOPHONIC_QWEN3_MODEL"), qwen3.Options{})
+	modelPath := flag.String("model", "models/Qwen3-8B", "official Qwen3-8B safetensors directory")
+	headPath := flag.String("head", "models/CLM_v0.1-8B.gclm", "converted CLM v0.1 head")
+	flag.Parse()
+	m, err := qwen3.Open(*modelPath, qwen3.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer m.Close()
-	head, err := clm.Load(os.Getenv("GOPHONIC_CLM_HEAD_BUNDLE"))
+	head, err := clm.Load(*headPath)
 	if err != nil {
 		log.Fatal(err)
 	}

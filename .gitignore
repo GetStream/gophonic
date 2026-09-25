@@ -24,3 +24,7 @@ ASTRA_*.md
 # Editor and agent state.
 .idea/
 .claude/
+
+# Local model files; models/README.md says what goes there.
+/models/*
+!/models/README.md

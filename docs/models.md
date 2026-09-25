@@ -1,24 +1,22 @@
 # Models and weight bundles
 
-Gophonic ships two turn-detector graphs and a separate English Whisper
-speech-to-text graph. Each built-in loader accepts
-the bundle for its corresponding graph. Additional audio turn-detector
-architectures implement [`AudioSession`](api.md#add-an-audio-backend) with their
-own loader and execution code; they can optionally reuse the standalone Whisper
-frontend. The built-in converters do not import arbitrary ONNX graphs.
-
-Whisper transcription lives in `github.com/GetStream/gophonic/whisper` and
-returns text, not a turn-completion probability. It has its own model loader,
-transcriber, frontend, and offline checkpoint converter.
+gophonic runs English Whisper for speech-to-text, two turn-detector graphs,
+and Qwen3-8B. Each model has its own package, loader, and offline converter;
+`gophonic.Open` recognizes every converted bundle by its signature.
+[`tools/fetch-models.sh`](../tools/fetch-models.sh) downloads and converts the
+official checkpoints into [`models/`](../models), where tests, benchmarks, and
+examples find them. Other architectures implement the
+[`speech` interfaces](api.md#add-a-backend) with their own loader and
+execution code. The converters do not import arbitrary ONNX graphs.
 
 | | Smart Turn v3.2 | TinyMelNet |
 | --- | --- | --- |
 | Source | [pipecat-ai/smart-turn-v3](https://huggingface.co/pipecat-ai/smart-turn-v3) | [deveshu/hinglish-turn-detector](https://huggingface.co/deveshu/hinglish-turn-detector) |
 | ONNX file | `smart-turn-v3.2-gpu.onnx` | `model_tinymel_int8.onnx` |
-| Go type | `Model` | `TinyMelModel` |
-| Loader | `Load` / `ReadWeights` | `LoadTinyMel` / `ReadTinyMelWeights` |
+| Package | `smartturn` | `tinymel` |
+| Loader | `smartturn.Load` / `ReadWeights` | `tinymel.Load` / `ReadWeights` |
 | Feature input | 64,000 float32 values, row-major `[80,800]` | Same |
-| Output | `Prediction{Probability, Complete}` | Same |
+| Output | `speech.Prediction{Probability, Complete}` | Same |
 | Decision | `Probability > 0.5` | `Probability > 0.57` |
 
 ## Convert OpenAI Whisper

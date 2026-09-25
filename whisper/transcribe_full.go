@@ -201,11 +201,6 @@ func (t *Transcriber) appendTranscribedSegmentsAt(dst []byte, tokens []int, segm
 	return dst, segments, nil
 }
 
-func (t *Transcriber) appendOneSegment(dst []byte, tokens []int, hasPair bool, segmentFrames int) ([]byte, error) {
-	text, _, err := t.appendOneSegmentAt(dst, tokens, hasPair, segmentFrames, 0, nil, false)
-	return text, err
-}
-
 func (t *Transcriber) appendOneSegmentAt(dst []byte, tokens []int, hasPair bool, segmentFrames, windowSeek int, segments []Segment, record bool) ([]byte, []Segment, error) {
 	begin := t.tokenizer.TimestampBegin()
 	startFrame, endFrame := windowSeek, windowSeek+segmentFrames

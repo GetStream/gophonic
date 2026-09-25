@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,16 +18,14 @@ import (
 
 	"github.com/GetStream/gophonic/clm"
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
-// Official-checkpoint gates. They need:
-//
-//	GOPHONIC_QWEN3_MODEL            official Qwen/Qwen3-8B safetensors snapshot
-//	GOPHONIC_QWEN3_HELLO_REFERENCE  float32 last hidden state of "hello" from
-//	                                tools/reference_hidden.py (BF16 PyTorch)
-//	GOPHONIC_CLM_HEAD_BUNDLE        converted CLM v0.1 head
-//
-// GOPHONIC_QWEN_THREADS overrides the worker count for benchmarks.
+// Official-checkpoint gates run when the models directory (see
+// internal/testmodels) holds the Qwen3-8B snapshot, and, for some, the BF16
+// "hello" reference vector or the converted CLM head. Benchmarks run one
+// sub-benchmark per weight format: select one with -bench 'Name/gpu'.
 
 var officialEncoders sync.Map // weight format -> *officialEncoder
 
@@ -38,28 +36,27 @@ type officialEncoder struct {
 	err  error
 }
 
-// officialFormat is GOPHONIC_QWEN_WEIGHTS, or the exact format.
-func officialFormat() string {
-	if f := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); f != "" {
-		return f
+// officialFormats are the weight formats the official benchmarks compare.
+var officialFormats = []string{WeightsF16, WeightsInt8, WeightsGPU, WeightsGPUQ4}
+
+// forEachFormat runs bench as one sub-benchmark per weight format.
+func forEachFormat(b *testing.B, bench func(b *testing.B, format string)) {
+	for _, format := range officialFormats {
+		b.Run(format, func(b *testing.B) { bench(b, format) })
 	}
-	return WeightsF16
 }
 
 func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	tb.Helper()
-	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
-	if path == "" {
-		tb.Skip("set GOPHONIC_QWEN3_MODEL to the official Qwen3-8B snapshot")
-	}
+	path := testmodels.Path(tb, testmodels.Qwen3)
 	v, _ := officialEncoders.LoadOrStore(format, &officialEncoder{})
 	o := v.(*officialEncoder)
+	if (format == WeightsGPU || format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		tb.Skipf("%s needs the Apple GPU", format)
+	}
 	o.once.Do(func() {
 		// Benchmarks repeat inputs; keep both caches out of compute timings.
 		opts := Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1}
-		if n, err := strconv.Atoi(os.Getenv("GOPHONIC_QWEN_THREADS")); err == nil && n > 0 {
-			opts.Threads = n
-		}
 		start := time.Now()
 		o.enc, o.err = Open(path, opts)
 		o.load = time.Since(start)
@@ -70,12 +67,9 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	return o.enc, o.load
 }
 
-func readReferenceVector(tb testing.TB, env string) []float32 {
+func readReferenceVector(tb testing.TB, name string) []float32 {
 	tb.Helper()
-	path := os.Getenv(env)
-	if path == "" {
-		tb.Skipf("set %s", env)
-	}
+	path := testmodels.Path(tb, name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		tb.Fatal(err)
@@ -92,7 +86,7 @@ func readReferenceVector(tb testing.TB, env string) []float32 {
 // official BF16 PyTorch hidden state. For comparison, llama.cpp's Qwen3-8B
 // Q8_0 GGUF reaches cosine 0.99929 on the same input.
 func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
-	want := readReferenceVector(t, "GOPHONIC_QWEN3_HELLO_REFERENCE")
+	want := readReferenceVector(t, testmodels.Qwen3HelloReference)
 	for _, tc := range []struct {
 		format string
 		cosine float64
@@ -102,7 +96,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		{WeightsGPU, 0.999},
 		{WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
 	} {
-		if only := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); only != "" && only != tc.format {
+		if (tc.format == WeightsGPU || tc.format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 			continue
 		}
 		enc, load := loadOfficialEncoder(t, tc.format)
@@ -110,7 +104,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		if err := enc.Embed(context.Background(), []string{"hello"}, got); err != nil {
 			t.Fatal(err)
 		}
-		cos, maxAbs := vectorParity(got[0], want)
+		cos, maxAbs := lmtest.VectorParity(got[0], want)
 		t.Logf("%s: cosine vs official BF16 = %.6f (max_abs %.4g), load %s, projection bytes %.2f GiB",
 			tc.format, cos, maxAbs, load.Round(time.Millisecond), float64(enc.model.WeightBytes())/(1<<30))
 		if cos < tc.cosine {
@@ -120,10 +114,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 }
 
 func TestOfficialCLMRankingAndZeroAlloc(t *testing.T) {
-	headPath := os.Getenv("GOPHONIC_CLM_HEAD_BUNDLE")
-	if headPath == "" {
-		t.Skip("set GOPHONIC_CLM_HEAD_BUNDLE to the converted official CLM head")
-	}
+	headPath := testmodels.Path(t, testmodels.CLMHead)
 	head, err := clm.Load(headPath)
 	if err != nil {
 		t.Fatal(err)
@@ -196,10 +187,7 @@ func benchmarkTexts(n, tokens int) []string {
 // BenchmarkOfficialRankCached measures a CLM ranking whose state and
 // candidates were embedded before, served by the exact embedding cache.
 func BenchmarkOfficialRankCached(b *testing.B) {
-	headPath := os.Getenv("GOPHONIC_CLM_HEAD_BUNDLE")
-	if headPath == "" {
-		b.Skip("set GOPHONIC_CLM_HEAD_BUNDLE")
-	}
+	headPath := testmodels.Path(b, testmodels.CLMHead)
 	head, err := clm.Load(headPath)
 	if err != nil {
 		b.Fatal(err)
@@ -238,11 +226,9 @@ func BenchmarkOfficialRankCached(b *testing.B) {
 	b.Logf("cache hits %d of %d lookups", hits, lookups)
 }
 
-func BenchmarkOfficialEmbed(b *testing.B) {
-	format := os.Getenv("GOPHONIC_QWEN_WEIGHTS")
-	if format == "" {
-		format = WeightsF16
-	}
+func BenchmarkOfficialEmbed(b *testing.B) { forEachFormat(b, benchmarkEmbed) }
+
+func benchmarkEmbed(b *testing.B, format string) {
 	enc, _ := loadOfficialEncoder(b, format)
 	for _, tc := range []struct {
 		name  string
@@ -289,8 +275,10 @@ func BenchmarkOfficialEmbed(b *testing.B) {
 // only the turn is evaluated. Each iteration uses a different turn, so the
 // embedding cache never hits. The fresh-state sub-benchmark disables the
 // prefix store for comparison.
-func BenchmarkOfficialConversationTurn(b *testing.B) {
-	base, _ := loadOfficialEncoder(b, officialFormat())
+func BenchmarkOfficialConversationTurn(b *testing.B) { forEachFormat(b, benchmarkConversationTurn) }
+
+func benchmarkConversationTurn(b *testing.B, format string) {
+	base, _ := loadOfficialEncoder(b, format)
 	history := make([]int, 1800)
 	for i := range history {
 		history[i] = 1000 + (i*7919)%50000
@@ -346,7 +334,7 @@ func clmEmbedder(m *Model) clm.Embedder {
 // prompt tokenization equals tokenizing the whole prompt, and that warmed
 // calls do not allocate.
 func TestOfficialQuestion(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, officialFormat())
+	m, _ := loadOfficialEncoder(t, WeightsF16)
 	options := []string{"payments", "cancellations", "technical support", "shipping", "account login"}
 	const text = "Which support team should handle this customer message?"
 	q, err := m.Question(text, options)
@@ -450,15 +438,7 @@ func TestOfficialQuestion(t *testing.T) {
 // BenchmarkOfficialChooseBatch measures answering 16 new inputs per call
 // against one prepared question.
 func BenchmarkOfficialChooseBatch(b *testing.B) {
-	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_QWEN3_MODEL")
-	}
-	formats := []string{WeightsF16, WeightsInt8}
-	if f := os.Getenv("GOPHONIC_QWEN_WEIGHTS"); f != "" {
-		formats = []string{f}
-	}
-	for _, format := range formats {
+	for _, format := range officialFormats {
 		b.Run(format, func(b *testing.B) {
 			m, _ := loadOfficialEncoder(b, format)
 			q, err := m.Question("Which support team should handle this customer message?",
@@ -493,16 +473,10 @@ func BenchmarkOfficialChooseBatch(b *testing.B) {
 // question's prompt prefix already stored (the steady state when classifying
 // a stream of inputs). Each iteration uses a different input so the
 // embedding cache never hits.
-func BenchmarkOfficialQuestion(b *testing.B) {
-	path := os.Getenv("GOPHONIC_QWEN3_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_QWEN3_MODEL")
-	}
-	m, err := Open(path, Options{Weights: os.Getenv("GOPHONIC_QWEN_WEIGHTS")})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer m.Close()
+func BenchmarkOfficialQuestion(b *testing.B) { forEachFormat(b, benchmarkQuestion) }
+
+func benchmarkQuestion(b *testing.B, format string) {
+	m, _ := loadOfficialEncoder(b, format)
 	q, err := m.Question("Which support team should handle this customer message?",
 		[]string{"payments", "cancellations", "technical support", "shipping", "account login"})
 	if err != nil {
@@ -526,7 +500,7 @@ func BenchmarkOfficialQuestion(b *testing.B) {
 // TestOfficialStream feeds growing and revised partial transcripts to a
 // Stream and checks each answer against a fresh Choose on the same text.
 func TestOfficialStream(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, officialFormat())
+	m, _ := loadOfficialEncoder(t, WeightsF16)
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -567,8 +541,10 @@ func TestOfficialStream(t *testing.T) {
 
 // BenchmarkOfficialStream measures one stream update that adds three words
 // to a 20-word partial transcript.
-func BenchmarkOfficialStream(b *testing.B) {
-	m, _ := loadOfficialEncoder(b, officialFormat())
+func BenchmarkOfficialStream(b *testing.B) { forEachFormat(b, benchmarkStream) }
+
+func benchmarkStream(b *testing.B, format string) {
+	m, _ := loadOfficialEncoder(b, format)
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -627,7 +603,7 @@ func contextQuestions(tb testing.TB, m *Model) ([]*ContextQuestion, [][]string) 
 // TestOfficialContext asks several questions about a growing conversation
 // and checks tokenization, answers, incremental updates, and allocations.
 func TestOfficialContext(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, officialFormat())
+	m, _ := loadOfficialEncoder(t, WeightsF16)
 	c, err := m.NewContext(1024)
 	if err != nil {
 		t.Fatal(err)
@@ -694,8 +670,10 @@ func TestOfficialContext(t *testing.T) {
 // BenchmarkOfficialContext compares three questions about a conversation
 // asked with Context (context evaluated once) against three Question.Choose
 // calls on the whole conversation.
-func BenchmarkOfficialContext(b *testing.B) {
-	m, _ := loadOfficialEncoder(b, officialFormat())
+func BenchmarkOfficialContext(b *testing.B) { forEachFormat(b, benchmarkContext) }
+
+func benchmarkContext(b *testing.B, format string) {
+	m, _ := loadOfficialEncoder(b, format)
 	text := strings.Join(contextConversation, "\n")
 	qs, _ := contextQuestions(b, m)
 	probs := [][]float32{make([]float32, 3), make([]float32, 4), make([]float32, 2)}

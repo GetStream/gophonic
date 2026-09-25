@@ -8,6 +8,8 @@ import (
 	"math/rand"
 	"slices"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
 )
 
 // TestEmbeddingCacheMatchesModel drives random inserts, hits, and evictions
@@ -65,12 +67,12 @@ func TestEmbeddingCacheMatchesModel(t *testing.T) {
 }
 
 func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
-	ck := writeTinyCheckpoint(t, 5)
-	m, err := LoadWeights(ck.dir, "")
+	ck := lmtest.Write(t, 5)
+	m, err := LoadWeights(ck.Dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, err := newModel(m, nil, 2, 16, tinyShape.maxPos)
+	enc, err := newModel(m, nil, 2, 16, lmtest.Shape.MaxPos)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 	ids := [][]int{{1, 2, 3}, {4, 5}, {1, 2, 3}, {6}}
 	dst := make([][]float32, len(ids))
 	for i := range dst {
-		dst[i] = make([]float32, tinyShape.hidden)
+		dst[i] = make([]float32, lmtest.Shape.Hidden)
 	}
 	embed := func() {
 		enc.mu.Lock()
@@ -89,7 +91,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 		}
 	}
 	embed()
-	want := make([]float32, tinyShape.hidden)
+	want := make([]float32, lmtest.Shape.Hidden)
 	e, _ := NewEvaluator(m)
 	ws, _ := e.NewWorkspace(1)
 	for i, seq := range ids {
@@ -98,7 +100,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 		}
 		// Batched and single evaluations may use different kernels for the
 		// pruned last layer (tile vs one-row GEMV), so sums reassociate.
-		if cos, maxAbs := vectorParity(dst[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
+		if cos, maxAbs := lmtest.VectorParity(dst[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
 			t.Fatalf("input %d differs from a fresh evaluation: cosine=%.9f max_abs=%g", i, cos, maxAbs)
 		}
 	}
@@ -121,24 +123,24 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 // through the prefix store and short inputs batched together all land in the
 // caller's destinations in order, and that a growing input reuses its prefix.
 func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
-	ck := writeTinyCheckpoint(t, 7)
-	m, err := LoadWeights(ck.dir, "")
+	ck := lmtest.Write(t, 7)
+	m, err := LoadWeights(ck.Dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, cacheEntries := range []int{-1, 16} {
-		enc, err := newModel(m, nil, 3, cacheEntries, tinyShape.maxPos)
+		enc, err := newModel(m, nil, 3, cacheEntries, lmtest.Shape.MaxPos)
 		if err != nil {
 			t.Fatal(err)
 		}
 		conv := make([]int, 200)
 		for i := range conv {
-			conv[i] = (i*3 + i/11) % tinyShape.vocab
+			conv[i] = (i*3 + i/11) % lmtest.Shape.Vocab
 		}
 		ids := [][]int{{1, 2}, conv[:120], {4, 5, 6}, conv[:90:90]}
 		dst := make([][]float32, len(ids))
 		for i := range dst {
-			dst[i] = make([]float32, tinyShape.hidden)
+			dst[i] = make([]float32, lmtest.Shape.Hidden)
 		}
 		heads := slices.Clone(dst) // the caller's slice headers must not move
 		embed := func(in [][]int) {
@@ -152,7 +154,7 @@ func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
 		embed(ids)
 		e, _ := NewEvaluator(m)
 		ws, _ := e.NewWorkspace(1)
-		want := make([]float32, tinyShape.hidden)
+		want := make([]float32, lmtest.Shape.Hidden)
 		for i, seq := range ids {
 			if &dst[i][0] != &heads[i][0] {
 				t.Fatalf("destination %d was reordered", i)
@@ -160,7 +162,7 @@ func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
 			if err := e.HiddenLastInto(seq, want, ws); err != nil {
 				t.Fatal(err)
 			}
-			if cos, maxAbs := vectorParity(dst[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
+			if cos, maxAbs := lmtest.VectorParity(dst[i], want); cos < 0.9999999 || maxAbs > 2e-3 {
 				t.Fatalf("cache=%d input %d: cosine=%.9f max_abs=%g", cacheEntries, i, cos, maxAbs)
 			}
 		}
@@ -174,7 +176,7 @@ func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
 		if err := e.HiddenLastInto(conv[:200], want, ws); err != nil {
 			t.Fatal(err)
 		}
-		if cos, maxAbs := vectorParity(dst[0], want); cos < 0.9999999 || maxAbs > 2e-3 {
+		if cos, maxAbs := lmtest.VectorParity(dst[0], want); cos < 0.9999999 || maxAbs > 2e-3 {
 			t.Fatalf("grown conversation: cosine=%.9f max_abs=%g", cos, maxAbs)
 		}
 		if allocs := testing.AllocsPerRun(5, func() { embed(ids) }); allocs != 0 {
