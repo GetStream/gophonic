@@ -232,7 +232,13 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	}
 	size := wcache.NewLayout(nil)
 	cut(size)
-	key, err := wcache.Key(st.Dir(), m.format, gpuCacheVersion, m.prefix, headName)
+	// Weights with and without a head are different entries, so loaders of
+	// both keep both.
+	kind := m.format
+	if headName != "" {
+		kind += "-head"
+	}
+	key, err := wcache.Key(st.Dir(), kind, gpuCacheVersion, m.prefix, headName)
 	if err != nil {
 		return err
 	}
