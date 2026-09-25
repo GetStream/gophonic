@@ -133,3 +133,73 @@ for clip in ("jfk", "zh"):
     print(clip, statistics.median(b / a for a, b in pairs),
           (boot[249], boot[9749]))
 ```
+
+## Follow-up after the prefix-cache merge
+
+A further investigation used PR #37 at `7185106b80384b729100a45d55f8aeb25503fc4a`,
+after integrating #36 from main, plus the
+[row signal fix](benchmarks/cpu-stt/row-signal-fix.patch) as its baseline.
+A warm-only profile, started after model loading and three transcriptions,
+put 29.52% of sampled CPU time in the F16 row kernel, 15.19% in the F16 tile
+kernel, and 28.47% in the worker loop. These are CPU sample shares, not wall-time
+fractions.
+
+This investigation reproduced a correctness bug in the existing F16 row
+kernel under profiling signals, garbage collection, and worker oversubscription.
+A signal between panels could clear the upper row-scale lanes before the next
+panel reset its sentinel. The F16 and int8 row kernels now rebuild their live
+predicates and row scale inside each panel's sentinel-protected region. Their
+checks first move an upper vector block into the signal-preserved low block,
+then read it into a general-purpose register; a cleared predicate cannot hide
+a retry. The F16 stress test failed three of 30 repetitions before the fix.
+Both row stress tests passed 40 repetitions each after it. This correction
+adds no storage and preserves the existing arithmetic and precision.
+
+The follow-up passes the full SIMD repository suite, q8gemm/qwen3lm race
+checks, real-model encoder/token/streaming and warm allocation checks with
+`GOGC=10`, non-SIMD package tests, and vet. Generated assembly reproduces
+exactly. Linux arm64 SIMD and Windows amd64 scalar binaries cross-compile.
+
+The performance experiments tested reordered F16 weight loads, a tighter row
+loop, software prefetch, removal of an empty prefix-attention dispatch,
+deferring one-token KV appends to the following output-projection barrier,
+one-chunk SwiGLU claims, and two- or four-panel claims restricted to the large
+vocabulary projection. Combinations were also tested. No additional
+performance change is retained.
+
+The selected scheduling combination received a fresh confirmation separate
+from those discovery runs: 64 counterbalanced baseline/candidate pairs per
+clip, with all 256 complete `Transcribe` calls retained. Every untimed state
+fingerprint matched the original English and Chinese hashes above. The
+[raw samples and metadata](benchmarks/cpu-stt/scheduling-confirmation.json)
+record the baseline and patch identities, instrumented binary SHA-256,
+Go 1.27.1, `GOEXPERIMENT=simd`, `CGO_ENABLED=0`, `GOMAXPROCS=16`, order, and
+bootstrap procedure.
+
+| Complete transcription | Baseline median | Experimental median | Median paired experimental/baseline | Paired bootstrap 95% interval |
+| --- | ---: | ---: | ---: | ---: |
+| English JFK | 1,493.48 ms | 1,480.28 ms | 0.99891 | 0.98660–1.02165 |
+| Chinese | 813.86 ms | 783.87 ms | 0.99090 | 0.97875–1.00492 |
+
+Both intervals include no change. This run establishes no incremental latency
+improvement. Other desktop workloads were present, and absolute latency
+varied substantially between discovery and confirmation; these absolute
+medians should not be compared with the earlier compact-packing table.
+No coordinating-agent builds, profiles, or validation jobs overlapped the
+confirmation. The speculative scheduling changes and all runtime switches
+were removed from production.
+
+The [experimental instrumentation patch](benchmarks/cpu-stt/scheduling-experiment.patch)
+is retained only for reproducibility. In an isolated checkout of `7185106`,
+apply saved copies of `row-signal-fix.patch` and then `scheduling-experiment.patch`.
+Build and run with the same project-scoped Go environment:
+
+```sh
+CODEX_AGENT_ID=stt-scheduling GOEXPERIMENT=simd CGO_ENABLED=0 \
+  /Users/thesyncim/.codex/bin/project-env go test -c -o /tmp/stt-scheduling.test ./qwen3asr
+cd qwen3asr
+GOMAXPROCS=16 GOPHONIC_MODELS=/absolute/path/to/models \
+  GOPHONIC_ASTRA_REPORT=/tmp/stt-scheduling.json \
+  GOPHONIC_ASTRA_VARIANTS=0,7 GOPHONIC_ASTRA_BLOCKS=64 \
+  /tmp/stt-scheduling.test -test.run '^TestAstraCounterbalancedLatency$' -test.v -test.timeout=10m
+```

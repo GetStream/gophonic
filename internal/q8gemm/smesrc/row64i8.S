@@ -15,19 +15,23 @@
 //
 // Darwin restores only the low 128 bits of each Z register on signal return;
 // ZA survives. The z31 sentinel is checked after accumulation and after the
-// stores, and a cleared sentinel recomputes the panel from zero.
+// stores, and a cleared sentinel recomputes the panel from zero. Each check
+// moves an upper 128-bit block into the signal-preserved low block before
+// reading it into a GPR, so signal-clobbered predicates cannot hide a retry.
+// Every live predicate and the row scale are rebuilt after the sentinel on
+// each panel, including retries; no streaming state crosses that boundary.
 	smstart
-	ptrue p0.b
-	ptrue p1.s
-	ptrue pn8.b
 	mov x17, #0
 	lsl x7, x1, #11
 	mov x9, #0
 	mov w8, #0
-	ld1rw {z20.s}, p1/z, [x19]
 1:
 	zero {za}
 	fdup z31.s, #1.0
+	ptrue p0.b
+	ptrue p1.s
+	ptrue pn8.b
+	ld1rw {z20.s}, p1/z, [x19]
 	mov x10, x0
 	mov x11, x3
 	mov x12, x1
@@ -57,13 +61,9 @@
 	sub x12, x12, #1
 	b 2b
 3:
-	ptrue p3.s
-	fcmeq p4.s, p3/z, z31.s, #0.0
-	ptest p3, p4.b
-	b.ne 8f
-	cntp x14, p3, p1.s
-	cmp x14, #16
-	b.ne 8f
+	ext z31.b, z31.b, z31.b, #48
+	fmov w14, s31
+	cbz w14, 8f
 	// Sum the eight vector groups: z0-z3 hold columns 0-15, 16-31, 32-47, 48-63.
 	mova {z0.d-z3.d}, za.d[w8, 0, vgx4]
 	mova {z4.d-z7.d}, za.d[w8, 1, vgx4]
@@ -131,9 +131,9 @@
 	fmul z3.s, z3.s, z8.s
 	fmul z3.s, z3.s, z20.s
 	st1w {z3.s}, p2, [x14, #3, mul vl]
-	fcmeq p4.s, p3/z, z31.s, #0.0
-	ptest p3, p4.b
-	b.ne 8f
+	ext z31.b, z31.b, z31.b, #48
+	fmov w14, s31
+	cbz w14, 8f
 	add x0, x0, x7
 	add x9, x9, #1
 	cmp x9, x2
@@ -142,9 +142,7 @@
 	mov x0, x17
 	b 9f
 8:
-	// A signal cleared the upper Z lanes: reload the row scale and redo
-	// this panel from zero.
+	// A signal cleared the upper Z lanes: rebuild the panel state and retry.
 	add x17, x17, #1
-	ld1rw {z20.s}, p1/z, [x19]
 	b 1b
 9:
