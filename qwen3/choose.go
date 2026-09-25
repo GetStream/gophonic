@@ -39,12 +39,17 @@ func loadLetterHead(dir string, tokens *Tokenizer, hidden, vocab int) (*letterHe
 		return nil, fmt.Errorf("qwen3: %w", err)
 	}
 	defer st.Close()
-	t, err := st.Lookup("lm_head.weight", vocab, hidden)
+	// Smaller Qwen3 models tie the head to the input embeddings.
+	name := "lm_head.weight"
+	if !st.Has(name) {
+		name = "model.embed_tokens.weight"
+	}
+	t, err := st.Lookup(name, vocab, hidden)
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: %w", err)
 	}
 	if t.DType != "BF16" {
-		return nil, fmt.Errorf("qwen3: lm_head.weight is %s; the loader expects BF16", t.DType)
+		return nil, fmt.Errorf("qwen3: %s is %s; the loader expects BF16", name, t.DType)
 	}
 	h := &letterHead{rows: make([]float32, maxChoices*hidden)}
 	raw := make([]uint16, hidden)

@@ -27,6 +27,11 @@ var geluNormalTable = func() [1025][2]float32 {
 	return table
 }()
 
+// GELUTable returns the read-only table of Q(r) and φ(r) at r = i/128 that
+// GELU interpolates, for kernels on other processors that use the same
+// expansion.
+func GELUTable() *[1025][2]float32 { return &geluNormalTable }
+
 func geluScalar(values []float32) {
 	for i, x := range values {
 		a := float32(math.Abs(float64(x)))

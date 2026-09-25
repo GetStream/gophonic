@@ -19,7 +19,8 @@ import (
 // decoder with its language-model head, and the tokenizer. It is immutable
 // and shared by every Transcriber opened from it.
 type Model struct {
-	enc       *encoder
+	enc       *encoder    // geometry, with CPU weights unless genc is set
+	genc      *gpuEncoder // the encoder in GPU memory, for GPU formats
 	lm        *qwen3lm.Weights
 	eval      *qwen3lm.Evaluator
 	tok       *qwen3lm.Tokenizer
@@ -126,7 +127,20 @@ func Load(dir string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
 	}
-	enc, err := loadEncoder(st, c.Thinker.Audio, "thinker.audio_tower.")
+	// GPU formats run the encoder on the GPU too; its kernels need 64-wide
+	// heads, which every Qwen3-ASR size has.
+	var (
+		enc  *encoder
+		genc *gpuEncoder
+	)
+	const audioPrefix = "thinker.audio_tower."
+	if opts.Format == FormatGPU || opts.Format == qwen3lm.WeightsGPU || opts.Format == qwen3lm.WeightsGPUQ4 {
+		if enc, err = newEncoder(c.Thinker.Audio); err == nil {
+			genc, err = loadGPUEncoder(st, enc, audioPrefix)
+		}
+	} else {
+		enc, err = loadEncoder(st, c.Thinker.Audio, audioPrefix)
+	}
 	head := "thinker.lm_head.weight"
 	if !st.Has(head) {
 		head = "thinker.model.embed_tokens.weight" // tied embeddings
@@ -147,7 +161,7 @@ func Load(dir string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
 	}
-	m := &Model{enc: enc, lm: lm, eval: eval, tok: tok, languages: map[string]bool{}}
+	m := &Model{enc: enc, genc: genc, lm: lm, eval: eval, tok: tok, languages: map[string]bool{}}
 	for _, name := range c.SupportLanguages {
 		if canonical, ok := speech.LanguageName(name); ok {
 			m.languages[canonical] = true
@@ -215,4 +229,9 @@ func (m *Model) Languages() []string {
 
 // Release frees resources the decoder holds outside the Go heap. The model
 // is unusable afterwards.
-func (m *Model) Release() { m.lm.Release() }
+func (m *Model) Release() {
+	m.lm.Release()
+	if m.genc != nil {
+		m.genc.release()
+	}
+}

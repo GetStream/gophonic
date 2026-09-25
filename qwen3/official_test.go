@@ -67,6 +67,9 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	return o.enc, o.load
 }
 
+// hiddenSize is the width of Qwen3-8B, the model the official tests load.
+const hiddenSize = 4096
+
 func readReferenceVector(tb testing.TB, name string) []float32 {
 	tb.Helper()
 	path := testmodels.Path(tb, name)
