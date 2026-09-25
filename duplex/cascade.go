@@ -679,7 +679,7 @@ func (c *Cascade) respond() {
 			c.cfg.Session.Restore(mark)
 			said, text = "", ""
 		case interrupted:
-			heard := int(time.Duration(played) * time.Second / time.Duration(c.outRate) * charsPerSecond / time.Second)
+			heard := min(len(reply.String()), int(time.Duration(played)*time.Second/time.Duration(c.outRate)*charsPerSecond/time.Second))
 			if j.audio != nil {
 				c.cfg.Session.Truncate(heard)
 			}
