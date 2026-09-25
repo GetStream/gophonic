@@ -32,6 +32,12 @@ const (
 	CLMHead = "CLM_v0.1-8B.gclm"
 	// Qwen3ASR is the official Qwen/Qwen3-ASR-1.7B snapshot directory.
 	Qwen3ASR = "Qwen3-ASR-1.7B"
+	// Qwen3TTS is the official Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+	// snapshot directory.
+	Qwen3TTS = "Qwen3-TTS-12Hz-1.7B-CustomVoice"
+	// Qwen3TTSReference holds greedy FP32 fixtures of the official qwen-tts
+	// package, which qwen3tts/tools/reference.py writes.
+	Qwen3TTSReference = "qwen3tts-reference"
 )
 
 // Dir returns the models directory: $GOPHONIC_MODELS when set, otherwise

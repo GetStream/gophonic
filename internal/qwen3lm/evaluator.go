@@ -155,12 +155,15 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	if ws == nil {
 		return errors.New("qwen3: nil workspace")
 	}
-	if len(embeds.Rows) != 0 {
+	if len(embeds.Rows) != 0 || e.m.embed == nil {
 		n := 0
 		for _, id := range ids {
 			if id == embeds.Token {
 				n++
 			}
+		}
+		if e.m.embed == nil && (n != len(ids) || len(embeds.Rows) == 0) {
+			return errors.New("qwen3: weights loaded without an embedding table take only Embeds rows")
 		}
 		if len(embeds.Rows) != n*e.m.cfg.hidden {
 			return fmt.Errorf("qwen3: %d embedding values for %d placeholders of width %d", len(embeds.Rows), n, e.m.cfg.hidden)
