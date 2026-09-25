@@ -95,7 +95,15 @@ type Question struct {
 const (
 	questionHeader = "<|im_start|>user\n"
 	questionFooter = "Answer with the letter only.\n\nInput:\n"
-	questionSuffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	questionSuffix = "<|im_end|>\n"
+)
+
+// Replies open with the assistant's header and, for hybrid thinking models
+// such as Qwen3-8B, an empty thinking block; the Instruct-2507 models have
+// none.
+const (
+	answerThinking = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	answerPlain    = "<|im_start|>assistant\n"
 )
 
 // Question prepares a multiple-choice question with 2 to 26 options: it
@@ -119,7 +127,8 @@ func (e *Model) Question(question string, options []string) (*Question, error) {
 	if err != nil {
 		return nil, err
 	}
-	if q.suffix, err = e.tokens.EncodeInto(questionSuffix, make([]int, 0, len(questionSuffix)), &q.tok); err != nil {
+	suffix := questionSuffix + e.answer
+	if q.suffix, err = e.tokens.EncodeInto(suffix, make([]int, 0, len(suffix)), &q.tok); err != nil {
 		return nil, err
 	}
 	if len(prefix)+len(q.suffix) >= maxTokens {

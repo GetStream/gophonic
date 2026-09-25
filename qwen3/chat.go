@@ -9,18 +9,23 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/internal/safetensors"
+	"github.com/thesyncim/vibejson"
 )
 
 // Chat generates text with a Qwen3 model: it is a chat.Generator whose
 // sessions keep their conversation's keys and values evaluated, so each new
-// message costs only its own tokens. Replies use Qwen3's non-thinking mode.
+// message costs only its own tokens. Replies use Qwen3's non-thinking mode,
+// or no thinking at all with the Instruct-2507 models.
 // Sessions share the model; their calls are serialized.
 type Chat struct {
 	mu      sync.Mutex
@@ -77,7 +82,27 @@ func OpenChat(path string, opts Options) (*Chat, error) {
 		return nil, err
 	}
 	c.own, c.path = true, path
+	if !thinks(path) {
+		c.answer = slices.Clone(c.header[chat.Assistant])
+	}
 	return c, nil
+}
+
+// thinks reports whether the chat template of the snapshot at path has
+// Qwen3's thinking block, which a non-thinking reply opens empty. The
+// Instruct-2507 models have none: their replies start after the header.
+func thinks(path string) bool {
+	raw, err := os.ReadFile(filepath.Join(path, "tokenizer_config.json"))
+	if err != nil {
+		return true
+	}
+	var cfg struct {
+		Template string `json:"chat_template"`
+	}
+	if vibejson.Unmarshal(raw, &cfg) != nil || cfg.Template == "" {
+		return true
+	}
+	return strings.Contains(cfg.Template, "<think>")
 }
 
 // Questions returns a Model for embeddings and zero-shot questions that
@@ -105,6 +130,9 @@ func (c *Chat) Questions(opts Options) (*Model, error) {
 		return nil, err
 	}
 	m.letters = letters
+	if !thinks(c.path) {
+		m.answer = answerPlain
+	}
 	return m, nil
 }
 
@@ -142,7 +170,7 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 	c.header[chat.Assistant] = encode("<|im_start|>assistant\n")
 	c.header[chat.Tool] = encode("<|im_start|>user\n<tool_response>\n")
 	c.resultEnd = encode("\n</tool_response>")
-	c.answer = encode("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+	c.answer = encode(answerThinking)
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: chat template: %w", err)
 	}

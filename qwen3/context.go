@@ -42,7 +42,7 @@ type ContextQuestion struct {
 
 const (
 	contextSeparator = "\n\n"
-	contextFooter    = "Answer with the letter only.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	contextFooter    = "Answer with the letter only.<|im_end|>\n"
 )
 
 // NewContext allocates a context of up to maxTokens tokens (288 KiB of keys
@@ -81,7 +81,7 @@ func (e *Model) ContextQuestion(question string, options []string) (*ContextQues
 	for i, o := range options {
 		text += string(rune('A'+i)) + ") " + o + "\n"
 	}
-	text += contextFooter
+	text += contextFooter + e.answer
 	var ws TokenizerWorkspace
 	tail, err := e.tokens.EncodeInto(text, make([]int, 0, len(text)), &ws)
 	if err != nil {
