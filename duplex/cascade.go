@@ -116,6 +116,12 @@ type Config struct {
 	// speak. Nil uses a zero-shot question to the models' ZeroShot lane;
 	// without one, a silence lasts a turn.
 	Wake speech.TextClassifier
+	// Quiet judges whether what was said asks the agent to be quiet, to
+	// stop talking, or to wait: its second label means it does. A silence
+	// the model chooses for anything else, as for a word it misheard, is
+	// overruled, and the agent answers. Nil uses a zero-shot question to
+	// the models' ZeroShot lane; without one, the model's choice stands.
+	Quiet speech.TextClassifier
 	// Tools are functions the agent may call instead of, or as well as,
 	// answering, such as staying quiet until someone says a word. New
 	// offers them to the conversation it starts; a Session given here must
@@ -180,6 +186,7 @@ type Cascade struct {
 	silentUntil string
 	silentSince time.Time
 	wakeProbs   []float32
+	quietProbs  []float32
 
 	// The utterance being heard, written by the listener and transcribed
 	// by the scribe as it grows; partial is the scribe's latest transcript
@@ -291,7 +298,7 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 		return nil, err
 	}
 	var z speech.ZeroShot
-	if (cfg.Interruptions == nil || cfg.Wake == nil) && open(&z, models, &opened) == nil {
+	if (cfg.Interruptions == nil || cfg.Wake == nil || cfg.Quiet == nil) && open(&z, models, &opened) == nil {
 		if cfg.Interruptions == nil {
 			if cfg.Interruptions, err = z.Classifier(interruptQuestion, interruptLabels); err != nil {
 				return nil, err
@@ -303,6 +310,12 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 				return nil, err
 			}
 			opened = append(opened, cfg.Wake)
+		}
+		if cfg.Quiet == nil {
+			if cfg.Quiet, err = z.Classifier(quietQuestion, quietLabels); err != nil {
+				return nil, err
+			}
+			opened = append(opened, cfg.Quiet)
 		}
 	}
 	if cfg.Session == nil {
@@ -329,7 +342,7 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 		play: newRing[float32](120 * out), release: make(chan struct{}, 1),
 		utt: utterance{pcm: make([]float32, 0, longest)}, uttReady: make(chan struct{}, 1), prefill: make(chan struct{}, 1),
 		jobs: make(chan job, 4), noted: make(chan struct{}, 1), stop: make(chan struct{}), probs: make([]float32, 2),
-		wakeProbs: make([]float32, 2)}
+		wakeProbs: make([]float32, 2), quietProbs: make([]float32, 2)}
 	c.pass = passContext{Context: context.Background(), c: c}
 	vad, err := gopus.NewVAD(inRate)
 	if err != nil {
@@ -1267,13 +1280,29 @@ func (c *Cascade) respond() {
 				return speak([]byte(lead.String()))
 			}
 			replyMark := c.cfg.Session.Checkpoint()
-			// A reply may call tools; one whose result needs words has
-			// the agent answer again, on the same voice.
-			for round := 0; ; round++ {
-				err = c.cfg.Session.Reply(ctx, c.cfg.Reply, sink)
-				if err != nil || round == maxToolRounds || !c.runCalls(ctx, j, trace) {
+			for overruled := false; ; overruled = true {
+				// A reply may call tools; one whose result needs words
+				// has the agent answer again, on the same voice.
+				for round := 0; ; round++ {
+					err = c.cfg.Session.Reply(ctx, c.cfg.Reply, sink)
+					if err != nil || round == maxToolRounds || !c.runCalls(ctx, j, trace) {
+						break
+					}
+				}
+				if !silent || overruled || err != nil || c.asksQuiet(ctx, text) {
 					break
 				}
+				// Silence answers only a request for it: the model
+				// answers after all, told why.
+				trace("silence overruled")
+				if err = c.cfg.Session.Restore(replyMark); err == nil {
+					err = c.cfg.Session.Add(chat.System, notAskedQuiet)
+				}
+				if err != nil {
+					break
+				}
+				lead.Reset()
+				decided, silent = false, false
 			}
 			if echoed && err == nil && ctx.Err() == nil && len(c.cfg.Session.Calls()) == 0 {
 				// The conversation keeps the reply as said, so that the
@@ -1358,7 +1387,7 @@ func (c *Cascade) respond() {
 
 // SilencePrompt ends the system prompt of a conversation New starts: it
 // lets the model say nothing, now or until something it names happens.
-const SilencePrompt = `Never repeat or read back what someone said: everyone in the call heard it. Always answer, unless someone explicitly asks you to be quiet, to stop talking, or to wait: only then reply with nothing but <silent until "...">, naming the word or event that ends the silence.`
+const SilencePrompt = `Never repeat or read back what someone said: everyone in the call heard it. Always answer: a greeting, a single word, or anything unclear or misheard gets a short reply. Only when someone clearly asks you to be quiet, to stop talking, or to wait, reply with nothing but <silent until "...">, where "..." says in your own words what should make you speak again.`
 
 const silentMark = "<silent"
 
@@ -1431,6 +1460,32 @@ func silenceUntil(reply string) string {
 		return q
 	}
 	return "being asked to speak"
+}
+
+// The zero-shot question that judges whether what was said asks the agent
+// to be quiet, and the note that overrules a silence chosen otherwise.
+const quietQuestion = `A voice assistant hears this in a call. Is the user asking it to be quiet, to stop talking, or to wait?`
+
+var quietLabels = []string{
+	"Something else, or it is unclear",
+	"A request to be quiet, stop talking, or wait",
+}
+
+const notAskedQuiet = "No one asked you to be quiet: answer what was just said."
+
+// asksQuiet reports whether message asks the agent to be quiet, and so
+// whether a silence it chose stands.
+func (c *Cascade) asksQuiet(ctx context.Context, message string) bool {
+	if c.cfg.Quiet == nil {
+		return true
+	}
+	if err := c.cfg.Quiet.ClassifyInto(ctx, message, c.quietProbs); err != nil {
+		if ctx.Err() == nil {
+			c.fail(err)
+		}
+		return true
+	}
+	return c.quietProbs[1] > c.quietProbs[0]
 }
 
 // The zero-shot question that judges whether a silence the agent chose is

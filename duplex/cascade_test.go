@@ -386,6 +386,41 @@ func TestCascadeKeepsSilence(t *testing.T) {
 	}
 }
 
+// overruledSession chooses silence, and answers once told no one asked for
+// it.
+type overruledSession struct{ silentSession }
+
+func (s *overruledSession) Reply(ctx context.Context, opts chat.Options, sink func([]byte) error) error {
+	s.mu.Lock()
+	told := len(s.messages) > 0 && s.messages[len(s.messages)-1] == notAskedQuiet
+	s.mu.Unlock()
+	if !told {
+		return s.silentSession.Reply(ctx, opts, sink)
+	}
+	s.replies.Add(1)
+	return s.fakeSession.Reply(ctx, opts, sink)
+}
+
+// A silence the model chooses when no one asked for quiet is overruled:
+// the agent answers.
+func TestCascadeOverrulesSilence(t *testing.T) {
+	session := &overruledSession{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Synthesizer: fakeSynth{},
+		Wake: fakeWake{speak: 0.1}, Quiet: fakeWake{speak: 0.1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, speechClip(t), func(s speech.DuplexState, out []float32) bool { return out[0] != 0 }, 3*time.Second) {
+		t.Fatal("the agent kept a silence no one asked for")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if got := strings.Join(session.messages, "|"); got != "hello gopher|"+notAskedQuiet+"|Hi there, friend." {
+		t.Fatalf("conversation %q", got)
+	}
+}
+
 func TestEchoOf(t *testing.T) {
 	for _, c := range []struct {
 		reply   string
