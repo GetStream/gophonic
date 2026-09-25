@@ -76,6 +76,11 @@ type Synthesizer struct {
 	// keeps them across utterances and a later Speak in the same voice
 	// evaluates only the first text token's row.
 	voice, voiceLang, voiceRows int // the cached prompt's speaker, language, and rows (0: none)
+	voiceStyle                  string
+	// The style instruction's tokens, "<|im_start|>user\n...<|im_end|>\n",
+	// for the style they were made for.
+	styleIDs []int
+	styleFor string
 
 	onFeed func(row, hidden []float32) // tests: each talker input row and the state before it
 }
@@ -215,7 +220,7 @@ func (s *Synthesizer) generate(ctx context.Context, opts speech.SpeakOptions, ne
 	if len(s.text) == 0 {
 		return nil // no text
 	}
-	if err := s.prefill(speaker, language); err != nil {
+	if err := s.prefill(speaker, language, opts.Style); err != nil {
 		return err
 	}
 	for step := 0; step < maxFrames; step++ {
@@ -342,7 +347,7 @@ func (s *Synthesizer) tokenize(n int) error {
 // prefill evaluates the prompt: the assistant role, the codec's control
 // tokens (language, speaker) under TTS padding, and the first text token.
 // With the voice prompt cached, only the text token's row.
-func (s *Synthesizer) prefill(speaker, language int) error {
+func (s *Synthesizer) prefill(speaker, language int, style string) error {
 	m, c, h := s.m, &s.m.cfg.Talker, s.m.hidden
 	var ids [7]int
 	control := append(ids[:0], c.NoThink, c.ThinkBOS, c.ThinkEOS)
@@ -350,9 +355,25 @@ func (s *Synthesizer) prefill(speaker, language int) error {
 		control = append(ids[:0], c.Think, c.ThinkBOS, language, c.ThinkEOS)
 	}
 	control = append(control, speaker, c.CodecPad, c.CodecBOS)
-	n := 3 + len(control)
+	// A style is an instruction the talker reads before everything else,
+	// as the official generate_custom_voice's instruct.
+	if style != s.styleFor {
+		s.styleIDs, s.styleFor = s.styleIDs[:0], style
+		if style != "" {
+			text := "<|im_start|>user\n" + style + "<|im_end|>\n"
+			got, err := m.tokens.EncodeInto(text, make([]int, 0, len(text)+8), &s.tokWS)
+			if err != nil {
+				s.styleFor = ""
+				return fmt.Errorf("qwen3tts: tokenize style: %w", err)
+			}
+			s.styleIDs = got
+		}
+	}
+	ns := len(s.styleIDs)
+	n := ns + 3 + len(control)
 	s.textAt = 1
-	if s.voiceRows == n-1 && s.voice == speaker && s.voiceLang == language && s.kv != nil && len(s.kv.Tokens()) >= n-1 {
+	if s.voiceRows == n-1 && s.voice == speaker && s.voiceLang == language && s.voiceStyle == style &&
+		s.kv != nil && len(s.kv.Tokens()) >= n-1 {
 		s.rows = slices.Grow(s.rows[:0], h)[:h]
 		copy(s.rows, s.textRows[:h])
 		m.addCodec(s.rows, c.CodecBOS)
@@ -360,13 +381,18 @@ func (s *Synthesizer) prefill(speaker, language int) error {
 	}
 	s.voiceRows = 0
 	s.rows = slices.Grow(s.rows[:0], n*h)[:n*h]
-	s.tmp = slices.Grow(s.tmp[:0], 3*h)[:3*h]
+	s.tmp = slices.Grow(s.tmp[:0], (ns+3)*h)[:(ns+3)*h]
+	if ns > 0 {
+		if err := m.textRows(s.exec, s.rows[:ns*h], s.styleIDs, s.tmp); err != nil {
+			return err
+		}
+	}
 	// "<|im_start|>assistant\n", whose ids the tokenizer shares with Qwen3.
-	if err := m.textRows(s.exec, s.rows[:3*h], roleIDs[:], s.tmp); err != nil {
+	if err := m.textRows(s.exec, s.rows[ns*h:(ns+3)*h], roleIDs[:], s.tmp); err != nil {
 		return err
 	}
 	for i, id := range control[:len(control)-1] {
-		row := s.rows[(3+i)*h : (4+i)*h]
+		row := s.rows[(ns+3+i)*h : (ns+4+i)*h]
 		text := m.padRow
 		if i == len(control)-2 {
 			text = m.bosRow
@@ -380,7 +406,7 @@ func (s *Synthesizer) prefill(speaker, language int) error {
 	if err := s.talkerRows(n, 0); err != nil {
 		return err
 	}
-	s.voice, s.voiceLang, s.voiceRows = speaker, language, n-1
+	s.voice, s.voiceLang, s.voiceStyle, s.voiceRows = speaker, language, style, n-1
 	return nil
 }
 

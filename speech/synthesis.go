@@ -33,4 +33,7 @@ type SpeakOptions struct {
 	// Language is the language to speak, as an ISO 639-1 code or an English
 	// name; empty lets the model follow the text.
 	Language string
+	// Style says how to speak, in words: "Calm and even; never laugh."
+	// Synthesizers that take no instruction ignore it.
+	Style string
 }

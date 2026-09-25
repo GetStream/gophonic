@@ -420,3 +420,60 @@ func TestSpeakAllocations(t *testing.T) {
 		t.Fatalf("Speak allocates %v times", allocs)
 	}
 }
+
+// A style is read before the voice prompt: it changes what is said, its
+// prompt is cached like any voice's, and a warm call allocates nothing.
+func TestStyle(t *testing.T) {
+	ref := loadReference(t, "hello")
+	m := loadModel(t)
+	s, err := NewSynthesizer(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Greedy = true
+	speak := func(style string) [][groups]int {
+		sent := false
+		next := func() ([]byte, error) {
+			if sent {
+				return nil, io.EOF
+			}
+			sent = true
+			return []byte(ref.Text), nil
+		}
+		var got [][groups]int
+		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: style}
+		if err := s.generate(context.Background(), opts, next, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	plain := speak("")
+	calm := speak("Speak slowly, in a calm and even voice.")
+	rows := len(s.kv.Tokens())
+	again := speak("Speak slowly, in a calm and even voice.")
+	if len(plain) == 0 || len(calm) == 0 || calm[0] == plain[0] && len(calm) == len(plain) {
+		t.Fatalf("the style changed nothing: %d frames, %d without it", len(calm), len(plain))
+	}
+	if again[0] != calm[0] || len(s.kv.Tokens()) != rows {
+		t.Fatalf("the cached styled prompt differs: first frame %v, want %v", again[0], calm[0])
+	}
+	t.Logf("%d frames plain, %d calm", len(plain), len(calm))
+	sent, text := false, []byte(ref.Text)
+	next := func() ([]byte, error) {
+		if sent {
+			return nil, io.EOF
+		}
+		sent = true
+		return text, nil
+	}
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: "Speak slowly, in a calm and even voice."}
+	if n := testing.AllocsPerRun(2, func() {
+		sent = false
+		if err := s.generate(context.Background(), opts, next, func(*[groups]int) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations per warm styled call", n)
+	}
+}

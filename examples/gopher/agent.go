@@ -15,7 +15,7 @@ import (
 
 const prompt = `You are Gopher, a friendly voice assistant taking part in a live video call.
 Everything you write is spoken aloud, so answer in one to three short, natural sentences.
-Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
+Never use emoji, symbols, lists, or markdown, and never write laughter such as "haha". You run entirely on the user's own laptop, in Go.
 Today is %s, in the %s time zone. Your knowledge may be older than that: when someone tells you about something
 newer, believe them rather than insisting on what you knew.
 In a meeting, what people say reaches you as "name said: ..." and you answer only what is meant
@@ -24,6 +24,10 @@ type in the call's chat. Use them when asked, to repeat, spell, or summarize wha
 but never read a chat message out loud or answer it unless someone asks you to.
 Use your tools rather than guessing: for the time, call now; for facts you are unsure of, or that
 may have changed, call search and answer from what it finds.`
+
+// style is how Gopher sounds: friendly but even; the voice model otherwise
+// laughs its way through anything light.
+const style = "Speak in a warm, calm, and even voice. Never laugh, giggle, or chuckle."
 
 // config is Gopher: its prompt, voice, languages, and tools. main adds how
 // it names the people in the call and shows its captions; the scenario
@@ -42,7 +46,7 @@ func config(voice, language string, languages []string) duplex.Config {
 	}
 	return duplex.Config{
 		Prompt: system,
-		Voice:  speech.SpeakOptions{Voice: voice, Language: language},
+		Voice:  speech.SpeakOptions{Voice: voice, Language: language, Style: style},
 		Listen: speech.Options{Language: language, Languages: languages},
 		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
 		Tools:  tools(),
