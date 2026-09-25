@@ -64,6 +64,9 @@ type Weights struct {
 type modelLayer struct {
 	attnNorm, mlpNorm, qNorm, kNorm []float32
 	q, k, v, o, gate, up, down      linear
+	// A DeltaNet layer's -exp(A_log), time step bias, output norm weight,
+	// and causal convolution ([channel][DCONV]).
+	dnNegA, dnDT, dnNorm, dnConv []float32
 }
 
 // linear is one packed projection: exact FP16 weights, or rotated int8
@@ -104,6 +107,45 @@ type modelConfig struct {
 	// experts of intermediate width, of which topK take each token, weighted
 	// by the router's renormalized probabilities.
 	experts, topK int
+	// The Qwen3.5 family is hybrid: most layers mix tokens with a Gated
+	// DeltaNet (linear[i]) instead of attention, attention layers gate their
+	// output and rotate only the first rotary dimensions of each head, norms
+	// scale by 1 + w, and a shared expert joins the routed ones.
+	hybrid                   bool
+	linear                   []bool
+	rotary                   int
+	dnKeyHeads, dnValueHeads int // DeltaNet heads: keys (and queries), values
+	dnKeyDim, dnValueDim     int
+	dnConv                   int // causal convolution width
+}
+
+// shared counts the experts every token uses besides its routed ones: the
+// Qwen3.5 family's shared expert, stored as expert E.
+func (c *modelConfig) shared() int {
+	if c.hybrid {
+		return 1
+	}
+	return 0
+}
+
+// slots is how many experts each token runs, and allExperts how many are
+// stored.
+func (c *modelConfig) slots() int      { return c.topK + c.shared() }
+func (c *modelConfig) allExperts() int { return c.experts + c.shared() }
+
+// routerRows is the FP32 router's rows: the experts', the shared expert's
+// gate, and zero rows up to a multiple of 16.
+func routerRows(c *modelConfig) int { return (c.experts + c.shared() + 15) / 16 * 16 }
+
+// attnLayers counts the layers that attend (all of them unless hybrid).
+func (c *modelConfig) attnLayers() int {
+	n := c.layers
+	for _, l := range c.linear {
+		if l {
+			n--
+		}
+	}
+	return n
 }
 
 // TextConfig is a Qwen3 decoder's Hugging Face configuration: the
@@ -132,6 +174,25 @@ type TextConfig struct {
 	NormTopK        bool  `json:"norm_topk_prob"`
 	SparseStep      int   `json:"decoder_sparse_step"`
 	MLPOnlyLayers   []int `json:"mlp_only_layers"`
+	// The Qwen3.5 family (model_type qwen3_5_moe_text).
+	LayerTypes        []string        `json:"layer_types"`
+	LinearConv        int             `json:"linear_conv_kernel_dim"`
+	LinearKeyHeads    int             `json:"linear_num_key_heads"`
+	LinearValueHeads  int             `json:"linear_num_value_heads"`
+	LinearKeyDim      int             `json:"linear_key_head_dim"`
+	LinearValueDim    int             `json:"linear_value_head_dim"`
+	AttnOutputGate    bool            `json:"attn_output_gate"`
+	PartialRotary     float64         `json:"partial_rotary_factor"`
+	RopeParameters    *RopeParameters `json:"rope_parameters"`
+	SharedExpertWidth int             `json:"shared_expert_intermediate_size"`
+}
+
+// RopeParameters is the rope_parameters of newer configurations. Text uses
+// one position for all three multimodal axes, which makes mRoPE plain RoPE.
+type RopeParameters struct {
+	RopeType      string  `json:"rope_type"`
+	RopeTheta     float64 `json:"rope_theta"`
+	PartialRotary float64 `json:"partial_rotary_factor"`
 }
 
 // LoadWeights reads an official Qwen3 safetensors snapshot directory
@@ -201,6 +262,9 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 	prefix := opts.Prefix
 	if prefix == "" {
 		prefix = "model."
+		if cfg.hybrid {
+			prefix = "model.language_model." // the multimodal snapshot's decoder
+		}
 	}
 	st, err := safetensors.Open(dir)
 	if err != nil {
@@ -227,6 +291,15 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 			return nil, err
 		}
 		m.embed, m.unmap = embed, append(m.unmap, unmap)
+	}
+	if cfg.hybrid {
+		if err := m.loadHybrid(st); err != nil {
+			return nil, err
+		}
+		if err := m.loadGPU(st, 9, opts.Head); err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
 	if m.finalNorm, err = st.Float32(prefix+"norm.weight", h); err != nil {
 		return nil, err
@@ -428,13 +501,30 @@ func readConfig(path string) (modelConfig, error) {
 	if err := vibejson.Unmarshal(raw, &c); err != nil {
 		return modelConfig{}, fmt.Errorf("qwen3: parse Qwen3 config: %w", err)
 	}
+	if c.ModelType == "qwen3_5_moe" {
+		// A multimodal snapshot: the decoder is its text_config.
+		var outer struct {
+			Text TextConfig `json:"text_config"`
+		}
+		if err := vibejson.Unmarshal(raw, &outer); err != nil {
+			return modelConfig{}, fmt.Errorf("qwen3: parse Qwen3.5 config: %w", err)
+		}
+		c = outer.Text
+	}
 	return c.model()
 }
 
 // model validates the configuration and derives the evaluator's geometry.
 func (c TextConfig) model() (modelConfig, error) {
 	experts, topK := 0, 0
+	var hy modelConfig
 	switch c.ModelType {
+	case "qwen3_5_moe_text":
+		var err error
+		if hy, err = c.hybrid(); err != nil {
+			return modelConfig{}, err
+		}
+		experts, topK, c.Intermediate = c.Experts, c.ExpertsPerToken, c.ExpertWidth
 	case "qwen3":
 	case "qwen3_moe":
 		// Every layer sparse, with renormalized top-k weights: Qwen3-30B-A3B
@@ -445,7 +535,7 @@ func (c TextConfig) model() (modelConfig, error) {
 		}
 		experts, topK, c.Intermediate = c.Experts, c.ExpertsPerToken, c.ExpertWidth
 	default:
-		return modelConfig{}, fmt.Errorf("qwen3: expected model_type qwen3 or qwen3_moe, got %q", c.ModelType)
+		return modelConfig{}, fmt.Errorf("qwen3: expected model_type qwen3, qwen3_moe, or qwen3_5_moe_text, got %q", c.ModelType)
 	}
 	if c.HiddenAct != "" && c.HiddenAct != "silu" || c.AttentionBias || c.UseSlidingWindow || c.RopeScaling != nil {
 		return modelConfig{}, errors.New("qwen3: unsupported Qwen3 variant (activation, attention bias, sliding window, or scaled RoPE)")
@@ -462,9 +552,13 @@ func (c TextConfig) model() (modelConfig, error) {
 	if c.Heads%c.KVHeads != 0 || c.HeadDim%2 != 0 || c.RMSNormEps <= 0 || c.RopeTheta <= 0 {
 		return modelConfig{}, errors.New("qwen3: inconsistent Qwen3 attention, normalization, or RoPE configuration")
 	}
-	inv := make([]float64, c.HeadDim/2)
+	rotary := c.HeadDim
+	if hy.hybrid {
+		rotary = hy.rotary
+	}
+	inv := make([]float64, rotary/2)
 	for d := range inv {
-		inv[d] = 1 / math.Pow(c.RopeTheta, float64(2*d)/float64(c.HeadDim))
+		inv[d] = 1 / math.Pow(c.RopeTheta, float64(2*d)/float64(rotary))
 	}
 	return modelConfig{
 		hidden: c.HiddenSize, layers: c.Layers, heads: c.Heads, kvHeads: c.KVHeads,
@@ -472,7 +566,45 @@ func (c TextConfig) model() (modelConfig, error) {
 		vocab: c.Vocab, maxPositions: c.MaxPositions, eps: c.RMSNormEps,
 		attnScale: 1 / math.Sqrt(float64(c.HeadDim)), invFreq: inv,
 		experts: experts, topK: topK,
+		hybrid: hy.hybrid, linear: hy.linear, rotary: rotary,
+		dnKeyHeads: hy.dnKeyHeads, dnValueHeads: hy.dnValueHeads, dnKeyDim: hy.dnKeyDim, dnValueDim: hy.dnValueDim, dnConv: hy.dnConv,
 	}, nil
+}
+
+// hybrid validates a Qwen3.5-family configuration: Gated DeltaNet and gated
+// attention layers, each with a mixture of experts and a shared expert as
+// wide as the routed ones. It fills c's RoPE fields from rope_parameters.
+func (c *TextConfig) hybrid() (modelConfig, error) {
+	if rp := c.RopeParameters; rp != nil {
+		if rp.RopeType != "" && rp.RopeType != "default" {
+			return modelConfig{}, fmt.Errorf("qwen3: unsupported RoPE type %q", rp.RopeType)
+		}
+		c.RopeTheta = rp.RopeTheta
+		if rp.PartialRotary != 0 {
+			c.PartialRotary = rp.PartialRotary
+		}
+	}
+	if c.PartialRotary == 0 {
+		c.PartialRotary = 1
+	}
+	h := modelConfig{hybrid: true, linear: make([]bool, len(c.LayerTypes)), rotary: int(float64(c.HeadDim) * c.PartialRotary),
+		dnKeyHeads: c.LinearKeyHeads, dnValueHeads: c.LinearValueHeads, dnKeyDim: c.LinearKeyDim, dnValueDim: c.LinearValueDim, dnConv: c.LinearConv}
+	for i, t := range c.LayerTypes {
+		switch t {
+		case "linear_attention":
+			h.linear[i] = true
+		case "full_attention":
+		default:
+			return modelConfig{}, fmt.Errorf("qwen3: unsupported layer type %q", t)
+		}
+	}
+	if len(c.LayerTypes) != c.Layers || !c.AttnOutputGate || c.Experts <= 0 || c.ExpertsPerToken <= 0 ||
+		c.ExpertsPerToken > c.Experts || c.ExpertWidth <= 0 || c.SharedExpertWidth != c.ExpertWidth ||
+		c.LinearKeyHeads <= 0 || c.LinearValueHeads%c.LinearKeyHeads != 0 || c.LinearKeyDim <= 0 ||
+		c.LinearValueDim <= 0 || c.LinearConv < 1 || h.rotary <= 0 || h.rotary%2 != 0 || h.rotary > c.HeadDim {
+		return modelConfig{}, errors.New("qwen3: unsupported Qwen3.5 layout (layer types, gating, experts, DeltaNet, or RoPE)")
+	}
+	return h, nil
 }
 
 // newHead allocates the language-model head's packed storage, which

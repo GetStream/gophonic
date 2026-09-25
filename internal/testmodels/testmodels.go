@@ -30,6 +30,12 @@ const (
 	// reference prompt from internal/qwen3lm/tools/moe_reference.py.
 	Qwen3MoE          = "Qwen3-30B-A3B-Instruct-2507"
 	Qwen3MoEReference = "qwen3-30b-a3b-reference.f32"
+	// Qwen36 is the official Qwen/Qwen3.6-35B-A3B snapshot directory: a
+	// hybrid of Gated DeltaNet and gated attention with experts, and
+	// Qwen36Reference the post-final-norm state of its reference prompt
+	// from internal/qwen3lm/tools/qwen35_reference.py.
+	Qwen36          = "Qwen3.6-35B-A3B"
+	Qwen36Reference = "qwen3.6-35b-a3b-reference.f32"
 	// Qwen3HelloReference is the BF16 PyTorch hidden state of "hello" that
 	// qwen3/tools/reference_hidden.py writes.
 	Qwen3HelloReference = "qwen3-8b-hello-reference.f32"

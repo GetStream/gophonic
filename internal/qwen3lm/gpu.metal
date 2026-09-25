@@ -803,6 +803,11 @@ struct MoeArgs {
 	uint experts;  // E
 	uint topk;     // experts per token
 	uint partsOut; // partial sums of squares written per row
+	// The router: logits per row, and whether a shared expert (index E,
+	// whose gate logit follows the experts') joins every token as one more
+	// slot, weighted by the sigmoid of its logit.
+	uint stride;
+	uint shared;
 };
 
 // moe_router writes the router's logits for each row: 16 experts per
@@ -814,7 +819,7 @@ kernel void moe_router(device const float *W [[buffer(0)]], device const float *
 		uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
 		uint lane [[thread_index_in_simdgroup]]) {
 	if (tg.x == 0 && tg.y == 0 && sg == 0)
-		for (uint e = lane; e < a.experts; e += 32)
+		for (uint e = lane; e < a.experts + a.shared; e += 32)
 			atomic_store_explicit(&counts[e], 0, memory_order_relaxed);
 	uint row = tg.y;
 	x += (ulong)row * a.K;
@@ -834,8 +839,8 @@ kernel void moe_router(device const float *W [[buffer(0)]], device const float *
 	acc0 = simd_sum(acc0) * inv;
 	acc1 = simd_sum(acc1) * inv;
 	if (lane == 0) {
-		y[(ulong)row * a.experts + e0] = acc0;
-		y[(ulong)row * a.experts + e0 + 1] = acc1;
+		y[(ulong)row * a.stride + e0] = acc0;
+		y[(ulong)row * a.stride + e0 + 1] = acc1;
 	}
 }
 
@@ -852,7 +857,8 @@ kernel void moe_route(device const float *logits [[buffer(0)]], device uint *ids
 	threadgroup float bestV[32];
 	threadgroup uint bestI[32];
 	threadgroup float chosen[32];
-	float v = logits[(ulong)row * a.experts + tid];
+	uint slots = a.topk + a.shared;
+	float v = logits[(ulong)row * a.stride + tid];
 	uint groups = (a.experts + 31) / 32;
 	for (uint k = 0; k < a.topk; k++) {
 		// The simdgroup's best, lowest index on ties, then the threadgroup's.
@@ -871,8 +877,8 @@ kernel void moe_route(device const float *logits [[buffer(0)]], device uint *ids
 					bv = bestV[g];
 					bi = bestI[g];
 				}
-			ids[(ulong)row * a.topk + k] = bi;
-			rank[(ulong)row * a.topk + k] = atomic_fetch_add_explicit(&counts[bi], 1, memory_order_relaxed);
+			ids[(ulong)row * slots + k] = bi;
+			rank[(ulong)row * slots + k] = atomic_fetch_add_explicit(&counts[bi], 1, memory_order_relaxed);
 			chosen[k] = bv;
 			bestI[0] = bi;
 		}
@@ -886,7 +892,13 @@ kernel void moe_route(device const float *logits [[buffer(0)]], device uint *ids
 		for (uint k = 0; k < a.topk; k++)
 			sum += exp(chosen[k] - top);
 		for (uint k = 0; k < a.topk; k++)
-			wts[(ulong)row * a.topk + k] = exp(chosen[k] - top) / sum;
+			wts[(ulong)row * slots + k] = exp(chosen[k] - top) / sum;
+		if (a.shared) {
+			ulong p = (ulong)row * slots + a.topk;
+			ids[p] = a.experts;
+			wts[p] = 1 / (1 + exp(-logits[(ulong)row * a.stride + a.experts]));
+			rank[p] = atomic_fetch_add_explicit(&counts[a.experts], 1, memory_order_relaxed);
+		}
 	}
 }
 

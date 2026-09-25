@@ -41,6 +41,16 @@ func (p *gpuPrefix) copyFrom(*gpuPrefix, int, int) {}
 
 func (p *gpuPrefix) release() {}
 
+func (p *gpuPrefix) recurrent() bool { return false }
+
+func (p *gpuPrefix) copyStates(*gpuPrefix, int) {}
+
+func (e *Evaluator) rewind(*PrefixKV, int, bool, *Workspace) error { return nil }
+
+func (m *Weights) loadHybrid(*safetensors.Checkpoint) error {
+	return errors.New("qwen3: Qwen3.5 models need the GPU backend (darwin/arm64)")
+}
+
 func gpuSupports(*modelConfig) bool { return false }
 
 func (w *gpuWorkspace) logitsInto(*Weights, []float32, []float32) error {
