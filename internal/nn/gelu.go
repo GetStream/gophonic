@@ -1,7 +1,7 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package whisper
+package nn
 
 import "math"
 
@@ -27,7 +27,7 @@ var geluNormalTable = func() [1025][2]float32 {
 	return table
 }()
 
-func applyGELUScalar(values []float32) {
+func geluScalar(values []float32) {
 	for i, x := range values {
 		a := float32(math.Abs(float64(x)))
 		if !(a < 8) {

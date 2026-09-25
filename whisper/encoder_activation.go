@@ -3,6 +3,8 @@
 
 package whisper
 
+import "github.com/GetStream/gophonic/internal/nn"
+
 // encoderActivation is stored in the workspace so submitting an activation
 // does not allocate a closure or a boxed slice. Each worker owns whole rows.
 type encoderActivation struct {
@@ -11,7 +13,7 @@ type encoderActivation struct {
 }
 
 func (a *encoderActivation) ApplyRows(start, end int) {
-	applyBiasGELU(a.values[start*a.width:end*a.width], a.bias, end-start, a.width)
+	nn.BiasGELU(a.values[start*a.width:end*a.width], a.bias, end-start, a.width)
 }
 
 func (w *EncoderWorkspace) activate(values, bias []float32, rows, width int) error {

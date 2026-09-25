@@ -86,8 +86,25 @@ func (w *Weights) PackBF16(bf16 []uint16) (rounded int, err error) {
 		return 0, ErrDimensions
 	}
 	clear(w.h)
-	for row := range w.n {
-		src := bf16[row*w.k : (row+1)*w.k]
+	if w.k == 0 {
+		for row := range w.scales {
+			w.scales[row] = 1
+		}
+		return 0, nil
+	}
+	return w.PackBF16Rows(bf16, 0)
+}
+
+// PackBF16Rows is PackBF16 for output rows [row0, row0+len(bf16)/K) of
+// freshly allocated weights, so a large matrix can be packed from row
+// chunks, concurrently for disjoint chunks.
+func (w *Weights) PackBF16Rows(bf16 []uint16, row0 int) (rounded int, err error) {
+	if w == nil || w.h == nil || w.k == 0 || len(bf16)%w.k != 0 || row0 < 0 || row0+len(bf16)/w.k > w.n {
+		return 0, ErrDimensions
+	}
+	for i := range len(bf16) / w.k {
+		row := row0 + i
+		src := bf16[i*w.k : (i+1)*w.k]
 		var maxAbs float32
 		for _, b := range src {
 			v := BF16ToF32(b)

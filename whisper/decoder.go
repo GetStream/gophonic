@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -699,8 +700,8 @@ func linearInto(dst, x []float32, l *decoderLinear, in, out int) {
 // qualifies. Without acceleration it keeps the scalar float32 order exactly.
 func layerNormInto(dst, x, weight, bias []float32) {
 	n := len(x)
-	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(weight) >= n && len(bias) >= n {
-		layerNormNEON(&x[0], &dst[0], &weight[0], &bias[0], n)
+	if nn.Accelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(weight) >= n && len(bias) >= n {
+		nn.LayerNorm(x[:n], dst, weight, bias)
 		return
 	}
 	layerNorm(dst, x, weight, bias)
@@ -711,8 +712,8 @@ func layerNormInto(dst, x, weight, bias []float32) {
 // the same two operations separately.
 func residualNormInto(x, dst, projected, weight, bias []float32) {
 	n := len(x)
-	if layerNormAccelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(projected) >= n && len(weight) >= n && len(bias) >= n {
-		residualNormNEON(&x[0], &dst[0], &weight[0], &bias[0], n, &projected[0], nil)
+	if nn.Accelerated && n > 0 && n%8 == 0 && len(dst) >= n && len(projected) >= n && len(weight) >= n && len(bias) >= n {
+		nn.ResidualNorm(x, dst, weight, bias, projected, nil)
 		return
 	}
 	addInto(x, projected)
@@ -807,7 +808,7 @@ func attentionPackedInto(dst, scaledQuery []float32, keys, values []*whispergemm
 		if err := keys[head].Mul(probabilities, scaledQuery[start:end]); err != nil {
 			panic(err)
 		}
-		inverse := softmaxExpRow(probabilities)
+		inverse := nn.SoftmaxExp(probabilities)
 		out := dst[start:end]
 		if err := values[head].Mul(out, probabilities); err != nil {
 			panic(err)
@@ -831,7 +832,7 @@ func attentionCachedInto(dst, scaledQuery, keys, values []float32, frames, value
 			clear(dst[start:end])
 			continue
 		}
-		inverse := softmaxExpRow(probabilities)
+		inverse := nn.SoftmaxExp(probabilities)
 		out := dst[start:end]
 		if err := whispergemm.MulVector(out, values[start*valueStride:], valueStride, probabilities, headSize); err != nil {
 			panic(err)
@@ -843,9 +844,9 @@ func attentionCachedInto(dst, scaledQuery, keys, values []float32, frames, value
 }
 
 // geluExactInto selects PyTorch's erf-based GELU curve. The shared scalar/SIMD
-// evaluator has the FP32 numerical bound documented with geluNormalTable.
+// evaluator has the FP32 numerical bound documented with internal/nn.GELU.
 func geluExactInto(x []float32) {
-	applyBiasGELU(x, nil, 1, len(x))
+	nn.BiasGELU(x, nil, 1, len(x))
 }
 
 func addInto(dst, src []float32) {

@@ -3,8 +3,8 @@
 
 //go:build !goexperiment.simd || !arm64
 
-package whisper
+package nn
 
-func applyGELU(values []float32) {
-	applyGELUScalar(values)
+func GELU(values []float32) {
+	geluScalar(values)
 }

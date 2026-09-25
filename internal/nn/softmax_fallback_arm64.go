@@ -4,17 +4,17 @@
 
 //go:build goexperiment.simd && arm64
 
-package whisper
+package nn
 
 import "simd/archsimd"
 
-// softmaxExpRowFallback replaces x with exp(x-max(x)) and returns 1/sum. Callers
+// softmaxExpFallback replaces x with exp(x-max(x)) and returns 1/sum. Callers
 // fold the normalization into a later, narrower product. Inputs are clamped
 // at ln(2^-126) after subtracting the maximum, so every scale factor is a
 // normal FP32 power of two and no special-case path is needed; clamped terms
 // are below 1.2e-38 against a sum of at least one. The polynomial is ggml's
 // NEON exponential. Four independent partial sums keep the FMA pipes busy.
-func softmaxExpRowFallback(x []float32) float32 {
+func softmaxExpFallback(x []float32) float32 {
 	n := len(x)
 	i := 0
 	var maxValue float32

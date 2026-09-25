@@ -1,4 +1,4 @@
-# Local Whisper HTTP server
+# Local transcription HTTP server
 
 `gophonic-server` serves completed audio recordings with one immutable
 transcription model (any model `gophonic.Open` recognizes as a transcriber)
@@ -11,7 +11,7 @@ measurement starts at the handler with a reusable request object.
 
 ```sh
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic-server ./cmd/gophonic-server
-./gophonic-server -model models/tiny.en.gophonic -listen 127.0.0.1:8080 -workers 1
+./gophonic-server -model models/Qwen3-ASR-1.7B -listen 127.0.0.1:8080 -workers 1
 ```
 
 In another terminal:
@@ -19,14 +19,16 @@ In another terminal:
 ```sh
 curl -sS http://127.0.0.1:8080/healthz
 curl -sS http://127.0.0.1:8080/v1/audio/transcriptions \
-  -F model=gophonic-whisper -F file=@recording.wav
+  -F model=qwen3-asr -F file=@recording.wav
 # {"text":"..."}
 ```
 
 `POST /v1/audio/transcriptions` accepts WAV files. The default response is
 `{"text":"..."}`. Set `response_format=text`, `srt`, or `vtt` for plain text or
 subtitles. `response_format=verbose_json` returns segment start/end times; add
-`timestamp_granularities[]=word` for aligned word times. The HTTP JSON
+`timestamp_granularities[]=word` for aligned word times (Whisper models;
+Qwen3-ASR has no timestamps, so its verbose JSON holds one segment per
+decoded piece and word timing returns HTTP 400). The HTTP JSON
 `words` array has `word`, `start`, and `end` fields; the Go API also returns
 mean token probability for each word.
 Word timing uses a second decoder pass over selected OpenAI alignment heads;

@@ -6,6 +6,7 @@ package whisper
 import (
 	"math"
 
+	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -61,7 +62,7 @@ func (a *audioAttention) runBiased(q, k, v, dst, queryBias, valueBias []float32,
 	clear(a.errors)
 	// Whole rows first: one NEON pass per row when both biases are present.
 	a.preparing = true
-	a.rowPrep = layerNormAccelerated && queryBias != nil && valueBias != nil && a.state%4 == 0
+	a.rowPrep = nn.Accelerated && queryBias != nil && valueBias != nil && a.state%4 == 0
 	err := executor.Rows(a, a.heads, 1)
 	if err == nil && a.rowPrep {
 		a.packing = true
@@ -164,7 +165,7 @@ func (a *audioAttention) ApplyRows(firstWorker, lastWorker int) {
 			}
 			var inverse [attentionTileRows]float32
 			for r := 0; r < rows; r++ {
-				inverse[r] = softmaxExpRow(scores[r*a.rows : (r+1)*a.rows])
+				inverse[r] = nn.SoftmaxExp(scores[r*a.rows : (r+1)*a.rows])
 			}
 			if err := a.values[head].Mul(a.dst[offset:], a.state, scores, a.rows, rows); err != nil {
 				a.errors[worker] = err

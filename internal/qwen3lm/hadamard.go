@@ -6,7 +6,8 @@ package qwen3lm
 import "math"
 
 // maxRotationBlock bounds the Hadamard block. Qwen3-8B's 4096- and
-// 12288-wide projection inputs use 4096-value blocks (12288 as three).
+// 12288-wide projection inputs use 4096-value blocks (12288 as three);
+// Qwen3-1.7B's 2048- and 6144-wide inputs use 2048-value blocks.
 const maxRotationBlock = 4096
 
 // rotation is a randomized Hadamard transform R = H·diag(signs), applied

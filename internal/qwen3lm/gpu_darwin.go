@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -28,6 +29,9 @@ const (
 	// gpuPositions is the rows of one GPU pass and the positions of a GPU
 	// workspace's key and value cache.
 	gpuPositions = 2048
+	// gpuMaxPositions bounds the RoPE table, and so the positions a GPU
+	// prefix can hold.
+	gpuMaxPositions = 1 << 16
 )
 
 // gpuLayer holds one layer's projections in one shared buffer: int8 rows
@@ -45,20 +49,27 @@ type gpuModel struct {
 	dev                          *metal.Device
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
-	attendFlash                  *metal.Pipeline
+	attendFlash, gemvHead        *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	layers                       []gpuLayer
 	norms, signs, rope           *metal.Buffer
 	hidden, inter, head          *rotation
 	cfg                          *modelConfig
-	bits                         int // 8 or 4
+	noInter                      bool // down's inputs are not rotated
+	bits                         int  // weight scheme, as in gpu.metal: 8 (Q8), 9 (Q8B), or 4 (Q4)
+	positions                    int  // RoPE table rows
+	// lm is the language-model head W·Rᵀ as Q8B int8 blocks with FP16
+	// scales, padded with zero rows to lmRows; nil unless loaded.
+	lm      *metal.Buffer
+	lmScale int // byte offset of the scales in lm
+	lmRows  int
 }
 
 // gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
 // times rowsPerSimdgroup in gpu.metal.
 func gpuRows(bits int) int {
-	if bits == 8 {
+	if bits != 4 {
 		return 16
 	}
 	return 32
@@ -66,20 +77,30 @@ func gpuRows(bits int) int {
 
 func alignUp(n int) int { return (n + gpuAlign - 1) &^ (gpuAlign - 1) }
 
-// loadGPU quantizes every projection into GPU buffers.
-// gpuSupports reports whether a Metal GPU is present and the model has the
-// geometry the GPU kernels are written for (Qwen3-8B).
-func gpuSupports(c *modelConfig) bool {
-	if c.hidden != 4096 || c.heads != 32 || c.kvHeads != 8 || c.headDim != 128 || c.intermediate%maxRotationBlock != 0 {
-		return false
+// gpuGeometry checks that the GPU kernels, which gpu.metal specializes by
+// the model's widths, fit the model: 128-wide heads, at most eight query
+// heads per key/value head, and projection widths that tile evenly.
+func gpuGeometry(c *modelConfig) error {
+	qdim := c.heads * c.headDim
+	group := c.heads / c.kvHeads
+	rot := newRotation(c.intermediate).block
+	if c.headDim != 128 || group > 8 || c.hidden%mmColumns != 0 || c.intermediate%mmColumns != 0 ||
+		(qdim+2*c.kvDim)%mmColumns != 0 || rot < 64 {
+		return errors.New("qwen3: the GPU backend needs 128-wide heads, at most 8 query heads per key/value head, and 64-aligned widths")
 	}
-	gpuProbe.Do(func() {
-		if d, err := metal.Open(); err == nil {
-			d.Close()
-			gpuPresent = true
-		}
-	})
-	return gpuPresent
+	return nil
+}
+
+// gpuSourceFor returns gpu.metal specialized for the model's geometry.
+func gpuSourceFor(c *modelConfig) string {
+	return fmt.Sprintf("#define QD %d\n#define KVD %d\n#define NH %d\n#define NKV %d\n#define ROT %d\n",
+		c.heads*c.headDim, c.kvDim, c.heads, c.kvHeads, newRotation(c.intermediate).block) + gpuSource
+}
+
+// gpuSupports reports whether a Metal GPU is present and the model has a
+// geometry the GPU kernels support.
+func gpuSupports(c *modelConfig) bool {
+	return gpuGeometry(c) == nil && GPUAvailable()
 }
 
 var (
@@ -87,28 +108,29 @@ var (
 	gpuPresent bool
 )
 
-func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
+// loadGPU quantizes every projection, and the head when named, into GPU
+// buffers.
+func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string) error {
 	c := &m.cfg
-	if c.hidden != 4096 || c.heads != 32 || c.kvHeads != 8 || c.headDim != 128 || c.intermediate%maxRotationBlock != 0 {
-		return errors.New("qwen3: the GPU backend supports the Qwen3-8B geometry only")
+	if err := gpuGeometry(c); err != nil {
+		return err
 	}
 	dev, err := metal.Open()
 	if err != nil {
 		return err
 	}
-	g := &gpuModel{dev: dev, cfg: c, layers: make([]gpuLayer, c.layers), bits: bits}
-	suffix := ""
-	if bits == 4 {
-		suffix = "_q4"
-	}
-	lib, err := dev.Compile(gpuSource)
+	g := &gpuModel{dev: dev, cfg: c, layers: make([]gpuLayer, c.layers), bits: bits,
+		positions: min(c.maxPositions, gpuMaxPositions)}
+	suffix := map[int]string{8: "", 9: "_q8", 4: "_q4"}[bits]
+	lib, err := dev.Compile(gpuSourceFor(c))
 	if err != nil {
 		return err
 	}
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
-	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate4096"},
+	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate"},
+		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix}, {&g.mm[0][1], "mm_o" + suffix}, {&g.mm[0][2], "mm_gateup" + suffix}, {&g.mm[0][3], "mm_down" + suffix},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
@@ -119,6 +141,13 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	}
 	h, kv, inter, qdim := c.hidden, c.kvDim, c.intermediate, c.heads*c.headDim
 	g.hidden, g.inter = newRotation(h), newRotation(inter)
+	// Block scales absorb the outliers of down's input that the online
+	// Hadamard otherwise spreads, at the same fidelity, so Q8B skips that
+	// dispatch per layer.
+	downIn := g.inter
+	if bits == 9 {
+		downIn, g.noInter = nil, true
+	}
 	head := newRotation(c.headDim)
 	g.head = &rotation{signs: make([]float32, qdim), block: c.headDim, scale: head.scale}
 	for i := range g.head.signs {
@@ -140,15 +169,15 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 		copy(norms[(2*i+1)*c.headDim:], m.layers[i].kNorm)
 	}
 	half := c.headDim / 2
-	if g.rope, err = dev.Buffer(4 * 2 * gpuPositions * half); err != nil {
+	if g.rope, err = dev.Buffer(4 * 2 * g.positions * half); err != nil {
 		return err
 	}
 	rope := floats(g.rope.Bytes())
-	for pos := range gpuPositions {
+	for pos := range g.positions {
 		for d, inv := range c.invFreq {
 			theta := float64(pos) * inv
 			rope[pos*half+d] = float32(math.Cos(theta))
-			rope[gpuPositions*half+pos*half+d] = float32(math.Sin(theta))
+			rope[g.positions*half+pos*half+d] = float32(math.Sin(theta))
 		}
 	}
 
@@ -157,11 +186,12 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 		n, k     int
 		norm     []float32 // folded input RMSNorm weight
 		in, out  *rotation // input- and output-side rotations
-		layer    *gpuLayer
+		buf      *metal.Buffer
 		base, sc int // byte offsets of row 0 and scale 0
 		step     int // destination row stride in rows
 		scaleMul float32
-		row0     int // destination row of source row 0
+		row0     int    // destination row of source row 0
+		rows     [2]int // for a chunk of a large matrix: its source rows
 	}
 	var jobs []job
 	for i := range m.layers {
@@ -169,12 +199,16 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 		off := 0
 		place := func(rows, k int) (int, int) {
 			w := off
-			off = alignUp(off + rows*k*bits/8)
-			s := off
 			if bits == 4 {
-				off = alignUp(off + 2*rows*(k/q4Group))
+				off = alignUp(off + rows*k/2)
 			} else {
+				off = alignUp(off + rows*k)
+			}
+			s := off
+			if bits == 8 {
 				off = alignUp(off + 4*rows)
+			} else {
+				off = alignUp(off + 2*rows*(k/q4Group))
 			}
 			return w, s
 		}
@@ -185,25 +219,37 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 		if gl.buf, err = dev.Buffer(off); err != nil {
 			return err
 		}
-		p := fmt.Sprintf("model.layers.%d.", i)
+		p := fmt.Sprintf("%slayers.%d.", m.prefix, i)
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, gl, gl.qkv, gl.qkvScale, 1, 1, 0},
-			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, gl, gl.qkv, gl.qkvScale, 1, 1, qdim},
-			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, gl, gl.qkv, gl.qkvScale, 1, 1, qdim + kv},
-			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, gl, gl.o, gl.oScale, 1, 1, 0},
-			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl, gl.gu, gl.guScale, 2, 1, 0},
-			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl, gl.gu, gl.guScale, 2, 1, 1},
-			job{p + "mlp.down_proj.weight", h, inter, nil, g.inter, g.hidden, gl, gl.d, gl.dScale, 1, 1, 0},
+			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, gl.buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}},
+			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, gl.buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}},
+			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, gl.buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}},
+			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, gl.buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}},
+			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl.buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}},
+			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl.buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}},
+			job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, gl.buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}},
 		)
 	}
-	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
-	format := WeightsGPU
-	if bits == 4 {
-		format = WeightsGPUQ4
+	if headName != "" {
+		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
+		// rotates the normalized state. It is read in chunks of at most one
+		// projection.
+		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
+		g.lmScale = alignUp(g.lmRows * h)
+		if g.lm, err = dev.Buffer(g.lmScale + 2*g.lmRows*(h/q4Group)); err != nil {
+			return err
+		}
+		step := inter
+		for r := 0; r < c.vocab; r += step {
+			jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, g.lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+step, c.vocab)}})
+		}
 	}
-	pre := openGPTQ(st.Dir(), format, bits, c)
-	if pre != nil {
-		defer pre.close()
+	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
+	var pre *gptqFile
+	if format := map[int]string{8: WeightsGPU, 4: WeightsGPUQ4}[bits]; format != "" {
+		if pre = openGPTQ(st.Dir(), format, bits, c); pre != nil {
+			defer pre.close()
+		}
 	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
 	var (
@@ -228,7 +274,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 				next++
 				mu.Unlock()
 				if pre != nil {
-					done, err := pre.place(j.name, j.n, j.k, j.layer.buf.Bytes(), j.base, j.sc, j.row0, j.step)
+					done, err := pre.place(strings.TrimPrefix(j.name, m.prefix), j.n, j.k, j.buf.Bytes(), j.base, j.sc, j.row0, j.step)
 					if err != nil {
 						mu.Lock()
 						first = errors.Join(first, err)
@@ -239,13 +285,17 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 						continue
 					}
 				}
+				r0, n := 0, j.n
+				if j.rows[1] > 0 {
+					r0, n = j.rows[0], j.rows[1]-j.rows[0]
+				}
 				t, err := st.Lookup(j.name, j.n, j.k)
 				if err == nil && t.DType != "BF16" {
 					err = fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", j.name, t.DType)
 				}
 				if err == nil {
-					raw = grow(raw, j.n*j.k)
-					err = t.ReadBits(raw, 0)
+					raw = grow(raw, n*j.k)
+					err = t.ReadBits(raw, int64(r0)*int64(j.k))
 				}
 				if err != nil {
 					mu.Lock()
@@ -253,34 +303,45 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 					mu.Unlock()
 					return
 				}
-				mat = grow(mat, j.n*j.k)
+				mat = grow(mat, n*j.k)
 				for i, b := range raw {
 					mat[i] = q8gemm.BF16ToF32(b)
 				}
-				for r := range j.n {
+				for r := range n {
 					row := mat[r*j.k : (r+1)*j.k]
 					if j.norm != nil {
 						for i := range row {
 							row[i] *= j.norm[i]
 						}
 					}
-					j.in.apply(row)
+					if j.in != nil {
+						j.in.apply(row)
+					}
 				}
 				if j.out != nil {
 					j.out.applyRows(mat, j.n, j.k)
 				}
-				buf := j.layer.buf.Bytes()
-				for r := range j.n {
+				buf := j.buf.Bytes()
+				for r := range n {
 					row := mat[r*j.k : (r+1)*j.k]
-					dst := j.row0 + r*j.step
-					if bits == 4 {
-						groups := j.k / q4Group
+					dst := j.row0 + (r0+r)*j.step
+					scheme := bits
+					if j.buf == g.lm {
+						scheme = 9
+					}
+					groups := j.k / q4Group
+					switch scheme {
+					case 4:
 						sc := unsafe.Slice((*uint16)(unsafe.Pointer(&buf[j.sc+2*dst*groups])), groups)
 						quantizeRowQ4(row, buf[j.base+dst*j.k/2:][:j.k/2], sc, j.scaleMul)
-						continue
+					case 9:
+						sc := unsafe.Slice((*uint16)(unsafe.Pointer(&buf[j.sc+2*dst*groups])), groups)
+						q := unsafe.Slice((*int8)(unsafe.Pointer(&buf[j.base+dst*j.k])), j.k)
+						quantizeRowQ8B(row, q, sc, j.scaleMul)
+					default:
+						q := unsafe.Slice((*int8)(unsafe.Pointer(&buf[j.base+dst*j.k])), j.k)
+						floats(buf[j.sc:])[dst] = quantizeRow(row, q) * j.scaleMul
 					}
-					q := unsafe.Slice((*int8)(unsafe.Pointer(&buf[j.base+dst*j.k])), j.k)
-					floats(buf[j.sc:])[dst] = quantizeRow(row, q) * j.scaleMul
 				}
 			}
 		}()
@@ -318,8 +379,25 @@ func quantizeRow(row []float32, q []int8) float32 {
 	return s
 }
 
-// q4Group is the 4-bit block length along K.
+// q4Group is the block length along K of the Q4 and Q8B schemes.
 const q4Group = 32
+
+// quantizeRowQ8B stores each 32-value block of row as int8 codes with one
+// FP16 scale max|v|/127 (times mul), as GGML's Q8_0 does.
+func quantizeRowQ8B(row []float32, q []int8, scales []uint16, mul float32) {
+	for b := range len(row) / q4Group {
+		v := row[b*q4Group : (b+1)*q4Group]
+		d := safetensors.F16ToF32(q8gemm.F32ToF16(q8gemm.MaxAbs(v) / 127))
+		scales[b] = q8gemm.F32ToF16(d * mul)
+		if d == 0 {
+			clear(q[b*q4Group : (b+1)*q4Group])
+			continue
+		}
+		for i, x := range v {
+			q[b*q4Group+i] = int8(max(-127, min(127, math.RoundToEven(float64(x/d)))))
+		}
+	}
+}
 
 // quantizeRowQ4 stores each 32-value block of row as 4-bit codes plus 8 (value
 // j in the low nibble of byte j, value j+16 in the high nibble) with one FP16
@@ -387,11 +465,20 @@ type gpuWorkspace struct {
 	rows                                    int
 	past                                    int
 	shared                                  bool
+	embeds                                  Embeds
+	spliced                                 int // embeds rows used so far
+	logits                                  *metal.Buffer
+	headArgs                                gemvArgs
+	oneSeq                                  [1][]int
 }
 
 // gpuTokenByToken forces the single-token kernels and gpuScalarAttention
 // the per-key attention loop; tests compare the paths.
 var gpuTokenByToken, gpuScalarAttention bool
+
+// attendSplits is the simdgroups that share one query head's keys in the
+// single-token attention (AS in gpu.metal).
+const attendSplits = 4
 
 // mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal).
 const mmColumns = 64
@@ -481,6 +568,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.scratch, 4 * mmScratchFloats},
 		{&w.attnParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
 		{&w.mlpParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
+		{&w.logits, 4 * max(g.lmRows, 1)},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
 			return nil, err
@@ -493,7 +581,8 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	w.oArgs = gemvArgs{uint32(qdim), uint32(c.hidden), eps, 0}
 	w.guArgs = gemvArgs{uint32(c.hidden), uint32(2 * c.intermediate), eps, parts}
 	w.dArgs = gemvArgs{uint32(c.intermediate), uint32(c.hidden), eps, 0}
-	w.attn = attnArgs{ropeSin: uint32(gpuPositions * c.headDim / 2), eps: eps, scale: float32(c.attnScale)}
+	w.headArgs = gemvArgs{uint32(c.hidden), uint32(g.lmRows), eps, 0}
+	w.attn = attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: eps, scale: float32(c.attnScale)}
 	return w, nil
 }
 
@@ -518,8 +607,9 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 // passes of up to gpuPositions rows; a lone single token takes the GEMV path.
 // With a prefix pre of past tokens, sequences continue it: shared prefixes
 // are only read, and an unshared one (a single sequence) receives the new
-// keys and values after its first past rows.
-func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool) error {
+// keys and values after its first past rows, a pass at a time when it is
+// longer than one pass. Placeholder tokens of embeds take its rows.
+func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool, embeds Embeds) error {
 	c := &m.cfg
 	own := 4 * gpuPositions * c.kvDim
 	w.curK, w.curV, w.curStride = w.kc, w.vc, own
@@ -535,7 +625,20 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 			w.attn.base = uint32(past)
 		}
 	}
-	w.past, w.shared = past, shared
+	w.past, w.shared, w.embeds, w.spliced = past, shared, embeds, 0
+	defer func() { w.embeds, w.oneSeq[0] = Embeds{}, nil }()
+	if pre != nil && !shared && len(seqs) == 1 && len(seqs[0]) > w.rows {
+		ids := seqs[0]
+		for off := 0; off < len(ids); off += w.rows {
+			w.oneSeq[0] = ids[off:min(off+w.rows, len(ids))]
+			if err := w.pass(m, w.oneSeq[:], dst, len(w.oneSeq[0])); err != nil {
+				return err
+			}
+			w.past += len(w.oneSeq[0])
+			w.attn.base = uint32(w.past)
+		}
+		return nil
+	}
 	for start := 0; start < len(seqs); {
 		end, rows := start, 0
 		for end < len(seqs) && rows+len(seqs[end]) <= w.rows {
@@ -553,6 +656,22 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 	return nil
 }
 
+// logits writes the head's logits for one post-final-norm state.
+func (w *gpuWorkspace) logitsInto(m *Weights, hidden, dst []float32) error {
+	g, c := w.g, &m.cfg
+	x := floats(w.h.Bytes())[:c.hidden]
+	copy(x, hidden)
+	g.hidden.apply(x)
+	e := &w.enc
+	g.dev.Begin(e, false)
+	w.gemv(g.gemvHead, g.lm, 0, g.lmScale, w.h, 0, w.logits, 0, w.attnParts, w.attnParts, 0, &w.headArgs)
+	if err := e.Wait(); err != nil {
+		return err
+	}
+	copy(dst, floats(w.logits.Bytes())[:c.vocab])
+	return nil
+}
+
 func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int) error {
 	g, c := w.g, &m.cfg
 	hs := floats(w.h.Bytes())
@@ -563,7 +682,12 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 		start := r
 		for pos, id := range ids {
 			row := hs[r*c.hidden : (r+1)*c.hidden]
-			m.embedRow(id, row)
+			if len(w.embeds.Rows) != 0 && id == w.embeds.Token {
+				copy(row, w.embeds.Rows[w.spliced*c.hidden:])
+				w.spliced++
+			} else {
+				m.embedRow(id, row)
+			}
 			g.hidden.apply(row)
 			embedParts[r] = sumSquares(row)
 			info[2*r], info[2*r+1] = uint32(w.past+pos), uint32(start)
@@ -641,7 +765,7 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 	qdim := c.heads * c.headDim
 	parts := c.hidden / mmColumns
 	w.attn.pos = 0
-	w.perRow = uint32(c.intermediate / maxRotationBlock)
+	w.perRow = uint32(c.intermediate / g.inter.block)
 	for i := range g.layers {
 		gl := &g.layers[i]
 		if i == 0 {
@@ -671,17 +795,19 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 			w.batchRows = uint32(rows)
 			e.SetPipeline(g.attendFlash)
 			e.SetBytes(unsafe.Pointer(&w.batchRows), 4, 8)
-			e.Dispatch(metal.Size{X: c.kvHeads, Y: (rows + 7) / 8, Z: 1}, metal.Size{X: 128, Y: 1, Z: 1})
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: (rows + 7) / 8, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
 		}
 
 		w.mmDispatch(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, qdim, c.hidden, rows, 0)
 		w.mmDispatch(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, c.hidden, 2*c.intermediate, rows, parts)
 
-		e.SetPipeline(g.rotate)
-		e.SetBuffer(w.act, 0, 0)
-		e.SetBuffer(g.signs, 0, 1)
-		e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
-		e.Dispatch(metal.Size{X: rows * int(w.perRow), Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+		if !g.noInter {
+			e.SetPipeline(g.rotate)
+			e.SetBuffer(w.act, 0, 0)
+			e.SetBuffer(g.signs, 0, 1)
+			e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
+			e.Dispatch(metal.Size{X: rows * int(w.perRow), Y: 1, Z: 1}, metal.Size{X: g.inter.block / 4, Y: 1, Z: 1})
+		}
 
 		w.mmDispatch(3, gl.buf, gl.d, gl.dScale, w.act, w.h, w.attnParts, w.attnParts, c.intermediate, c.hidden, rows, 0)
 	}
@@ -691,7 +817,7 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 // kernels, which stream weights fastest for a single token.
 func (w *gpuWorkspace) encodeTokens(n int) {
 	g, c, e := w.g, w.g.cfg, &w.enc
-	w.perRow = uint32(c.intermediate / maxRotationBlock)
+	w.perRow = uint32(c.intermediate / g.inter.block)
 	for t := range n {
 		hOff := 4 * t * c.hidden
 		w.attn.pos = uint32(w.past + t)
@@ -712,16 +838,18 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 			e.SetBuffer(g.rope, 0, 5)
 			e.SetBuffer(w.ctx, 0, 6)
 			e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
-			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * c.heads / c.kvHeads, Y: 1, Z: 1})
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
 
 			w.gemv(g.o, gl.buf, gl.o, gl.oScale, w.ctx, 0, w.h, hOff, w.mlpParts, w.mlpParts, 0, &w.oArgs)
 			w.gemv(g.gateup, gl.buf, gl.gu, gl.guScale, w.h, hOff, w.act, 0, w.mlpParts, w.mlpParts, 0, &w.guArgs)
 
-			e.SetPipeline(g.rotate)
-			e.SetBuffer(w.act, 0, 0)
-			e.SetBuffer(g.signs, 0, 1)
-			e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
-			e.Dispatch(metal.Size{X: c.intermediate / maxRotationBlock, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+			if !g.noInter {
+				e.SetPipeline(g.rotate)
+				e.SetBuffer(w.act, 0, 0)
+				e.SetBuffer(g.signs, 0, 1)
+				e.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
+				e.Dispatch(metal.Size{X: int(w.perRow), Y: 1, Z: 1}, metal.Size{X: g.inter.block / 4, Y: 1, Z: 1})
+			}
 
 			w.gemv(g.down, gl.buf, gl.d, gl.dScale, w.act, 0, w.h, hOff, w.attnParts, w.attnParts, 0, &w.dArgs)
 		}
@@ -729,7 +857,7 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 }
 
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits} {
 		b.Release()
 	}
 }
@@ -743,9 +871,28 @@ func (m *Weights) Release() {
 	for i := range g.layers {
 		g.layers[i].buf.Release()
 	}
+	if g.lm != nil {
+		g.lm.Release()
+	}
 	g.norms.Release()
 	g.signs.Release()
 	g.rope.Release()
 	g.dev.Close()
 	m.gpu = nil
+}
+
+func (g *gpuModel) hasHead() bool { return g.lm != nil }
+
+// maxPositions is the most positions a GPU prefix can hold.
+func (g *gpuModel) maxPositions() int { return g.positions }
+
+// GPUAvailable reports whether a Metal GPU is present.
+func GPUAvailable() bool {
+	gpuProbe.Do(func() {
+		if d, err := metal.Open(); err == nil {
+			d.Close()
+			gpuPresent = true
+		}
+	})
+	return gpuPresent
 }

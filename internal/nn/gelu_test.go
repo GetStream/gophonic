@@ -1,7 +1,7 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-package whisper
+package nn
 
 import (
 	"fmt"
@@ -34,10 +34,10 @@ func TestGELUAccuracy(t *testing.T) {
 	for _, kernel := range []struct {
 		name string
 		fn   func([]float32)
-	}{{"dispatched", applyGELU}, {"scalar", applyGELUScalar}, {"fused", func(v []float32) {
+	}{{"dispatched", GELU}, {"scalar", geluScalar}, {"fused", func(v []float32) {
 		n := len(v) / 4 * 4
-		applyBiasGELU(v[:n], nil, 1, n)
-		applyGELU(v[n:])
+		BiasGELU(v[:n], nil, 1, n)
+		GELU(v[n:])
 	}}} {
 		t.Run(kernel.name, func(t *testing.T) {
 			got := append([]float32(nil), inputs...)
@@ -77,7 +77,7 @@ func TestGELULengthsAlignmentSpecialAndAllocation(t *testing.T) {
 				for i := range values {
 					values[i] = float32(i%41-20) / 4
 				}
-				applyGELU(values)
+				GELU(values)
 				for i, got := range values {
 					x := float64(float32(i%41-20) / 4)
 					want := 0.5 * x * (1 + math.Erf(x/math.Sqrt2))
@@ -92,7 +92,7 @@ func TestGELULengthsAlignmentSpecialAndAllocation(t *testing.T) {
 		}
 	}
 	values := []float32{0, math.Float32frombits(1 << 31), float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()), -9, 9, 1}
-	applyGELU(values)
+	GELU(values)
 	if math.Float32bits(values[0]) != 0 || math.Float32bits(values[1]) != 1<<31 || !math.IsInf(float64(values[2]), 1) || !math.IsNaN(float64(values[3])) || !math.IsNaN(float64(values[4])) {
 		t.Fatalf("IEEE special-value behavior changed: %v", values)
 	}
@@ -101,7 +101,7 @@ func TestGELULengthsAlignmentSpecialAndAllocation(t *testing.T) {
 		for i := range buf {
 			buf[i] = float32(i%41-20) / 4
 		}
-		applyGELU(buf)
+		GELU(buf)
 	}); allocs != 0 {
 		t.Fatalf("GELU allocated %g objects", allocs)
 	}
@@ -117,11 +117,11 @@ func TestBiasGELUMatchesSeparatePasses(t *testing.T) {
 		bias[i] = float32(i%9-4) * 0.75
 	}
 	want := append([]float32(nil), values...)
-	addRowBias(want, bias, rows, width)
+	AddRowBias(want, bias, rows, width)
 	for i, x := range want {
 		want[i] = float32(0.5 * float64(x) * (1 + math.Erf(float64(x)/math.Sqrt2)))
 	}
-	applyBiasGELU(values, bias, rows, width)
+	BiasGELU(values, bias, rows, width)
 	for i := range values {
 		if d := math.Abs(float64(values[i] - want[i])); d > 2e-7+1e-7*math.Abs(float64(want[i])) {
 			t.Fatalf("index %d: %g != %g", i, values[i], want[i])
@@ -137,8 +137,8 @@ func BenchmarkGELU(b *testing.B) {
 			name string
 			fn   func([]float32)
 		}{
-			{"dispatched", applyGELU},
-			{"scalar", applyGELUScalar},
+			{"dispatched", GELU},
+			{"scalar", geluScalar},
 			{"erf", func(values []float32) {
 				for i, x := range values {
 					values[i] = float32(0.5 * float64(x) * (1 + math.Erf(float64(x)/math.Sqrt2)))

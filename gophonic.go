@@ -6,8 +6,8 @@
 //
 // Open loads any supported model by path and reports what it does; its
 // lanes implement the model-independent interfaces of package speech. Each
-// model also has its own package (whisper, smartturn, tinymel) with lower
-// level entry points.
+// model also has its own package (whisper, qwen3asr, smartturn, tinymel)
+// with lower level entry points.
 package gophonic
 
 import (
@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/GetStream/gophonic/qwen3asr"
 	"github.com/GetStream/gophonic/smartturn"
 	"github.com/GetStream/gophonic/speech"
 	"github.com/GetStream/gophonic/tinymel"
@@ -87,10 +88,24 @@ func (m *Model) NewTurnDetector() (speech.TurnDetector, error) {
 var ErrUnknownFormat = errors.New("gophonic: unrecognized model format")
 
 // Open loads the model at path, recognizing its format from the file: a
-// converted Whisper, Smart Turn, or TinyMelNet .gophonic bundle.
+// converted Whisper, Smart Turn, or TinyMelNet .gophonic bundle, or an
+// official Qwen3-ASR checkpoint directory.
 func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("gophonic: invalid thread count %d", opts.Threads)
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		if !qwen3asr.IsModelDir(path) {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, path)
+		}
+		model, err := qwen3asr.Load(path, qwen3asr.Options{})
+		if err != nil {
+			return nil, err
+		}
+		threads := opts.Threads
+		return &Model{name: "qwen3-asr", kind: Transcription, newTranscriber: func() (speech.Transcriber, error) {
+			return qwen3asr.NewTranscriber(model, threads)
+		}}, nil
 	}
 	magic, err := readMagic(path)
 	if err != nil {

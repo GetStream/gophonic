@@ -12,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
@@ -47,7 +48,7 @@ func TestLayerNormRow(t *testing.T) {
 	got := make([]float32, len(input))
 	gamma := []float32{1, 2, 0.5}
 	beta := []float32{0, 1, -2}
-	layerNormRow(input, got, gamma, beta)
+	nn.LayerNorm(input, got, gamma, beta)
 
 	invStd := 1 / math.Sqrt(2.0/3.0+1e-5)
 	want := []float64{-invStd, 1, -2 + 0.5*invStd}
@@ -60,7 +61,7 @@ func TestLayerNormRow(t *testing.T) {
 
 func TestExactGELUKnownValues(t *testing.T) {
 	got := []float32{-1, 0, 1}
-	applyGELU(got)
+	nn.GELU(got)
 	want := []float32{-0.15865526, 0, 0.8413447}
 	for i := range want {
 		if math.Abs(float64(got[i]-want[i])) > 1e-7 {

@@ -1,8 +1,10 @@
 # Models and weight bundles
 
-gophonic runs English Whisper for speech-to-text, two turn-detector graphs,
-and Qwen3-8B. Each model has its own package, loader, and offline converter;
-`gophonic.Open` recognizes every converted bundle by its signature.
+gophonic runs Qwen3-ASR and English Whisper for speech-to-text, two
+turn-detector graphs, and Qwen3-8B. Each model has its own package and
+loader. Qwen3-ASR and Qwen3 load official Hugging Face snapshots as they
+are; the others go through an offline converter, and `gophonic.Open`
+recognizes each converted bundle by its signature.
 [`tools/fetch-models.sh`](../tools/fetch-models.sh) downloads and converts the
 official checkpoints into [`models/`](../models), where tests, benchmarks, and
 examples find them. Other architectures implement the
@@ -18,6 +20,27 @@ execution code. The converters do not import arbitrary ONNX graphs.
 | Feature input | 64,000 float32 values, row-major `[80,800]` | Same |
 | Output | `speech.Prediction{Probability, Complete}` | Same |
 | Decision | `Probability > 0.5` | `Probability > 0.57` |
+
+## Qwen3-ASR (recommended)
+
+| | Qwen3-ASR-1.7B | Qwen3-ASR-0.6B |
+| --- | --- | --- |
+| Source | [Qwen/Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B), revision `7278e1e7` | [Qwen/Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B), revision `5eb14417` |
+| Download | 4.7 GB | 1.9 GB |
+| Encoder | 24 layers, width 1024 | 18 layers, width 896 |
+| Decoder | Qwen3-1.7B (28 layers, width 2048) | Qwen3-0.6B (28 layers, width 1024) |
+| Package | `qwen3asr` | Same |
+
+```sh
+tools/fetch-models.sh asr         # models/Qwen3-ASR-1.7B
+tools/fetch-models.sh asr-small   # models/Qwen3-ASR-0.6B
+```
+
+There is nothing to convert: `qwen3asr.Load` and `gophonic.Open` read the
+snapshot directory (`config.json`, the BF16 safetensors shards, `vocab.json`,
+`merges.txt`, and `tokenizer_config.json`) and check the configuration
+against the supported architecture. The reference fixtures and measurements
+use the 1.7B model; the 0.6B model shares every code path.
 
 ## Convert OpenAI Whisper
 
@@ -142,6 +165,7 @@ will interrupt or wait in a particular application. Application code can use
 | Gophonic implementation | [BSD-2-Clause](../LICENSE) |
 | Pipecat Smart Turn model | [BSD-2-Clause model metadata](https://huggingface.co/pipecat-ai/smart-turn-v3), [upstream code license](https://github.com/pipecat-ai/smart-turn/blob/main/LICENSE) |
 | TinyMelNet model | [MIT model metadata](https://huggingface.co/deveshu/hinglish-turn-detector); its card states that upstream dataset terms govern redistribution and commercial use of trained weights |
+| Qwen3-ASR models | [Apache-2.0](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) |
 | OpenAI Whisper source, tokenizer assets, and English models | [MIT](https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE); copied tokenizer notices are in [`whisper/assets`](../whisper/assets/PROVENANCE.md) |
 | `gopus` dependency | [BSD-3-Clause](https://github.com/thesyncim/gopus/blob/main/LICENSE) |
 

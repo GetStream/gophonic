@@ -16,6 +16,19 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// The loader prepends the model's geometry; the defaults are Qwen3-8B's.
+// Heads are 128 wide: QD query and KVD key/value widths, NH query heads
+// sharing NKV key/value heads, and ROT the Hadamard block of down's input.
+#ifndef QD
+#define QD 4096
+#define KVD 1024
+#define NH 32
+#define NKV 8
+#define ROT 4096
+#endif
+#define QKVW (QD + 2 * KVD) // one row of the fused QKV projection
+#define GROUP (NH / NKV)    // query heads per key/value head
+
 constant constexpr uint SG = 8; // simdgroups per GEMV threadgroup
 
 struct GemvArgs {
@@ -27,19 +40,24 @@ struct GemvArgs {
 enum { PRO_PLAIN, PRO_NORM };
 enum { EPI_STORE, EPI_ADD, EPI_SWIGLU };
 
-// rowsPerSimdgroup is the number of weight rows each simdgroup streams.
-constexpr uint rowsPerSimdgroup(int bits) { return bits == 8 ? 2 : 4; }
+// Weight schemes (the BITS template argument). Q8 rows are int8 with one FP32
+// scale per row. Q8B rows are int8 in blocks of 32 values with one FP16 scale
+// per block, as GGML's Q8_0. Q4 rows are blocks of 32 values as 16 bytes
+// (value j in the low nibble of byte j, value j+16 in the high nibble, both
+// stored plus 8) with one FP16 scale per block.
+enum { Q4 = 4, Q8 = 8, Q8B = 9 };
+constexpr bool eightBit(int q) { return q != Q4; }
 
-// gemv computes y = W·x for quantized rows W[N][K].
-// BITS 8: int8 rows with a per-row FP32 scale; each lane takes 16 values
-// per step. BITS 4: blocks of 32 values as 16 bytes (value j in the low
-// nibble of byte j, value j+16 in the high nibble, both stored plus 8) with
-// one FP16 scale per block; each lane takes one block per step.
+// rowsPerSimdgroup is the number of weight rows each simdgroup streams.
+constexpr uint rowsPerSimdgroup(int q) { return eightBit(q) ? 2 : 4; }
+
+// gemv computes y = W·x for quantized rows W[N][K]. With 8-bit codes each
+// lane takes 16 values per step; with 4-bit codes, one 32-value block.
 template <int PRO, int EPI, int BITS>
 inline void gemv(device const uchar *W, device const void *scale, device const float *x,
 		device float *y, device const float *partsIn, device float *partsOut,
 		constant GemvArgs &a, threadgroup float *tgPart, uint tg, uint sg, uint lane) {
-	constexpr uint step = BITS == 8 ? 16 : 32;
+	constexpr uint step = eightBit(BITS) ? 16 : 32;
 	constexpr uint RPS = rowsPerSimdgroup(BITS);
 	float inv = 1;
 	if (PRO == PRO_NORM) {
@@ -50,15 +68,20 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 	}
 	uint row0 = (tg * SG + sg) * RPS;
 	float acc[RPS] = {0};
-	if (BITS == 8) {
+	if (eightBit(BITS)) {
 		device const uchar *wr = W + (ulong)row0 * a.K;
+		device const half *sr = (device const half *)scale + (ulong)row0 * (a.K / 32);
 		for (uint i = lane * step; i < a.K; i += 32 * step) {
 			device const float4 *xv = (device const float4 *)(x + i);
 			float4 x0 = xv[0], x1 = xv[1], x2 = xv[2], x3 = xv[3];
 			for (uint r = 0; r < RPS; r++) {
 				uint4 w = *(device const uint4 *)(wr + (ulong)r * a.K + i);
-				acc[r] += dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
+				float t = dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
 					dot(float4(as_type<char4>(w.z)), x2) + dot(float4(as_type<char4>(w.w)), x3);
+				if (BITS == Q8B)
+					acc[r] = fma(float(sr[(ulong)r * (a.K / 32) + i / 32]), t, acc[r]);
+				else
+					acc[r] += t;
 			}
 		}
 	} else {
@@ -87,7 +110,7 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 	}
 	for (uint r = 0; r < RPS; r++) {
 		acc[r] = simd_sum(acc[r]) * inv;
-		if (BITS == 8)
+		if (BITS == Q8)
 			acc[r] *= ((device const float *)scale)[row0 + r];
 	}
 	if (EPI == EPI_SWIGLU) {
@@ -135,22 +158,24 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 		gemv<PRO, EPI, BITS>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane);        \
 	}
 
-GEMV_KERNEL(gemv_qkv, PRO_NORM, EPI_STORE, 8)
-GEMV_KERNEL(gemv_o, PRO_PLAIN, EPI_ADD, 8)
-GEMV_KERNEL(gemv_gateup, PRO_NORM, EPI_SWIGLU, 8)
-GEMV_KERNEL(gemv_down, PRO_PLAIN, EPI_ADD, 8)
-GEMV_KERNEL(gemv_qkv_q4, PRO_NORM, EPI_STORE, 4)
-GEMV_KERNEL(gemv_o_q4, PRO_PLAIN, EPI_ADD, 4)
-GEMV_KERNEL(gemv_gateup_q4, PRO_NORM, EPI_SWIGLU, 4)
-GEMV_KERNEL(gemv_down_q4, PRO_PLAIN, EPI_ADD, 4)
+#define GEMV_KERNELS(suffix, BITS)                                      \
+	GEMV_KERNEL(gemv_qkv##suffix, PRO_NORM, EPI_STORE, BITS)            \
+	GEMV_KERNEL(gemv_o##suffix, PRO_PLAIN, EPI_ADD, BITS)               \
+	GEMV_KERNEL(gemv_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS)        \
+	GEMV_KERNEL(gemv_down##suffix, PRO_PLAIN, EPI_ADD, BITS)
 
-// rotate4096 replaces each 4096-value block of x with H·diag(signs)·x
-// (signs carry the normalization); threadgroup b handles block b, and rows
-// hold perRow blocks.
-kernel void rotate4096(device float *x [[buffer(0)]], device const float *signs [[buffer(1)]],
+GEMV_KERNELS(, Q8)
+GEMV_KERNELS(_q8, Q8B)
+GEMV_KERNELS(_q4, Q4)
+GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B)
+
+// rotate replaces each ROT-value block of x with H·diag(signs)·x (signs
+// carry the normalization); threadgroup b of ROT/4 threads handles block b,
+// and rows hold perRow blocks.
+kernel void rotate(device float *x [[buffer(0)]], device const float *signs [[buffer(1)]],
 		constant uint &perRow [[buffer(2)]],
 		uint b [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
-	constexpr uint N = 4096, T = 1024;
+	constexpr uint N = ROT, T = ROT / 4;
 	threadgroup float v[N];
 	device float *xb = x + b * N;
 	device const float *sb = signs + (b % perRow) * N;
@@ -194,40 +219,79 @@ inline float4 normRopeAt(float4 v, device const float *w, device const float *ro
 	return float4(v.x * c0 - v.z * s0, v.y * c1 - v.w * s1, v.z * c0 + v.x * s0, v.w * c1 + v.y * s1);
 }
 
-// attend1 handles one new token: threadgroup g is KV head g, and its four
-// simdgroups are the query heads sharing it. The token's key and value are
-// appended to the cache, then each query head attends to keys 0..pos with a
-// streaming softmax.
+// attend1 handles one new token: threadgroup g is KV head g. Its first
+// simdgroup appends the token's key and value to the cache; then each of the
+// GROUP query heads sharing the KV head attends to keys 0..pos with AS
+// simdgroups, each taking every AS-th block of AK keys with a streaming
+// softmax, and the AS partial states are merged.
+constant constexpr uint AK = 8, AS = 4;
+
 kernel void attend1(device const float *qkv [[buffer(0)]], device float *kc [[buffer(1)]],
 		device float *vc [[buffer(2)]], device const float *qn [[buffer(3)]],
 		device const float *kn [[buffer(4)]], device const float *rope [[buffer(5)]],
 		device float *ctx [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
 		uint g [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
 		uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float4 partAcc[GROUP * AS][32];
+	threadgroup float2 partML[GROUP * AS];
 	if (sg == 0) {
-		device const float *k = qkv + 4096 + g * 128;
-		device const float *v = qkv + 5120 + g * 128;
+		device const float *k = qkv + QD + g * 128;
+		device const float *v = qkv + QD + KVD + g * 128;
 		float4 kv = normRopeAt(float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]), kn, rope, a, lane);
-		device float *kd = kc + a.pos * 1024 + g * 128;
-		device float *vd = vc + a.pos * 1024 + g * 128;
+		device float *kd = kc + a.pos * KVD + g * 128;
+		device float *vd = vc + a.pos * KVD + g * 128;
 		kd[lane] = kv.x, kd[lane + 32] = kv.y, kd[lane + 64] = kv.z, kd[lane + 96] = kv.w;
 		vd[lane] = v[lane], vd[lane + 32] = v[lane + 32], vd[lane + 64] = v[lane + 64], vd[lane + 96] = v[lane + 96];
 	}
 	threadgroup_barrier(mem_flags::mem_device);
-	uint head = g * 4 + sg;
+	uint hq = sg % GROUP, split = sg / GROUP, head = g * GROUP + hq;
 	device const float *q = qkv + head * 128;
 	float4 qv = normRopeAt(float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]), qn, rope, a, lane) * a.scale;
 	float m = -INFINITY, l = 0;
 	float4 acc = 0;
-	for (uint j = 0; j <= a.pos; j++) {
-		device const float *k = kc + j * 1024 + g * 128;
-		float s = simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96])));
-		float mn = max(m, s);
-		float c = exp(m - mn), p = exp(s - mn);
-		device const float *v = vc + j * 1024 + g * 128;
-		acc = acc * c + p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
-		l = l * c + p;
+	// A block's loads, dot products, and reductions are independent, which
+	// hides their latency.
+	uint n = a.pos + 1;
+	for (uint j0 = split * AK; j0 < n; j0 += AK * AS) {
+		float s[AK];
+		float bm = -INFINITY;
+		for (uint u = 0; u < AK; u++) {
+			uint j = min(j0 + u, n - 1);
+			device const float *k = kc + j * KVD + g * 128;
+			s[u] = dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]));
+		}
+		for (uint u = 0; u < AK; u++) {
+			s[u] = j0 + u < n ? simd_sum(s[u]) : -INFINITY;
+			bm = max(bm, s[u]);
+		}
+		float mn = max(m, bm), c = exp(m - mn);
+		acc *= c;
+		l *= c;
+		for (uint u = 0; u < AK; u++) {
+			uint j = min(j0 + u, n - 1);
+			device const float *v = vc + j * KVD + g * 128;
+			float p = exp(s[u] - mn);
+			acc += p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
+			l += p;
+		}
 		m = mn;
+	}
+	partAcc[sg][lane] = acc;
+	if (lane == 0)
+		partML[sg] = float2(m, l);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (split != 0)
+		return;
+	float mx = -INFINITY;
+	for (uint i = 0; i < AS; i++)
+		mx = max(mx, partML[i * GROUP + hq].x);
+	acc = 0;
+	l = 0;
+	for (uint i = 0; i < AS; i++) {
+		float2 ml = partML[i * GROUP + hq];
+		float c = ml.x == -INFINITY ? 0 : exp(ml.x - mx);
+		acc += partAcc[i * GROUP + hq][lane] * c;
+		l += ml.y * c;
 	}
 	acc /= l;
 	device float *o = ctx + head * 128;
@@ -257,8 +321,8 @@ constexpr uint mmSmemFloats(uint bm) {
 
 // mm computes y[M][N] = x[M][K]·Wᵀ with simdgroup matrices. A threadgroup of
 // T threads owns BM tokens by 64 weight rows, and each simdgroup a 16×16
-// output block; each K step dequantizes a 64×32 weight tile to FP16 (int8
-// codes exactly, 4-bit codes times their FP16 scale) and rounds the BM×32
+// output block; each K step dequantizes a 64×32 weight tile to FP16 (Q8
+// codes exactly, block codes times their FP16 scale) and rounds the BM×32
 // activation tile to FP16, so every weight is read once per BM tokens.
 // Products accumulate in FP32.
 template <int PRO, int EPI, int BITS, uint BM, uint T>
@@ -291,18 +355,20 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 	bool live = m0 + xr < a.M;
 	float f = inv[xr];
 	device const float *xrow = x + (ulong)(m0 + xr) * a.K + xc;
-	device const uchar *wrow = BITS == 8 ? W + (ulong)(n0 + wr) * a.K + wc : W + (ulong)(n0 + wr) * (a.K / 2) + (wc % 16);
+	device const uchar *wrow = eightBit(BITS) ? W + (ulong)(n0 + wr) * a.K + wc : W + (ulong)(n0 + wr) * (a.K / 2) + (wc % 16);
 	device const half *srow = (device const half *)scale + (ulong)(n0 + wr) * (a.K / 32);
 	// Global loads for the next step are issued before this step computes.
 	uint4 wreg = 0;
 	half d = 0;
 	float4 xreg = 0;
 #define MM_FETCH(k0)                                                        \
-	if (BITS == 8) {                                                        \
+	if (eightBit(BITS)) {                                                   \
 		if (WPER == 16)                                                     \
 			wreg = *(device const uint4 *)(wrow + (k0));                    \
 		else                                                                \
 			wreg.xy = *(device const uint2 *)(wrow + (k0));                 \
+		if (BITS == Q8B)                                                    \
+			d = srow[(k0) / 32];                                            \
 	} else {                                                                \
 		if (WPER == 16)                                                     \
 			wreg = *(device const uint4 *)(wrow + (k0) / 2);                \
@@ -315,12 +381,19 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 	MM_FETCH(kBeg)
 	for (uint k0 = kBeg; k0 < kEnd; k0 += MM_BK) {
 		threadgroup half *wd = Ws + wr * MM_BK + wc;
-		if (BITS == 8) {
+		if (BITS == Q8) {
 			*(threadgroup half4 *)wd = half4(as_type<char4>(wreg.x));
 			*(threadgroup half4 *)(wd + 4) = half4(as_type<char4>(wreg.y));
 			if (WPER == 16) {
 				*(threadgroup half4 *)(wd + 8) = half4(as_type<char4>(wreg.z));
 				*(threadgroup half4 *)(wd + 12) = half4(as_type<char4>(wreg.w));
+			}
+		} else if (BITS == Q8B) {
+			*(threadgroup half4 *)wd = half4(as_type<char4>(wreg.x)) * d;
+			*(threadgroup half4 *)(wd + 4) = half4(as_type<char4>(wreg.y)) * d;
+			if (WPER == 16) {
+				*(threadgroup half4 *)(wd + 8) = half4(as_type<char4>(wreg.z)) * d;
+				*(threadgroup half4 *)(wd + 12) = half4(as_type<char4>(wreg.w)) * d;
 			}
 		} else {
 			uint4 q = (wc >= 16 ? wreg >> 4 : wreg) & 0x0F0F0F0Fu;
@@ -368,7 +441,7 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 	for (uint e = tid; e < BM * MM_BN; e += T) {
 		uint m = e / MM_BN, n = e % MM_BN;
 		float v = Cs[e];
-		if (BITS == 8)
+		if (BITS == Q8)
 			v *= ((device const float *)scale)[n0 + n];
 		if (m0 + m >= a.M)
 			continue;
@@ -423,7 +496,7 @@ inline void mmFinish(device const void *scale, device float *y, device float *pa
 	float v = 0;
 	for (uint s = 0; s < a.splits; s++)
 		v += scratch[((ulong)s * a.padM + m) * a.N + n];
-	if (BITS == 8)
+	if (BITS == Q8)
 		v *= ((device const float *)scale)[n];
 	if (EPI == EPI_STORE) {
 		y[(ulong)m * a.N + n] = v;
@@ -454,12 +527,14 @@ inline void mmFinish(device const void *scale, device float *y, device float *pa
 		mmFinish<EPI, BITS>(scale, y, partsOut, a, scratch, tgPart, tg, tid, sg, lane);              \
 	}
 
-MM_FINISH(mm_finish_store, EPI_STORE, 8)
-MM_FINISH(mm_finish_add, EPI_ADD, 8)
-MM_FINISH(mm_finish_swiglu, EPI_SWIGLU, 8)
-MM_FINISH(mm_finish_store_q4, EPI_STORE, 4)
-MM_FINISH(mm_finish_add_q4, EPI_ADD, 4)
-MM_FINISH(mm_finish_swiglu_q4, EPI_SWIGLU, 4)
+#define MM_FINISHES(suffix, BITS)                                  \
+	MM_FINISH(mm_finish_store##suffix, EPI_STORE, BITS)            \
+	MM_FINISH(mm_finish_add##suffix, EPI_ADD, BITS)                \
+	MM_FINISH(mm_finish_swiglu##suffix, EPI_SWIGLU, BITS)
+
+MM_FINISHES(, Q8)
+MM_FINISHES(_q8, Q8B)
+MM_FINISHES(_q4, Q4)
 
 #define MM_KERNELS(suffix, BITS, BM)                                  \
 	MM_KERNEL(mm_qkv##suffix, PRO_NORM, EPI_STORE, BITS, BM)          \
@@ -467,10 +542,12 @@ MM_FINISH(mm_finish_swiglu_q4, EPI_SWIGLU, 4)
 	MM_KERNEL(mm_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS, BM)      \
 	MM_KERNEL(mm_down##suffix, PRO_PLAIN, EPI_ADD, BITS, BM)
 
-MM_KERNELS(, 8, 32)
-MM_KERNELS(_q4, 4, 32)
-MM_KERNELS(_16, 8, 16)
-MM_KERNELS(_q4_16, 4, 16)
+MM_KERNELS(, Q8, 32)
+MM_KERNELS(_q8, Q8B, 32)
+MM_KERNELS(_q4, Q4, 32)
+MM_KERNELS(_16, Q8, 16)
+MM_KERNELS(_q8_16, Q8B, 16)
+MM_KERNELS(_q4_16, Q4, 16)
 
 // qkRope prepares M new token rows of possibly several sequences; row m
 // has position info[m].x. Query heads are normalized, rotated, and scaled in
@@ -485,27 +562,27 @@ kernel void qkRope(device float *qkv [[buffer(0)]], device float *kc [[buffer(1)
 	uint h = hm.x, m = hm.y, slot = a0.base + m;
 	AttnArgs a = a0;
 	a.pos = info[m].x;
-	device float *row = qkv + m * 6144;
-	if (h < 40) {
-		bool isQ = h < 32;
+	device float *row = qkv + m * QKVW;
+	if (h < NH + NKV) {
+		bool isQ = h < NH;
 		device float *src = row + h * 128;
 		float4 v = float4(src[lane], src[lane + 32], src[lane + 64], src[lane + 96]);
 		v = normRopeAt(v, isQ ? qn : kn, rope, a, lane);
-		device float *d = isQ ? src : kc + slot * 1024 + (h - 32) * 128;
+		device float *d = isQ ? src : kc + slot * KVD + (h - NH) * 128;
 		if (isQ)
 			v *= a.scale;
 		d[lane] = v.x, d[lane + 32] = v.y, d[lane + 64] = v.z, d[lane + 96] = v.w;
 		return;
 	}
-	device const float *src = row + 5120 + (h - 40) * 128;
-	device float *d = vc + slot * 1024 + (h - 40) * 128;
+	device const float *src = row + QD + KVD + (h - NH - NKV) * 128;
+	device float *d = vc + slot * KVD + (h - NH - NKV) * 128;
 	d[lane] = src[lane], d[lane + 32] = src[lane + 32], d[lane + 64] = src[lane + 64], d[lane + 96] = src[lane + 96];
 }
 
 // attendM attends row m first to rows 0..prefixLen of a read-only prefix
 // cache (pkc, pvc), then to cache rows info[m].y..base+m, its own
 // sequence's earlier tokens (and, for an extended prefix stored in the same
-// cache, the prefix). Threadgroup (g, m) holds the four query heads of KV
+// cache, the prefix). Threadgroup (g, m) holds the GROUP query heads of KV
 // head g as simdgroups; queries were prepared by qkRope.
 kernel void attendM(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
 		device const float *vc [[buffer(2)]], device const uint2 *info [[buffer(3)]],
@@ -514,8 +591,8 @@ kernel void attendM(device const float *qkv [[buffer(0)]], device const float *k
 		uint2 gm [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
 		uint lane [[thread_index_in_simdgroup]]) {
 	uint g = gm.x, m = gm.y;
-	uint head = g * 4 + sg;
-	device const float *q = qkv + m * 6144 + head * 128;
+	uint head = g * GROUP + sg;
+	device const float *q = qkv + m * QKVW + head * 128;
 	float4 qv = float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]);
 	float mx = -INFINITY, l = 0;
 	float4 acc = 0;
@@ -524,27 +601,28 @@ kernel void attendM(device const float *qkv [[buffer(0)]], device const float *k
 		device const float *vs = pass == 0 ? pvc : vc;
 		uint j0 = pass == 0 ? 0 : info[m].y, j1 = pass == 0 ? a.prefixLen : a.base + m + 1;
 		for (uint j = j0; j < j1; j++) {
-			device const float *k = ks + j * 1024 + g * 128;
+			device const float *k = ks + j * KVD + g * 128;
 			float s = simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96])));
 			float mn = max(mx, s);
 			float c = exp(mx - mn), p = exp(s - mn);
-			device const float *v = vs + j * 1024 + g * 128;
+			device const float *v = vs + j * KVD + g * 128;
 			acc = acc * c + p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
 			l = l * c + p;
 			mx = mn;
 		}
 	}
 	acc /= l;
-	device float *o = ctx + m * 4096 + head * 128;
+	device float *o = ctx + m * QD + head * 128;
 	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
 }
 
 // attendFlash is attendM tiled for simdgroup matrices. Threadgroup (g, b)
-// serves KV head g for batch rows 8b..8b+8; simdgroup s is query head 4g+s
-// for those rows. Keys and values stream through threadgroup memory 16 rows
-// at a time, shared by the four query heads: S = Q·Kᵀ, an online softmax
+// serves KV head g for batch rows 8b..8b+8; simdgroup s is query head
+// GROUP·g+s for those rows. Keys and values stream through threadgroup memory
+// 16 rows at a time, shared by the GROUP query heads: S = Q·Kᵀ, an online softmax
 // per row with the causal and sequence masks, then O = diag(c)·O + P·V.
-constant constexpr uint FA_KB = 16; // keys per tile
+constant constexpr uint FA_KB = 16;       // keys per tile
+constant constexpr uint FA_T = 32 * GROUP; // threads per threadgroup
 
 kernel void attendFlash(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
 		device const float *vc [[buffer(2)]], device const uint2 *info [[buffer(3)]],
@@ -554,9 +632,9 @@ kernel void attendFlash(device const float *qkv [[buffer(0)]], device const floa
 		uint2 gb [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
 		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
 	threadgroup float Kt[FA_KB * 128], Vt[FA_KB * 128];
-	threadgroup float St[4][8 * FA_KB];
-	threadgroup float Dt[4][64];
-	uint g = gb.x, m0 = gb.y * 8, head = g * 4 + sg;
+	threadgroup float St[GROUP][8 * FA_KB];
+	threadgroup float Dt[GROUP][64];
+	uint g = gb.x, m0 = gb.y * 8, head = g * GROUP + sg;
 	// Query rows as 16 8×8 blocks over the head dimension; rows past the
 	// batch read row m0 (their results are never used).
 	simdgroup_float8x8 Q[16], O[16];
@@ -565,7 +643,7 @@ kernel void attendFlash(device const float *qkv [[buffer(0)]], device const floa
 		for (uint b = 0; b < 16; b++) {
 			for (uint e = lane; e < 64; e += 32) {
 				uint r = e / 8, m = min(m0 + r, rows - 1);
-				qs[e] = qkv[m * 6144 + head * 128 + b * 8 + e % 8];
+				qs[e] = qkv[m * QKVW + head * 128 + b * 8 + e % 8];
 			}
 			simdgroup_barrier(mem_flags::mem_threadgroup);
 			simdgroup_load(Q[b], qs, 8);
@@ -590,12 +668,12 @@ kernel void attendFlash(device const float *qkv [[buffer(0)]], device const floa
 		uint j0 = pass == 0 ? 0 : own0, j1 = pass == 0 ? a.prefixLen : own1;
 		for (uint jb = j0; jb < j1; jb += FA_KB) {
 			threadgroup_barrier(mem_flags::mem_threadgroup);
-			for (uint e = tid * 4; e < FA_KB * 128; e += 128 * 4) {
+			for (uint e = tid * 4; e < FA_KB * 128; e += FA_T * 4) {
 				uint j = jb + e / 128, d = e % 128;
 				float4 kv = 0, vv = 0;
 				if (j < j1) {
-					kv = *(device const float4 *)(ks + j * 1024 + g * 128 + d);
-					vv = *(device const float4 *)(vs + j * 1024 + g * 128 + d);
+					kv = *(device const float4 *)(ks + j * KVD + g * 128 + d);
+					vv = *(device const float4 *)(vs + j * KVD + g * 128 + d);
 				}
 				*(threadgroup float4 *)(Kt + e) = kv;
 				*(threadgroup float4 *)(Vt + e) = vv;
@@ -674,7 +752,7 @@ kernel void attendFlash(device const float *qkv [[buffer(0)]], device const floa
 		for (uint e = lane; e < 64; e += 32) {
 			uint r = e / 8;
 			if (m0 + r < rows)
-				ctx[(m0 + r) * 4096 + head * 128 + b * 8 + e % 8] = os[e];
+				ctx[(m0 + r) * QD + head * 128 + b * 8 + e % 8] = os[e];
 		}
 		simdgroup_barrier(mem_flags::mem_threadgroup);
 	}

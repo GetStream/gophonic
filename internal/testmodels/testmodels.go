@@ -30,6 +30,8 @@ const (
 	Qwen3HelloReference = "qwen3-8b-hello-reference.f32"
 	// CLMHead is the converted CLM v0.1 head for Qwen3-8B.
 	CLMHead = "CLM_v0.1-8B.gclm"
+	// Qwen3ASR is the official Qwen/Qwen3-ASR-1.7B snapshot directory.
+	Qwen3ASR = "Qwen3-ASR-1.7B"
 )
 
 // Dir returns the models directory: $GOPHONIC_MODELS when set, otherwise

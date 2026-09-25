@@ -66,8 +66,12 @@ func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 		return nil, errors.New("qwen3: nil evaluator")
 	}
 	c := &e.m.cfg
-	if capacity < 1 || capacity > c.maxPositions {
-		return nil, fmt.Errorf("qwen3: prefix capacity %d outside [1,%d]", capacity, c.maxPositions)
+	limit := c.maxPositions
+	if e.m.gpu != nil {
+		limit = e.m.gpu.maxPositions()
+	}
+	if capacity < 1 || capacity > limit {
+		return nil, fmt.Errorf("qwen3: prefix capacity %d outside [1,%d]", capacity, limit)
 	}
 	if e.m.gpu != nil {
 		pre, err := e.m.gpu.newPrefix(capacity)
@@ -122,6 +126,23 @@ func (kv *PrefixKV) CommonPrefix(ids []int) int {
 // dst. Only len(ids) tokens are computed; they attend to the kept prefix.
 // Afterwards kv holds kv.Tokens()[:keep] followed by ids. keep may be zero.
 func (e *Evaluator) HiddenLastExtendInto(kv *PrefixKV, keep int, ids []int, dst []float32, ws *Workspace) error {
+	return e.HiddenLastExtendEmbedInto(kv, keep, ids, Embeds{}, dst, ws)
+}
+
+// Embeds replaces the input embeddings of a placeholder token, as a
+// multimodal model splices encoder outputs into its prompt (Qwen3-ASR's audio
+// features at <|audio_pad|>): the i-th occurrence of Token takes row i of
+// Rows, which holds one hidden-wide row per occurrence. The zero value
+// replaces nothing.
+type Embeds struct {
+	Token int
+	Rows  []float32
+}
+
+// HiddenLastExtendEmbedInto is HiddenLastExtendInto with the placeholder
+// rows of embeds. kv records each replaced token as -1, so CommonPrefix never
+// matches a later sequence across different embeddings.
+func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
 	if kv == nil || kv.owner != e {
 		return errors.New("qwen3: prefix store belongs to another evaluator")
 	}
@@ -134,16 +155,62 @@ func (e *Evaluator) HiddenLastExtendInto(kv *PrefixKV, keep int, ids []int, dst 
 	if ws == nil {
 		return errors.New("qwen3: nil workspace")
 	}
+	if len(embeds.Rows) != 0 {
+		n := 0
+		for _, id := range ids {
+			if id == embeds.Token {
+				n++
+			}
+		}
+		if len(embeds.Rows) != n*e.m.cfg.hidden {
+			return fmt.Errorf("qwen3: %d embedding values for %d placeholders of width %d", len(embeds.Rows), n, e.m.cfg.hidden)
+		}
+		ws.embeds = embeds
+	}
 	kv.tokens = kv.tokens[:keep] // the stored suffix is overwritten below
 	ws.prefix, ws.past = kv, keep
 	ws.oneSeq[0], ws.oneDst[0] = ids, dst
 	err := e.HiddenLastBatchInto(ws.oneSeq[:], ws.oneDst[:], ws)
 	ws.oneSeq[0], ws.oneDst[0] = nil, nil
-	ws.prefix, ws.past = nil, 0
+	ws.prefix, ws.past, ws.embeds = nil, 0, Embeds{}
 	if err != nil {
 		return err
 	}
-	kv.tokens = append(kv.tokens, ids...)
+	for _, id := range ids {
+		if len(embeds.Rows) != 0 && id == embeds.Token {
+			id = -1
+		}
+		kv.tokens = append(kv.tokens, id)
+	}
+	return nil
+}
+
+// LogitsInto writes the language-model head's logits for one
+// post-final-RMSNorm hidden state (a HiddenLast result) to dst, which has one
+// value per vocabulary entry. The weights must have been loaded with
+// LoadOptions.Head. Warm calls allocate nothing.
+func (e *Evaluator) LogitsInto(hidden, dst []float32, ws *Workspace) error {
+	if e == nil || e.m == nil || ws == nil || ws.owner != e {
+		return errors.New("qwen3: nil evaluator or foreign workspace")
+	}
+	m, c := e.m, &e.m.cfg
+	if m.head.f16 == nil && m.head.i8 == nil && (m.gpu == nil || !m.gpu.hasHead()) {
+		return errors.New("qwen3: the weights were loaded without a language-model head")
+	}
+	if len(hidden) != c.hidden || len(dst) != c.vocab {
+		return fmt.Errorf("qwen3: logits of a %d-wide state into %d values, want %d and %d", len(hidden), len(dst), c.hidden, c.vocab)
+	}
+	if ws.gpu != nil {
+		return ws.gpu.logitsInto(m, hidden, dst)
+	}
+	if err := ws.ensure(c, 1, 1); err != nil {
+		return err
+	}
+	ws.pool.hold()
+	defer ws.pool.release()
+	copy(ws.norm, hidden)
+	ws.op.rows = 1
+	ws.project(ws.norm, c.hidden, false, projection{&m.head, dst})
 	return nil
 }
 
@@ -200,6 +267,7 @@ type Workspace struct {
 	attnItems                       []attentionItem
 	attnScratch                     []attentionScratch // per participant
 	prefix                          *PrefixKV          // set by HiddenLastExtendInto and HiddenLastSharedInto
+	embeds                          Embeds             // set by HiddenLastExtendEmbedInto
 	shared                          bool               // prefix is read-only and shared by every sequence
 	attnPerHead                     bool               // prefix attention items are per query head, not per group
 	past                            int
@@ -327,7 +395,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if ws.prefix != nil {
 			pre = ws.prefix.gpu
 		}
-		return ws.gpu.batch(m, seqs, dst, pre, ws.past, ws.shared)
+		return ws.gpu.batch(m, seqs, dst, pre, ws.past, ws.shared, ws.embeds)
 	}
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
 		return err
@@ -344,8 +412,14 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if ws.prefix != nil {
 			seqLen = math.MaxInt32
 		}
+		spliced := 0
 		for pos, id := range ids {
-			m.embedRow(id, ws.h[row*c.hidden:(row+1)*c.hidden])
+			if h := ws.h[row*c.hidden : (row+1)*c.hidden]; len(ws.embeds.Rows) != 0 && id == ws.embeds.Token {
+				copy(h, ws.embeds.Rows[spliced*c.hidden:])
+				spliced++
+			} else {
+				m.embedRow(id, h)
+			}
 			ws.rowStart[row], ws.rowPos[row], ws.rowLen[row] = start, int32(ws.past+pos), seqLen
 			row++
 		}
