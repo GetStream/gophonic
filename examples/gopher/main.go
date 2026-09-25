@@ -184,30 +184,60 @@ func main() {
 		log.Printf("unmute: %v", err)
 	}
 
-	// Hear every microphone: those already live, then each that starts.
-	var mics []*signal_rpc.TrackSubscriptionDetails
-	subscribe := func(user, session string) {
-		for _, m := range mics {
-			if m.SessionId == session {
-				return
+	// Hear every microphone: those already live, then each that starts,
+	// stops, or changes. A browser re-publishes its microphone on mute,
+	// device changes, and rejoins; each time the subscription is sent
+	// anew (without the session, then with it) so the SFU renegotiates
+	// the new stream instead of forwarding packets Gopher cannot route.
+	mics := map[string]*signal_rpc.TrackSubscriptionDetails{}
+	var micMu sync.Mutex
+	resubscribe := func(changed string) {
+		micMu.Lock()
+		defer micMu.Unlock()
+		list := func(skip string) []*signal_rpc.TrackSubscriptionDetails {
+			var out []*signal_rpc.TrackSubscriptionDetails
+			for session, d := range mics {
+				if session != skip {
+					out = append(out, d)
+				}
+			}
+			return out
+		}
+		if changed != "" {
+			if err := call.SubscribeToTracks(ctx, list(changed)...); err != nil {
+				log.Printf("subscribe: %v", err)
 			}
 		}
-		mics = append(mics, &signal_rpc.TrackSubscriptionDetails{UserId: user, SessionId: session,
-			TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO})
-		if err := call.SubscribeToTracks(ctx, mics...); err != nil {
+		if err := call.SubscribeToTracks(ctx, list("")...); err != nil {
 			log.Printf("subscribe: %v", err)
 		}
 	}
 	for _, p := range join.GetCallState().GetParticipants() {
 		for _, t := range p.GetPublishedTracks() {
 			if t == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
-				subscribe(p.GetUserId(), p.GetSessionId())
+				mics[p.GetSessionId()] = &signal_rpc.TrackSubscriptionDetails{UserId: p.GetUserId(), SessionId: p.GetSessionId(),
+					TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO}
 			}
 		}
 	}
+	resubscribe("")
 	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_TrackPublished) {
 		if p := e.TrackPublished; p.GetType() == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
-			subscribe(p.GetUserId(), p.GetSessionId())
+			micMu.Lock()
+			mics[p.GetSessionId()] = &signal_rpc.TrackSubscriptionDetails{UserId: p.GetUserId(), SessionId: p.GetSessionId(),
+				TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO}
+			micMu.Unlock()
+			log.Printf("%s published a microphone", p.GetUserId())
+			resubscribe(p.GetSessionId())
+		}
+	})()
+	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_TrackUnpublished) {
+		if p := e.TrackUnpublished; p.GetType() == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
+			micMu.Lock()
+			delete(mics, p.GetSessionId())
+			micMu.Unlock()
+			log.Printf("%s unpublished a microphone", p.GetUserId())
+			resubscribe("")
 		}
 	})()
 
