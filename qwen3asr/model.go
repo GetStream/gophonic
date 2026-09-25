@@ -19,7 +19,8 @@ import (
 // decoder with its language-model head, and the tokenizer. It is immutable
 // and shared by every Transcriber opened from it.
 type Model struct {
-	enc       *encoder
+	enc       *encoder    // geometry, with CPU weights unless genc is set
+	genc      *gpuEncoder // the encoder in GPU memory, for GPU formats
 	lm        *qwen3lm.Weights
 	eval      *qwen3lm.Evaluator
 	tok       *qwen3lm.Tokenizer
@@ -35,12 +36,13 @@ type tokenIDs struct {
 
 // Decoder weight formats for Options.Format.
 const (
-	// FormatF16 keeps the decoder's BF16 weights exactly and runs it on the
-	// CPU's matrix units.
+	// FormatF16 runs the encoder and decoder on the CPU's SME matrix units,
+	// keeping every BF16 weight exactly.
 	FormatF16 = qwen3lm.WeightsF16
-	// FormatGPU runs the decoder on the Apple GPU (darwin/arm64) with FP32
+	// FormatGPU runs the encoder and decoder on the Apple GPU (darwin/arm64):
+	// the encoder with every BF16 weight exact, the decoder with FP32
 	// activations and int8 weights in blocks of 32 sharing an FP16 scale, in
-	// a Hadamard-rotated basis: more faithful than GGML's Q8_0.
+	// a Hadamard-rotated basis, more faithful than GGML's Q8_0.
 	FormatGPU = qwen3lm.WeightsGPUQ8
 )
 
@@ -91,8 +93,8 @@ func IsModelDir(dir string) bool {
 }
 
 // Load reads an official Qwen3-ASR snapshot directory (Qwen/Qwen3-ASR-1.7B
-// or Qwen/Qwen3-ASR-0.6B from Hugging Face). The encoder runs in FP32; the
-// decoder keeps the BF16 weights exactly by default.
+// or Qwen/Qwen3-ASR-0.6B from Hugging Face), for the GPU where Metal is
+// present and for the CPU otherwise.
 func Load(dir string, opts Options) (*Model, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
@@ -126,7 +128,20 @@ func Load(dir string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
 	}
-	enc, err := loadEncoder(st, c.Thinker.Audio, "thinker.audio_tower.")
+	// GPU formats run the encoder on the GPU too; its kernels need 64-wide
+	// heads, which every Qwen3-ASR size has.
+	var (
+		enc  *encoder
+		genc *gpuEncoder
+	)
+	const audioPrefix = "thinker.audio_tower."
+	if opts.Format == FormatGPU || opts.Format == qwen3lm.WeightsGPU || opts.Format == qwen3lm.WeightsGPUQ4 {
+		if enc, err = newEncoder(c.Thinker.Audio); err == nil {
+			genc, err = loadGPUEncoder(st, enc, audioPrefix)
+		}
+	} else {
+		enc, err = loadEncoder(st, c.Thinker.Audio, audioPrefix)
+	}
 	head := "thinker.lm_head.weight"
 	if !st.Has(head) {
 		head = "thinker.model.embed_tokens.weight" // tied embeddings
@@ -147,7 +162,7 @@ func Load(dir string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
 	}
-	m := &Model{enc: enc, lm: lm, eval: eval, tok: tok, languages: map[string]bool{}}
+	m := &Model{enc: enc, genc: genc, lm: lm, eval: eval, tok: tok, languages: map[string]bool{}}
 	for _, name := range c.SupportLanguages {
 		if canonical, ok := speech.LanguageName(name); ok {
 			m.languages[canonical] = true
@@ -215,4 +230,9 @@ func (m *Model) Languages() []string {
 
 // Release frees resources the decoder holds outside the Go heap. The model
 // is unusable afterwards.
-func (m *Model) Release() { m.lm.Release() }
+func (m *Model) Release() {
+	m.lm.Release()
+	if m.genc != nil {
+		m.genc.release()
+	}
+}

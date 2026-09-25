@@ -1,7 +1,8 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-// Package qwen3 runs the Qwen3-8B dense transformer on the CPU in pure Go.
+// Package qwen3 runs Qwen3 dense transformers (Qwen3-8B, 4B, 1.7B, 0.6B) in
+// pure Go, on the CPU or the Apple GPU.
 //
 // It loads an official Hugging Face safetensors snapshot, tokenizes text,
 // and computes the final-normalized hidden state of each input's last token.
@@ -23,8 +24,7 @@ import (
 )
 
 const (
-	hiddenSize = 4096
-	maxTokens  = 2048
+	maxTokens = 2048
 	// batchTokens bounds the tokens packed into one forward pass. Texts in
 	// one Embed call share 16-row matrix tiles up to this budget; a single
 	// longer text runs alone.
@@ -40,7 +40,7 @@ const (
 	prefixMinTokens = 64
 )
 
-// Model owns one Qwen3-8B model and one inference workspace, so calls are
+// Model owns one Qwen3 model and one inference workspace, so calls are
 // serialized; use one Model per concurrent inference lane.
 type Model struct {
 	mu          sync.Mutex
@@ -64,20 +64,22 @@ type Model struct {
 	ownsWeights bool // loaded by Open, so Close frees their GPU memory
 }
 
-// Options controls the local Qwen3-8B backend. The zero value picks the
-// fastest backend available: on an Apple GPU, WeightsGPU (int8 weights with
-// FP32 activations, llama.cpp Q8_0 fidelity); elsewhere WeightsF16 on the CPU
-// (every BF16 checkpoint weight exactly). Weights may name a backend
-// explicitly: WeightsF16, WeightsInt8 (CPU, per-row int8), WeightsGPU, or
-// WeightsGPUQ4 (4.5-bit GPU weights, lowest latency, lower fidelity).
+// Options controls the local Qwen3 backend. The zero value picks the
+// fastest backend with llama.cpp Q8_0 fidelity: on an Apple GPU, WeightsGPU
+// (int8 rows, FP32 activations) for Qwen3-8B and WeightsGPUQ8 (int8 blocks of
+// 32) for other sizes; elsewhere WeightsF16 on the CPU (every BF16 checkpoint
+// weight exactly). Weights may name a backend explicitly: WeightsF16,
+// WeightsInt8 (CPU, per-row int8), WeightsGPU, WeightsGPUQ8, or WeightsGPUQ4
+// (4.5-bit GPU weights, lowest latency, lower fidelity).
 // Threads bounds the CPU worker goroutines, including the caller; zero
 // selects min(performance cores, GOMAXPROCS). CacheEntries sizes an exact
-// cache of finished embeddings keyed by token IDs (16 KiB per entry): zero
+// cache of finished embeddings keyed by token IDs (16 KiB per entry for
+// Qwen3-8B): zero
 // selects 4096 entries, and a negative value disables it. A hit returns
 // exactly the vector a fresh evaluation would produce.
 //
 // PrefixCacheTokens sizes a store of the last long input's per-layer keys and
-// values (288 KiB per token): when a later input of at least 64 tokens shares
+// values (288 KiB per token for Qwen3-8B): when a later input of at least 64 tokens shares
 // a token prefix with it (a growing conversation state), only the new tokens
 // are evaluated. Zero selects 2048 tokens; a negative value disables it.
 type Options struct {
@@ -98,8 +100,9 @@ func (o Options) threads() int {
 	return max(1, min(n, runtime.GOMAXPROCS(0), defaultMaxThreads))
 }
 
-// Open loads an official Qwen3-8B safetensors snapshot directory. The zero
-// Options value selects the fastest backend and default caches.
+// Open loads an official Qwen3 safetensors snapshot directory, such as
+// Qwen/Qwen3-8B or Qwen/Qwen3-1.7B. The zero Options value selects the
+// fastest faithful backend and default caches.
 func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("qwen3: invalid thread count %d", opts.Threads)
@@ -111,10 +114,6 @@ func Open(path string, opts Options) (*Model, error) {
 	model, err := LoadWeights(path, opts.Weights)
 	if err != nil {
 		return nil, err
-	}
-	c := model.Config()
-	if c.Hidden != hiddenSize || c.Layers != 36 || c.Heads != 32 || c.KVHeads != 8 {
-		return nil, fmt.Errorf("qwen3: expected Qwen3-8B geometry, got hidden=%d layers=%d heads=%d kv_heads=%d", c.Hidden, c.Layers, c.Heads, c.KVHeads)
 	}
 	entries := opts.CacheEntries
 	if entries == 0 {
@@ -164,6 +163,10 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 	return e, nil
 }
 
+// Width reports the length of an embedding: the model's hidden size, 4096
+// for Qwen3-8B.
+func (e *Model) Width() int { return e.model.Config().Hidden }
+
 // PrefixStats reports, for inputs of at least 64 tokens, how many tokens were
 // served from the prefix store and how many were evaluated.
 func (e *Model) PrefixStats() (reused, computed uint64) {
@@ -189,7 +192,7 @@ func (e *Model) CacheStats() (hits, lookups uint64) {
 }
 
 // Embed writes each text's raw, post-final-norm, last-token hidden state
-// (4096 values) to the matching dst row, keeping the last 2048 tokens of
+// (the model's width: 4096 values for Qwen3-8B) to the matching dst row, keeping the last 2048 tokens of
 // longer texts as the CLM reference does. No special tokens are added. Texts
 // of one call are packed into shared forward passes. After the workspaces
 // have warmed to the call's shape, Embed allocates nothing.
@@ -208,8 +211,8 @@ func (e *Model) Embed(ctx context.Context, texts []string, dst [][]float32) erro
 		return fmt.Errorf("qwen3: %d destination vectors for %d texts", len(dst), len(texts))
 	}
 	for _, row := range dst {
-		if len(row) != hiddenSize {
-			return fmt.Errorf("qwen3: destination width %d, want %d", len(row), hiddenSize)
+		if len(row) != e.model.Config().Hidden {
+			return fmt.Errorf("qwen3: destination width %d, want %d", len(row), e.model.Config().Hidden)
 		}
 	}
 	e.mu.Lock()
@@ -252,8 +255,8 @@ func (e *Model) EmbedTokensInto(ctx context.Context, tokenIDs [][]int, dst [][]f
 		return fmt.Errorf("qwen3: %d destination vectors for %d token sequences", len(dst), len(tokenIDs))
 	}
 	for _, row := range dst {
-		if len(row) != hiddenSize {
-			return fmt.Errorf("qwen3: destination width %d, want %d", len(row), hiddenSize)
+		if len(row) != e.model.Config().Hidden {
+			return fmt.Errorf("qwen3: destination width %d, want %d", len(row), e.model.Config().Hidden)
 		}
 	}
 	e.mu.Lock()

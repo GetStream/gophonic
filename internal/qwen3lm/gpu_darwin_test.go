@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -186,14 +187,17 @@ func BenchmarkGPUMatMul(b *testing.B) {
 		b.Fatal(err)
 	}
 	const k, n, reps = 4096, 4096, 16
-	for _, name := range []string{"mm_o_16", "mm_o", "mm_o_q4"} {
+	for _, name := range []string{"mm_o_16", "mm_o_w", "mm_o_q8_w", "mm_o_q4_w"} {
 		p, err := dev.Pipeline(lib, name)
 		if err != nil {
 			b.Fatal(err)
 		}
-		tile := 32
-		if name == "mm_o_16" {
-			tile = 16
+		tile, threads := 32, 256
+		switch {
+		case name == "mm_o_16":
+			tile, threads = 16, 128
+		case strings.HasSuffix(name, "_w"):
+			threads = 128
 		}
 		for _, rows := range []int{16, 32, 64, 128, 256} {
 			b.Run(fmt.Sprintf("%s/M=%d", name, rows), func(b *testing.B) {
@@ -216,7 +220,7 @@ func BenchmarkGPUMatMul(b *testing.B) {
 					e.SetBuffer(parts, 0, 6)
 					e.SetBuffer(parts, 0, 7)
 					for range reps {
-						e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: 1}, metal.Size{X: 8 * tile, Y: 1, Z: 1})
+						e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: 1}, metal.Size{X: threads, Y: 1, Z: 1})
 					}
 					if err := e.Wait(); err != nil {
 						b.Fatal(err)

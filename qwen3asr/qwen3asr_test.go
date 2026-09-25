@@ -105,47 +105,55 @@ func cosine(a, b []float32) (cos, maxAbs float64) {
 }
 
 // The frontend, encoder, and prompt match the FP32 reference: features to
-// FP32 rounding, encoder rows at every window edge to within 1e-5, and the
-// prompt ids exactly.
+// FP32 rounding, encoder rows at every window edge to within the FP16
+// rounding of activations that both encoders use, and the prompt ids
+// exactly.
 func TestFrontendEncoderAndPromptMatchReference(t *testing.T) {
 	ref := loadReference(t)
-	m := loadModel(t, FormatF16)
-	tr, err := NewTranscriber(m, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tr.Close()
-	for name, want := range ref.Clips {
-		t.Run(name, func(t *testing.T) {
-			var dst speech.Transcript
-			if err := tr.Transcribe(context.Background(), clipPCM(t, name), speech.Options{}, &dst); err != nil {
-				t.Fatal(err)
-			}
-			frames := len(tr.features) / 128
-			if frames != want.Frames || len(tr.embeds) != want.Tokens*m.enc.out {
-				t.Fatalf("%d frames and %d tokens, want %d and %d", frames, len(tr.embeds)/m.enc.out, want.Frames, want.Tokens)
-			}
-			for i, f := range want.FeatureFrames {
-				for bin := range 128 {
-					got, w := tr.features[bin*frames+f], want.Features[i*128+bin]
-					if math.Abs(float64(got-w)) > 1e-4 {
-						t.Fatalf("feature (bin %d, frame %d) = %g, want %g", bin, f, got, w)
-					}
-				}
-			}
-			raw, err := os.ReadFile(filepath.Join("..", "testdata", "qwen3asr", name+".encoder.f32le"))
+	for _, format := range []string{FormatF16, FormatGPU} {
+		t.Run(format, func(t *testing.T) {
+			m := loadModel(t, format)
+			tr, err := NewTranscriber(m, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows := readFloats(t, raw)
-			d := m.enc.out
-			for i, r := range want.EncoderRows {
-				if cos, maxAbs := cosine(tr.embeds[r*d:(r+1)*d], rows[i*d:(i+1)*d]); cos < 0.9999999 || maxAbs > 1e-5 {
-					t.Fatalf("encoder row %d: cosine %.9f, max abs %g", r, cos, maxAbs)
+			defer tr.Close()
+			const minCos, maxDiff = 0.999999, 2e-4
+			for name, want := range ref.Clips {
+				var dst speech.Transcript
+				if err := tr.Transcribe(context.Background(), clipPCM(t, name), speech.Options{}, &dst); err != nil {
+					t.Fatal(err)
 				}
-			}
-			if !slices.Equal(tr.ids, want.InputIDs) {
-				t.Fatalf("prompt ids differ from the processor's")
+				frames := len(tr.features) / 128
+				if frames != want.Frames || len(tr.embeds) != want.Tokens*m.enc.out {
+					t.Fatalf("%s: %d frames and %d tokens, want %d and %d", name, frames, len(tr.embeds)/m.enc.out, want.Frames, want.Tokens)
+				}
+				for i, f := range want.FeatureFrames {
+					for bin := range 128 {
+						got, w := tr.features[bin*frames+f], want.Features[i*128+bin]
+						if math.Abs(float64(got-w)) > 1e-4 {
+							t.Fatalf("%s: feature (bin %d, frame %d) = %g, want %g", name, bin, f, got, w)
+						}
+					}
+				}
+				raw, err := os.ReadFile(filepath.Join("..", "testdata", "qwen3asr", name+".encoder.f32le"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows := readFloats(t, raw)
+				d := m.enc.out
+				worstCos, worstDiff := 1.0, 0.0
+				for i, r := range want.EncoderRows {
+					cos, diff := cosine(tr.embeds[r*d:(r+1)*d], rows[i*d:(i+1)*d])
+					worstCos, worstDiff = min(worstCos, cos), max(worstDiff, diff)
+				}
+				t.Logf("%s: encoder rows cosine ≥ %.9f, max abs %g", name, worstCos, worstDiff)
+				if worstCos < minCos || worstDiff > maxDiff {
+					t.Fatalf("%s: encoder rows cosine %.9f, max abs %g", name, worstCos, worstDiff)
+				}
+				if !slices.Equal(tr.ids, want.InputIDs) {
+					t.Fatalf("%s: prompt ids differ from the processor's", name)
+				}
 			}
 		})
 	}

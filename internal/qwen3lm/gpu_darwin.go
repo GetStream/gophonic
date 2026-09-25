@@ -132,7 +132,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate"},
 		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
-		{&g.mm[0][0], "mm_qkv" + suffix}, {&g.mm[0][1], "mm_o" + suffix}, {&g.mm[0][2], "mm_gateup" + suffix}, {&g.mm[0][3], "mm_down" + suffix},
+		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
 		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
 		if *p.dst, err = dev.Pipeline(lib, p.name); err != nil {
@@ -480,8 +480,9 @@ var gpuTokenByToken, gpuScalarAttention bool
 // single-token attention (AS in gpu.metal).
 const attendSplits = 4
 
-// mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal).
-const mmColumns = 64
+// mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal), and
+// mmThreads the threads of both GEMM tiles.
+const mmColumns, mmThreads = 64, 128
 
 type mmArgs struct {
 	k, n, m         uint32
@@ -751,7 +752,7 @@ func (w *gpuWorkspace) mmDispatch(kind int, buf *metal.Buffer, wOff, sOff int, x
 	e.SetBytes(unsafe.Pointer(&w.mm), int(unsafe.Sizeof(w.mm)), 5)
 	e.SetBuffer(out, 0, 6)
 	e.SetBuffer(w.scratch, 0, 7)
-	e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: splits}, metal.Size{X: 8 * tile, Y: 1, Z: 1})
+	e.Dispatch(metal.Size{X: n / mmColumns, Y: (rows + tile - 1) / tile, Z: splits}, metal.Size{X: mmThreads, Y: 1, Z: 1})
 	if splits > 1 {
 		e.SetPipeline(w.g.finish[[4]int{0, 1, 2, 1}[kind]])
 		e.Dispatch(metal.Size{X: n / mmColumns, Y: rows, Z: 1}, metal.Size{X: mmColumns, Y: 1, Z: 1})

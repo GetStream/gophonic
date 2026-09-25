@@ -38,9 +38,14 @@ flowchart LR
   unchanged. Sinusoidal positions restart per chunk. The pre-LayerNorm
   layers attend bidirectionally within windows of `n_window_infer` frames
   (104 outputs), and `ln_post`, `proj1`, GELU, and `proj2` produce one
-  embedding per output frame. Everything runs in FP32 on
-  `internal/whispergemm`, with the GELU, LayerNorm, and softmax kernels of
-  `internal/nn`.
+  embedding per output frame. On the CPU the products run on SME tiles
+  (`internal/q8gemm`) with every BF16 weight exact as scaled FP16 and each
+  activation row rounded to FP16 after scaling into FP16's full range; bias,
+  GELU, and the query scale are applied to each finished block. The row
+  kernels come from `internal/nn`. On the GPU (`encoder.metal`) the same
+  exact weights meet FP16 activation tiles in 64×64 products with FP32
+  accumulation, prefetched K steps, and split K for products too small to
+  fill the GPU; the convolutions read their im2col rows in place.
 - **Decoder.** The shared Qwen3 core, `internal/qwen3lm`, loaded from the
   `thinker.model.` tensors with the `thinker.lm_head` head. The audio
   embeddings replace the `<|audio_pad|>` rows of the prompt
@@ -60,6 +65,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | `FormatGPU` (`"gpu-q8"`, the default with a Metal GPU) | int8 in blocks of 32 with an FP16 scale, Hadamard-rotated inputs | FP32 | Apple GPU |
 | `FormatF16` (`"f16"`, the default elsewhere) | every BF16 weight exactly, as scaled FP16 | FP16 per row | CPU, SME |
+
+The format also places the encoder: `FormatGPU` runs it on the GPU,
+`FormatF16` on the CPU; both keep its weights exact.
 
 `gpu-q8` is new to `internal/qwen3lm`. Qwen3-1.7B rows do not quantize well
 with a single scale per row: the per-row `gpu` format keeps the decoder's
@@ -83,11 +91,19 @@ Apple M4 Max, warm lane, PCM to text, Qwen3-ASR-1.7B, zero allocations
 
 | Clip | `gpu-q8` | `f16` |
 | --- | ---: | ---: |
-| 11.0 s English (JFK) | **302 ms** | 689 ms |
-| 4.2 s Chinese | **121 ms** | 256 ms |
+| 11.0 s English (JFK) | **226 ms** | 751 ms |
+| 4.2 s Chinese | **85 ms** | 284 ms |
 
-For the JFK clip, 302 ms is about 100 ms for the CPU encoder, 50 ms to prefill
-the 158-token prompt, and 30 tokens at 4.67 ms each.
+For the JFK clip on the GPU, 226 ms is 19 ms for the encoder, 49 ms to
+prefill the 158-token prompt, and 30 tokens at about 5 ms each, the head's
+logits included. On the CPU the encoder takes 68 ms: its FP16 products keep
+both SME units busy, and the tile kernel takes four K pairs per iteration
+with multi-vector loads, 752 GMAC/s on one core.
+
+| Encoder, JFK clip | Time | Matrix throughput |
+| --- | ---: | ---: |
+| GPU | **19 ms** | 4.6–9.8 TFLOPS per product |
+| CPU, SME | 68 ms | ≈2.5 TFLOPS on the two SME units |
 
 The decoder alone, against llama.cpp build `ece963f41` on the same geometry
 (`llama-bench -m Qwen3-1.7B-Q8_0.gguf -p 158 -n 64 -fa 1`):
@@ -95,7 +111,7 @@ The decoder alone, against llama.cpp build `ece963f41` on the same geometry
 | | gophonic `gpu-q8` | llama.cpp Metal Q8_0 |
 | --- | ---: | ---: |
 | One token | **4.67 ms** | 5.54 ms |
-| 158-token prompt | 50 ms | **40.7 ms** |
+| 158-token prompt | 49 ms | **40.7 ms** |
 
 One token streams 1.5 GB of layer weights and 0.33 GB of head weights; at
 the measured 440 GB/s that is 4.15 ms, so decoding runs within 12% of the
@@ -108,8 +124,9 @@ memory bandwidth floor.
 rows at every window edge, prompt ids, the 32 largest first-step logits, and
 the greedy continuation (`testdata/qwen3asr`). The tests require:
 
-- features within 1e-4, encoder rows at cosine ≥ 0.9999999 and within 1e-5
-  (measured: 2e-6), and the processor's prompt ids exactly;
+- features within 1e-4, encoder rows at cosine ≥ 0.999999 and within 2e-4
+  on both encoders (measured: 0.9999998 and 6e-5), and the processor's prompt
+  ids exactly;
 - the exact generated ids and transcripts for `f16`, and the same
   transcripts and first token for `gpu-q8`, whose logits stay within 1.5;
 - no allocations in warm `Transcribe` calls, in both formats;

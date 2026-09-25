@@ -10,7 +10,7 @@ GPU through a pure-Go Metal binding, with portable kernels everywhere else.
 
 | Task | Model | Package | On an M4 Max |
 | --- | --- | --- | --- |
-| **Transcription (recommended)** | **Qwen3-ASR 1.7B and 0.6B**, 30 languages and 22 Chinese dialects | [`qwen3asr`](qwen3asr) | 11 s of speech in 302 ms, the official transcripts, zero allocations |
+| **Transcription (recommended)** | **Qwen3-ASR 1.7B and 0.6B**, 30 languages and 22 Chinese dialects | [`qwen3asr`](qwen3asr) | 11 s of speech in 226 ms, the official transcripts, zero allocations |
 | Transcription, English | OpenAI Whisper `tiny.en`, `base.en`, `small.en` | [`whisper`](whisper) | about 3× whisper.cpp on one core, identical transcripts |
 | Turn detection | Pipecat Smart Turn v3.2 | [`smartturn`](smartturn) | FP32 Whisper encoder, ONNX parity within 2e-5 |
 | Turn detection | TinyMelNet | [`tinymel`](tinymel) | 3.6 ms from PCM to prediction, zero allocations |
@@ -95,15 +95,15 @@ such as feature-level prediction and caller-sized result buffers; see the
 [`qwen3asr`](qwen3asr) loads the official
 [Qwen/Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) and
 [0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) snapshot directories
-directly. The audio encoder runs in FP32 on SME; the Qwen3 decoder runs on the
-Apple GPU with int8 weights in blocks of 32 sharing an FP16 scale, in a
-Hadamard-rotated basis, or on the CPU with every BF16 weight kept exactly.
-Warm latency, PCM to text, for Qwen3-ASR-1.7B:
+directly. On the Apple GPU (the default) the audio encoder keeps every BF16
+weight exactly and the Qwen3 decoder uses int8 weights in blocks of 32 sharing
+an FP16 scale, in a Hadamard-rotated basis; on the CPU both run on SME with
+every weight exact. Warm latency, PCM to text, for Qwen3-ASR-1.7B:
 
-| Audio | GPU decoder (default) | CPU decoder, exact weights |
+| Audio | Apple GPU (default) | CPU, exact weights |
 | --- | ---: | ---: |
-| 11.0 s English (JFK) | **302 ms** (0.028× real time) | 689 ms |
-| 4.2 s Chinese | **121 ms** (0.029× real time) | 256 ms |
+| 11.0 s English (JFK) | **226 ms** (0.021× real time) | 751 ms |
+| 4.2 s Chinese | **85 ms** (0.020× real time) | 284 ms |
 
 The decoder alone, against llama.cpp's Metal backend on the same Qwen3-1.7B
 geometry with Q8_0 weights and flash attention:
@@ -111,11 +111,11 @@ geometry with Q8_0 weights and flash attention:
 | Qwen3-1.7B decoder | gophonic GPU | llama.cpp Metal Q8_0 |
 | --- | ---: | ---: |
 | One token | **4.67 ms** (214 tokens/s) | 5.54 ms (180 tokens/s) |
-| 158-token prompt | 50 ms | **41 ms** |
+| 158-token prompt | 49 ms | **41 ms** |
 
 Features, encoder rows, prompt ids, first-step logits, and transcripts match
-the official `qwen-asr` package's FP32 run: the encoder to within 2e-6, and
-every transcript exactly. The GPU weights keep the decoder's final state at
+the official `qwen-asr` package's FP32 run: the encoder at cosine 0.9999998,
+and every transcript exactly. The GPU weights keep the decoder's final state at
 cosine 0.9984–0.9986 of the exact path on the test clips, above
 llama.cpp's Q8_0 rounding of the same weights (0.9972–0.9987).
 [Qwen3-ASR](docs/qwen3asr.md) documents the design and measurements.

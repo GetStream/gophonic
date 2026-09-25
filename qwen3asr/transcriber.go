@@ -37,7 +37,8 @@ var _ speech.Transcriber = (*Transcriber)(nil)
 type Transcriber struct {
 	m        *Model
 	frontend *mel.Spectrogram
-	enc      *encoderWorkspace
+	enc      *encoderWorkspace    // CPU encoder
+	genc     *gpuEncoderWorkspace // GPU encoder, when the model has one
 	lm       *qwen3lm.Workspace
 	kv       *qwen3lm.PrefixKV
 	tokWS    qwen3lm.TokenizerWorkspace
@@ -69,18 +70,33 @@ func NewTranscriber(m *Model, workers int) (*Transcriber, error) {
 	if workers == 0 {
 		workers = min(runtime.GOMAXPROCS(0), 16)
 	}
-	enc, err := newEncoderWorkspace(m.enc, min(workers, 8))
-	if err != nil {
-		return nil, err
+	t := &Transcriber{m: m, frontend: mel.NewSpectrogram(m.enc.freq[0], 0)}
+	if m.genc != nil {
+		t.genc = m.genc.newWorkspace()
+	} else {
+		enc, err := newEncoderWorkspace(m.enc, min(workers, 8))
+		if err != nil {
+			return nil, err
+		}
+		t.enc = enc
 	}
 	lm, err := m.eval.NewWorkspace(workers)
 	if err != nil {
-		enc.close()
+		t.closeEncoder()
 		return nil, err
 	}
 	c := m.lm.Config()
-	return &Transcriber{m: m, frontend: mel.NewSpectrogram(m.enc.freq[0], 0), enc: enc, lm: lm,
-		hidden: make([]float32, c.Hidden), logits: make([]float32, c.Vocab)}, nil
+	t.lm, t.hidden, t.logits = lm, make([]float32, c.Hidden), make([]float32, c.Vocab)
+	return t, nil
+}
+
+func (t *Transcriber) closeEncoder() {
+	if t.enc != nil {
+		t.enc.close()
+	}
+	if t.genc != nil {
+		t.genc.close()
+	}
 }
 
 // Close releases the lane's workers. It is safe to call more than once.
@@ -89,7 +105,7 @@ func (t *Transcriber) Close() error {
 		return nil
 	}
 	t.closed = true
-	t.enc.close()
+	t.closeEncoder()
 	return t.lm.Close()
 }
 
@@ -206,16 +222,21 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 		return "", nil // too short to hold speech
 	}
 	e := t.m.enc
-	t.features = grow(t.features, e.freq[0]*frames)[:e.freq[0]*frames]
+	n := e.freq[0] * frames
+	if t.genc != nil {
+		if t.features, err = t.genc.features(n); err != nil {
+			return "", err
+		}
+	} else {
+		t.features = grow(t.features, n)[:n]
+	}
 	if err := t.frontend.Into(pcm, t.features); err != nil {
 		return "", fmt.Errorf("qwen3asr: features: %w", err)
 	}
-	audio := e.tokens(frames)
-	t.embeds = grow(t.embeds, audio*e.out)[:audio*e.out]
-	if _, err := e.encode(t.features, frames, t.embeds, t.enc); err != nil {
+	if err := t.encode(frames); err != nil {
 		return "", err
 	}
-	if err := t.buildPrompt(context, language, audio); err != nil {
+	if err := t.buildPrompt(context, language, e.tokens(frames)); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -227,6 +248,24 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 	}
 	t.raw = t.m.tok.DecodeAppend(t.raw[:0], t.gen, true)
 	return t.parse(language), nil
+}
+
+// encode runs the audio encoder on the features in t.features, leaving the
+// embeddings in t.embeds.
+func (t *Transcriber) encode(frames int) error {
+	if t.genc != nil {
+		embeds, err := t.genc.encode(frames)
+		if err != nil {
+			return fmt.Errorf("qwen3asr: encoder: %w", err)
+		}
+		t.embeds = embeds
+		return nil
+	}
+	e := t.m.enc
+	n := e.tokens(frames) * e.out
+	t.embeds = grow(t.embeds, n)[:n]
+	_, err := e.encode(t.features, frames, t.embeds, t.enc)
+	return err
 }
 
 // buildPrompt writes the chat prompt's token ids to t.ids with audio

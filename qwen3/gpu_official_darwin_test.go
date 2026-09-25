@@ -43,7 +43,7 @@ func TestOfficialGPUFidelity(t *testing.T) {
 		defer m.Close()
 		emb := make([][]float32, len(texts))
 		for i := range emb {
-			emb[i] = make([]float32, hiddenSize)
+			emb[i] = make([]float32, m.Width())
 		}
 		if err := m.Embed(context.Background(), texts, emb); err != nil {
 			t.Fatal(err)

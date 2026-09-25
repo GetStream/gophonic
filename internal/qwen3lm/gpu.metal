@@ -325,12 +325,17 @@ constexpr uint mmSmemFloats(uint bm) {
 // codes exactly, block codes times their FP16 scale) and rounds the BM×32
 // activation tile to FP16, so every weight is read once per BM tokens.
 // Products accumulate in FP32.
-template <int PRO, int EPI, int BITS, uint BM, uint T>
+//
+// With WIDE (BM 32, 128 threads), four simdgroups each own a 16×32 block as
+// 2×4 8×8 matrices, so each K step loads six matrices for eight products
+// instead of four for four.
+template <int PRO, int EPI, int BITS, uint BM, uint T, bool WIDE = false>
 inline void mm(device const uchar *W, device const void *scale, device const float *x, device float *y,
 		device const float *partsIn, device float *partsOut, constant MMArgs &a, device float *scratch,
 		threadgroup float *smem, threadgroup float *inv, uint3 tg, uint tid, uint sg) {
 	constexpr uint WPER = MM_BN * MM_BK / T; // weight values per thread (16 or 8)
-	constexpr uint XPER = BM * MM_BK / T;    // activation values per thread (4)
+	constexpr uint XPER = BM * MM_BK / T;    // activation values per thread (4, or 8 with WIDE)
+	constexpr uint NB = WIDE ? 4 : 2;        // 8-column blocks per simdgroup
 	threadgroup half *Ws = (threadgroup half *)smem;                 // [64][32]
 	threadgroup half *Xs = (threadgroup half *)smem + MM_BN * MM_BK; // [BM][32]
 	uint n0 = tg.x * MM_BN, m0 = tg.y * BM;
@@ -346,10 +351,11 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 		inv[tid] = f;
 	}
 	threadgroup_barrier(mem_flags::mem_threadgroup);
-	uint sn = (sg % 4) * 16, sm = (sg / 4) * 16;
-	simdgroup_float8x8 acc[2][2];
+	uint sn = WIDE ? (sg % 2) * 32 : (sg % 4) * 16, sm = WIDE ? (sg / 2) * 16 : (sg / 4) * 16;
+	simdgroup_float8x8 acc[2][NB];
 	for (uint i = 0; i < 2; i++)
-		acc[i][0] = acc[i][1] = make_filled_simdgroup_matrix<float, 8, 8>(0);
+		for (uint j = 0; j < NB; j++)
+			acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0);
 	uint wr = tid / (MM_BK / WPER), wc = (tid % (MM_BK / WPER)) * WPER;
 	uint xr = tid / (MM_BK / XPER), xc = (tid % (MM_BK / XPER)) * XPER;
 	bool live = m0 + xr < a.M;
@@ -360,7 +366,7 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 	// Global loads for the next step are issued before this step computes.
 	uint4 wreg = 0;
 	half d = 0;
-	float4 xreg = 0;
+	float4 xreg = 0, xreg2 = 0;
 #define MM_FETCH(k0)                                                        \
 	if (eightBit(BITS)) {                                                   \
 		if (WPER == 16)                                                     \
@@ -376,7 +382,9 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 			wreg.xy = *(device const uint2 *)(wrow + (k0) / 2);             \
 		d = srow[(k0) / 32];                                                \
 	}                                                                       \
-	xreg = live ? *(device const float4 *)(xrow + (k0)) * f : 0;
+	xreg = live ? *(device const float4 *)(xrow + (k0)) * f : 0;             \
+	if (XPER == 8)                                                          \
+		xreg2 = live ? *(device const float4 *)(xrow + (k0) + 4) * f : 0;
 	uint kBeg = tg.z * a.splitK, kEnd = kBeg + a.splitK;
 	MM_FETCH(kBeg)
 	for (uint k0 = kBeg; k0 < kEnd; k0 += MM_BK) {
@@ -405,20 +413,22 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 			}
 		}
 		*(threadgroup half4 *)(Xs + xr * MM_BK + xc) = half4(xreg);
+		if (XPER == 8)
+			*(threadgroup half4 *)(Xs + xr * MM_BK + xc + 4) = half4(xreg2);
 		threadgroup_barrier(mem_flags::mem_threadgroup);
 		if (k0 + MM_BK < kEnd) {
 			MM_FETCH(k0 + MM_BK)
 		}
 		for (uint k8 = 0; k8 < MM_BK; k8 += 8) {
-			simdgroup_half8x8 A0, A1, B0, B1;
-			simdgroup_load(A0, Xs + sm * MM_BK + k8, MM_BK);
-			simdgroup_load(A1, Xs + (sm + 8) * MM_BK + k8, MM_BK);
-			simdgroup_load(B0, Ws + sn * MM_BK + k8, MM_BK, ulong2(0, 0), true);
-			simdgroup_load(B1, Ws + (sn + 8) * MM_BK + k8, MM_BK, ulong2(0, 0), true);
-			simdgroup_multiply_accumulate(acc[0][0], A0, B0, acc[0][0]);
-			simdgroup_multiply_accumulate(acc[0][1], A1, B0, acc[0][1]);
-			simdgroup_multiply_accumulate(acc[1][0], A0, B1, acc[1][0]);
-			simdgroup_multiply_accumulate(acc[1][1], A1, B1, acc[1][1]);
+			simdgroup_half8x8 A[2], B[NB];
+			simdgroup_load(A[0], Xs + sm * MM_BK + k8, MM_BK);
+			simdgroup_load(A[1], Xs + (sm + 8) * MM_BK + k8, MM_BK);
+			for (uint j = 0; j < NB; j++)
+				simdgroup_load(B[j], Ws + (sn + 8 * j) * MM_BK + k8, MM_BK, ulong2(0, 0), true);
+			// acc[j][i] is output rows sm+8i, columns sn+8j.
+			for (uint j = 0; j < NB; j++)
+				for (uint i = 0; i < 2; i++)
+					simdgroup_multiply_accumulate(acc[i][j], A[i], B[j], acc[i][j]);
 		}
 		threadgroup_barrier(mem_flags::mem_threadgroup);
 	}
@@ -426,17 +436,15 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 	if (a.splits > 1) {
 		// Raw sums; mm_finish adds the splits and applies the epilogue.
 		device float *out = scratch + ((ulong)tg.z * a.padM + m0) * a.N + n0;
-		for (uint nb = 0; nb < 2; nb++) {
-			simdgroup_store(acc[nb][0], out + sm * a.N + sn + nb * 8, a.N);
-			simdgroup_store(acc[nb][1], out + (sm + 8) * a.N + sn + nb * 8, a.N);
-		}
+		for (uint j = 0; j < NB; j++)
+			for (uint i = 0; i < 2; i++)
+				simdgroup_store(acc[i][j], out + (sm + 8 * i) * a.N + sn + 8 * j, a.N);
 		return;
 	}
 	threadgroup float *Cs = smem; // [BM][64], reusing the tiles
-	for (uint nb = 0; nb < 2; nb++) {
-		simdgroup_store(acc[nb][0], Cs + sm * MM_BN + sn + nb * 8, MM_BN);
-		simdgroup_store(acc[nb][1], Cs + (sm + 8) * MM_BN + sn + nb * 8, MM_BN);
-	}
+	for (uint j = 0; j < NB; j++)
+		for (uint i = 0; i < 2; i++)
+			simdgroup_store(acc[i][j], Cs + (sm + 8 * i) * MM_BN + sn + 8 * j, MM_BN);
 	threadgroup_barrier(mem_flags::mem_threadgroup);
 	for (uint e = tid; e < BM * MM_BN; e += T) {
 		uint m = e / MM_BN, n = e % MM_BN;
@@ -473,6 +481,18 @@ inline void mm(device const uchar *W, device const void *scale, device const flo
 		partsOut[(m0 + tid) * a.partsOut + tg.x] = ss;
 	}
 }
+
+#define MM_KERNEL_T(name, PRO, EPI, BITS, BM, T, WIDE)                                          \
+	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]],   \
+			device const float *x [[buffer(2)]], device float *y [[buffer(3)]],                    \
+			device const float *partsIn [[buffer(4)]], constant MMArgs &a [[buffer(5)]],           \
+			device float *partsOut [[buffer(6)]], device float *scratch [[buffer(7)]],             \
+			uint3 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],   \
+			uint sg [[simdgroup_index_in_threadgroup]]) {                                          \
+		threadgroup float smem[mmSmemFloats(BM)];                                                \
+		threadgroup float inv[BM];                                                               \
+		mm<PRO, EPI, BITS, BM, T, WIDE>(W, scale, x, y, partsIn, partsOut, a, scratch, smem, inv, tg, tid, sg); \
+	}
 
 #define MM_KERNEL(name, PRO, EPI, BITS, BM)                                                      \
 	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]],   \
@@ -542,9 +562,16 @@ MM_FINISHES(_q4, Q4)
 	MM_KERNEL(mm_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS, BM)      \
 	MM_KERNEL(mm_down##suffix, PRO_PLAIN, EPI_ADD, BITS, BM)
 
-MM_KERNELS(, Q8, 32)
-MM_KERNELS(_q8, Q8B, 32)
-MM_KERNELS(_q4, Q4, 32)
+#define MM_KERNELS_W(suffix, BITS)                                              \
+	MM_KERNEL_T(mm_qkv##suffix, PRO_NORM, EPI_STORE, BITS, 32, 128, true)       \
+	MM_KERNEL_T(mm_o##suffix, PRO_PLAIN, EPI_ADD, BITS, 32, 128, true)          \
+	MM_KERNEL_T(mm_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS, 32, 128, true)   \
+	MM_KERNEL_T(mm_down##suffix, PRO_PLAIN, EPI_ADD, BITS, 32, 128, true)
+
+MM_KERNELS_W(_w, Q8)
+MM_KERNELS_W(_q8_w, Q8B)
+MM_KERNELS_W(_q4_w, Q4)
+
 MM_KERNELS(_16, Q8, 16)
 MM_KERNELS(_q8_16, Q8B, 16)
 MM_KERNELS(_q4_16, Q4, 16)
