@@ -108,6 +108,7 @@ func main() {
 		loud = loud[:0]
 		mu.Unlock()
 		tick := time.NewTicker(20 * time.Millisecond)
+		started := time.Now()
 		for pos := 0; pos+320 <= len(speechPCM); pos += 320 {
 			<-tick.C
 			writer.Write(webaudio.FromFloat32(speechPCM[pos:pos+320], 16000, 1))
@@ -118,13 +119,20 @@ func main() {
 		time.Sleep(6 * time.Second)
 		mu.Lock()
 		var first time.Time
+		var over time.Duration // Gopher's voice while the speech went on, at its pauses
 		for _, t := range loud {
+			if t.After(started) && t.Before(ended) {
+				over += 20 * time.Millisecond
+			}
 			if t.After(ended) {
 				first = t
 				break
 			}
 		}
 		mu.Unlock()
+		if over > 0 {
+			fmt.Printf("round %d (%s): Gopher spoke for %v before the speech ended\n", round, what, over)
+		}
 		if first.IsZero() {
 			fmt.Printf("round %d (%s): Gopher did not answer\n", round, what)
 		} else {

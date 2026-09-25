@@ -84,7 +84,7 @@ func (c *chatChannel) post(endpoint string, body any, connectionID string) ([]by
 }
 
 // historyLimit caps how much of the channel's past Gopher loads on join.
-const historyLimit = 100
+const historyLimit = 300 // the API's most; Gopher's own captions fill much of it
 
 // healthEvery is how often Gopher pings the realtime connection to keep it
 // open; Stream expects one from the client at least every 30 s.
