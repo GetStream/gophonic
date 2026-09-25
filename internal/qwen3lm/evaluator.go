@@ -231,8 +231,11 @@ func (e *Evaluator) HiddenTailExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 }
 
 // LogitsRowsInto is LogitsInto for several states: hidden holds whole
-// states, and dst receives the logits of each in turn.
+// states, and dst receives the logits of each in turn. F16 SME projections
+// reuse each weight panel across rows while preserving LogitsInto's exact
+// accumulation order and reusing the existing activation storage.
 func (e *Evaluator) LogitsRowsInto(hidden, dst []float32, ws *Workspace) error {
+	defer runtime.KeepAlive(ws)
 	if e == nil || e.m == nil || ws == nil || ws.owner != e {
 		return errors.New("qwen3: nil evaluator or foreign workspace")
 	}
@@ -246,6 +249,18 @@ func (e *Evaluator) LogitsRowsInto(hidden, dst []float32, ws *Workspace) error {
 			return errors.New("qwen3: the weights were loaded without a language-model head")
 		}
 		return ws.gpu.logitsRowsInto(e.m, hidden, dst, k)
+	}
+	if k > 1 && ws.gpu == nil && e.m.head.f16 != nil && c.hidden%16 == 0 && q8gemm.Available() {
+		if err := ws.ensure(c, k, 1); err != nil {
+			return err
+		}
+		ws.pool.hold()
+		defer ws.pool.release()
+		copy(ws.norm, hidden)
+		ws.op.rows, ws.op.exactRows = k, true
+		ws.project(ws.norm, c.hidden, false, projection{&e.m.head, dst})
+		ws.op.exactRows = false
+		return nil
 	}
 	for r := range k {
 		if err := e.LogitsInto(hidden[r*c.hidden:(r+1)*c.hidden], dst[r*c.vocab:(r+1)*c.vocab], ws); err != nil {
@@ -808,8 +823,8 @@ func (ws *Workspace) prepareTiles(cols int) {
 		var err error
 		if ws.op.rot != nil {
 			err = ws.tilesI8[t].Prepare(n, cols)
-		} else if rows == 1 && cols > 0 && cols%16 == 0 && q8gemm.Available() {
-			err = ws.tiles[t].PrepareRowF16(cols)
+		} else if (rows == 1 || ws.op.exactRows) && cols > 0 && cols%16 == 0 && q8gemm.Available() {
+			err = ws.tiles[t].PrepareRowsF16(n, cols)
 		} else {
 			err = ws.tiles[t].Prepare(n, cols)
 		}

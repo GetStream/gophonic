@@ -612,6 +612,213 @@ TEXT ·smeRowF16(SB), NOSPLIT, $0-72
 	MOVD	R0, retries+64(FP)
 	RET
 
+// func smeRows2F16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols, strideBytes int, colScales, rowScales *float32) (retries int)
+TEXT ·smeRows2F16(SB), NOSPLIT, $0-80
+	MOVD	w+0(FP), R0
+	MOVD	kGroups+8(FP), R1
+	MOVD	panels+16(FP), R2
+	MOVD	activation+24(FP), R3
+	MOVD	dst+32(FP), R4
+	MOVD	cols+40(FP), R5
+	MOVD	strideBytes+48(FP), R6
+	MOVD	colScales+56(FP), R16
+	MOVD	rowScales+64(FP), R19
+	WORD	$0xd503477f	// smstart
+	WORD	$0xd2800011	// mov x17, #0x0 ; =0
+	WORD	$0xd375d027	// lsl x7, x1, #11
+	WORD	$0xd2800014	// mov x20, #0x0 ; =0
+	WORD	$0x52800008	// mov w8, #0x0 ; =0
+	WORD	$0x52800109	// mov w9, #0x8 ; =8
+	WORD	$0xd37be836	// lsl x22, x1, #5
+	WORD	$0xc00800ff	// zero {za}
+	WORD	$0x25b9ce1f	// fmov z31.s, #1.00000000
+	WORD	$0x2558e3e0	// ptrue p0.h
+	WORD	$0x2598e3e1	// ptrue p1.s
+	WORD	$0x25607810	// ptrue pn8.h
+	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+	WORD	$0x8541c675	// ld1rw { z21.s }, p1/z, [x19, #0x4]
+	WORD	$0xaa0003ea	// mov x10, x0
+	WORD	$0xaa0303eb	// mov x11, x3
+	WORD	$0x8b160075	// add x21, x3, x22
+	WORD	$0xaa0103ec	// mov x12, x1
+	WORD	$0xb400046c	// cbz x12, 0xd4
+	WORD	$0xa4802160	// ld1rqh { z0.h }, p0/z, [x11]
+	WORD	$0xa4812161	// ld1rqh { z1.h }, p0/z, [x11, #0x10]
+	WORD	$0xa48022a2	// ld1rqh { z2.h }, p0/z, [x21]
+	WORD	$0xa48122a3	// ld1rqh { z3.h }, p0/z, [x21, #0x10]
+	WORD	$0xa040a144	// ld1h { z4.h - z7.h }, pn8/z, [x10]
+	WORD	$0xc1509088	// fdot za.s[w8, 0, vgx4], { z4.h - z7.h }, z0.h[0]
+	WORD	$0xc152b088	// fdot za.s[w9, 0, vgx4], { z4.h - z7.h }, z2.h[0]
+	WORD	$0xa041a148	// ld1h { z8.h - z11.h }, pn8/z, [x10, #0x4, mul vl]
+	WORD	$0xc1509509	// fdot za.s[w8, 1, vgx4], { z8.h - z11.h }, z0.h[1]
+	WORD	$0xc152b509	// fdot za.s[w9, 1, vgx4], { z8.h - z11.h }, z2.h[1]
+	WORD	$0xa042a14c	// ld1h { z12.h - z15.h }, pn8/z, [x10, #0x8, mul vl]
+	WORD	$0xc150998a	// fdot za.s[w8, 2, vgx4], { z12.h - z15.h }, z0.h[2]
+	WORD	$0xc152b98a	// fdot za.s[w9, 2, vgx4], { z12.h - z15.h }, z2.h[2]
+	WORD	$0xa043a150	// ld1h { z16.h - z19.h }, pn8/z, [x10, #0xc, mul vl]
+	WORD	$0xc1509e0b	// fdot za.s[w8, 3, vgx4], { z16.h - z19.h }, z0.h[3]
+	WORD	$0xc152be0b	// fdot za.s[w9, 3, vgx4], { z16.h - z19.h }, z2.h[3]
+	WORD	$0x9110014a	// add x10, x10, #0x400
+	WORD	$0xa040a144	// ld1h { z4.h - z7.h }, pn8/z, [x10]
+	WORD	$0xc151908c	// fdot za.s[w8, 4, vgx4], { z4.h - z7.h }, z1.h[0]
+	WORD	$0xc153b08c	// fdot za.s[w9, 4, vgx4], { z4.h - z7.h }, z3.h[0]
+	WORD	$0xa041a148	// ld1h { z8.h - z11.h }, pn8/z, [x10, #0x4, mul vl]
+	WORD	$0xc151950d	// fdot za.s[w8, 5, vgx4], { z8.h - z11.h }, z1.h[1]
+	WORD	$0xc153b50d	// fdot za.s[w9, 5, vgx4], { z8.h - z11.h }, z3.h[1]
+	WORD	$0xa042a14c	// ld1h { z12.h - z15.h }, pn8/z, [x10, #0x8, mul vl]
+	WORD	$0xc151998e	// fdot za.s[w8, 6, vgx4], { z12.h - z15.h }, z1.h[2]
+	WORD	$0xc153b98e	// fdot za.s[w9, 6, vgx4], { z12.h - z15.h }, z3.h[2]
+	WORD	$0xa043a150	// ld1h { z16.h - z19.h }, pn8/z, [x10, #0xc, mul vl]
+	WORD	$0xc1519e0f	// fdot za.s[w8, 7, vgx4], { z16.h - z19.h }, z1.h[3]
+	WORD	$0xc153be0f	// fdot za.s[w9, 7, vgx4], { z16.h - z19.h }, z3.h[3]
+	WORD	$0x9110014a	// add x10, x10, #0x400
+	WORD	$0x9100816b	// add x11, x11, #0x20
+	WORD	$0x910082b5	// add x21, x21, #0x20
+	WORD	$0xd100058c	// sub x12, x12, #0x1
+	WORD	$0x17ffffde	// b 0x48
+	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
+	WORD	$0x1e2603ee	// fmov w14, s31
+	WORD	$0x3400110e	// cbz w14, 0x2fc
+	WORD	$0xc0060c00	// mov { z0.d - z3.d }, za.d[w8, 0, vgx4]
+	WORD	$0xc0060c24	// mov { z4.d - z7.d }, za.d[w8, 1, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060c44	// mov { z4.d - z7.d }, za.d[w8, 2, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060c64	// mov { z4.d - z7.d }, za.d[w8, 3, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060c84	// mov { z4.d - z7.d }, za.d[w8, 4, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060ca4	// mov { z4.d - z7.d }, za.d[w8, 5, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060cc4	// mov { z4.d - z7.d }, za.d[w8, 6, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0060ce4	// mov { z4.d - z7.d }, za.d[w8, 7, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0x8b14220f	// add x15, x16, x20, lsl #8
+	WORD	$0x8b14208e	// add x14, x4, x20, lsl #8
+	WORD	$0xcb1418ad	// sub x13, x5, x20, lsl #6
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa540a9e8	// ld1w { z8.s }, p2/z, [x15]
+	WORD	$0x65880800	// fmul z0.s, z0.s, z8.s
+	WORD	$0x65940800	// fmul z0.s, z0.s, z20.s
+	WORD	$0xe540e9c0	// st1w { z0.s }, p2, [x14]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa541a9e8	// ld1w { z8.s }, p2/z, [x15, #0x1, mul vl]
+	WORD	$0x65880821	// fmul z1.s, z1.s, z8.s
+	WORD	$0x65940821	// fmul z1.s, z1.s, z20.s
+	WORD	$0xe541e9c1	// st1w { z1.s }, p2, [x14, #0x1, mul vl]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa542a9e8	// ld1w { z8.s }, p2/z, [x15, #0x2, mul vl]
+	WORD	$0x65880842	// fmul z2.s, z2.s, z8.s
+	WORD	$0x65940842	// fmul z2.s, z2.s, z20.s
+	WORD	$0xe542e9c2	// st1w { z2.s }, p2, [x14, #0x2, mul vl]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa543a9e8	// ld1w { z8.s }, p2/z, [x15, #0x3, mul vl]
+	WORD	$0x65880863	// fmul z3.s, z3.s, z8.s
+	WORD	$0x65940863	// fmul z3.s, z3.s, z20.s
+	WORD	$0xe543e9c3	// st1w { z3.s }, p2, [x14, #0x3, mul vl]
+	WORD	$0xc0062c00	// mov { z0.d - z3.d }, za.d[w9, 0, vgx4]
+	WORD	$0xc0062c24	// mov { z4.d - z7.d }, za.d[w9, 1, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062c44	// mov { z4.d - z7.d }, za.d[w9, 2, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062c64	// mov { z4.d - z7.d }, za.d[w9, 3, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062c84	// mov { z4.d - z7.d }, za.d[w9, 4, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062ca4	// mov { z4.d - z7.d }, za.d[w9, 5, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062cc4	// mov { z4.d - z7.d }, za.d[w9, 6, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0xc0062ce4	// mov { z4.d - z7.d }, za.d[w9, 7, vgx4]
+	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+	WORD	$0x65850021	// fadd z1.s, z1.s, z5.s
+	WORD	$0x65860042	// fadd z2.s, z2.s, z6.s
+	WORD	$0x65870063	// fadd z3.s, z3.s, z7.s
+	WORD	$0x8b14220f	// add x15, x16, x20, lsl #8
+	WORD	$0x8b06008e	// add x14, x4, x6
+	WORD	$0x8b1421ce	// add x14, x14, x20, lsl #8
+	WORD	$0xcb1418ad	// sub x13, x5, x20, lsl #6
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa540a9e8	// ld1w { z8.s }, p2/z, [x15]
+	WORD	$0x65880800	// fmul z0.s, z0.s, z8.s
+	WORD	$0x65950800	// fmul z0.s, z0.s, z21.s
+	WORD	$0xe540e9c0	// st1w { z0.s }, p2, [x14]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa541a9e8	// ld1w { z8.s }, p2/z, [x15, #0x1, mul vl]
+	WORD	$0x65880821	// fmul z1.s, z1.s, z8.s
+	WORD	$0x65950821	// fmul z1.s, z1.s, z21.s
+	WORD	$0xe541e9c1	// st1w { z1.s }, p2, [x14, #0x1, mul vl]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa542a9e8	// ld1w { z8.s }, p2/z, [x15, #0x2, mul vl]
+	WORD	$0x65880842	// fmul z2.s, z2.s, z8.s
+	WORD	$0x65950842	// fmul z2.s, z2.s, z21.s
+	WORD	$0xe542e9c2	// st1w { z2.s }, p2, [x14, #0x2, mul vl]
+	WORD	$0xd10041ad	// sub x13, x13, #0x10
+	WORD	$0x25ad17e2	// whilelt p2.s, xzr, x13
+	WORD	$0xa543a9e8	// ld1w { z8.s }, p2/z, [x15, #0x3, mul vl]
+	WORD	$0x65880863	// fmul z3.s, z3.s, z8.s
+	WORD	$0x65950863	// fmul z3.s, z3.s, z21.s
+	WORD	$0xe543e9c3	// st1w { z3.s }, p2, [x14, #0x3, mul vl]
+	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
+	WORD	$0x1e2603ee	// fmov w14, s31
+	WORD	$0x3400010e	// cbz w14, 0x2fc
+	WORD	$0x8b070000	// add x0, x0, x7
+	WORD	$0x91000694	// add x20, x20, #0x1
+	WORD	$0xeb02029f	// cmp x20, x2
+	WORD	$0x54ffe98b	// b.lt 0x1c
+	WORD	$0xd503467f	// smstop
+	WORD	$0xaa1103e0	// mov x0, x17
+	WORD	$0x14000003	// b 0x304
+	WORD	$0x91000631	// add x17, x17, #0x1
+	WORD	$0x17ffff47	// b 0x1c
+	MOVD	R0, retries+72(FP)
+	RET
+
 // func smeVectorBytes() int
 TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8
 	WORD	$0x04bf5820	// rdsvl x0, #1

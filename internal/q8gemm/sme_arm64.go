@@ -39,6 +39,12 @@ func smeRowI8(w *int8, kGroups, panels int, activation *int8, dst *float32, cols
 //go:noescape
 func smeRowF16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols int, colScales, rowScale *float32) (retries int)
 
+// smeRows2F16 computes two adjacent contiguous FP16 activation rows. It
+// preserves smeRowF16's eight FP32 streams independently for both rows.
+//
+//go:noescape
+func smeRows2F16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols, strideBytes int, colScales, rowScales *float32) (retries int)
+
 //go:noescape
 func smeVectorBytes() int
 

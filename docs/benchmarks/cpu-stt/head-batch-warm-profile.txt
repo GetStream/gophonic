@@ -1,0 +1,58 @@
+Warm-only public Partial profile, Apple M4 Max, Go 1.27.1, GOEXPERIMENT=simd, CGO_ENABLED=0, GOMAXPROCS=16.
+Three four-call traces warmed before profiling; twelve further strictly growing JFK traces (48 public calls) profiled.
+Final full float/token/text/language fingerprint matched the warm reference despite 10,547 SME retries.
+Concurrent correctness jobs were allowed for this profile; it is live-path/signal evidence, not a latency comparison.
+
+Profile binary SHA256: ea4b3d4d375d6db8a711c0d438126a606d91f6953c25f29f58f982969b8a8bc3
+Profile source patch SHA256: c1fc16c29cc87ad06b9a728360487211a3cf883e17e43c3ec930a0ceaf89b8a2
+Profile data SHA256: 2c40763c403868fae52a973a39f5daa182f434cb1dd0b65e13fa9d02254bb13e
+Final batched-row signal stress: 20 successful repetitions, 1946 panel retries.
+
+=== RUN   TestCPUHeadWarmPartialProfile
+    head_batch_profile_experiment_test.go:93: profiled 12 warm four-call public Partial traces; exact final state f1f34e11f9077c3c8d6191418b0719dd3fc0ea7846d1ea4b3e7e4f0582f79370; SME signal retries 10547
+--- PASS: TestCPUHeadWarmPartialProfile (35.37s)
+PASS
+
+File: stt-head-profile.test
+Type: cpu
+Time: 2026-09-25 22:09:02 WEST
+Duration: 26.07s, Total samples = 146.54s (562.01%)
+Showing nodes accounting for 140.42s, 95.82% of 146.54s total
+Dropped 120 nodes (cum <= 0.73s)
+Showing top 35 nodes out of 83
+      flat  flat%   sum%        cum   cum%
+    44.16s 30.14% 30.14%     44.16s 30.14%  github.com/GetStream/gophonic/internal/q8gemm.smeMulF16W
+    34.05s 23.24% 53.37%     34.05s 23.24%  github.com/GetStream/gophonic/internal/q8gemm.smeRowF16
+    30.20s 20.61% 73.98%    105.75s 72.16%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).loop
+     5.91s  4.03% 78.01%      5.91s  4.03%  runtime.pthread_cond_wait
+     4.22s  2.88% 80.89%      4.22s  2.88%  runtime.kevent
+     2.95s  2.01% 82.91%      2.97s  2.03%  sync/atomic.(*Bool).Load (inline)
+     2.77s  1.89% 84.80%     12.41s  8.47%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).runEach
+     2.47s  1.69% 86.48%      2.47s  1.69%  runtime.asyncPreempt
+     2.41s  1.64% 88.13%      2.42s  1.65%  runtime.pthread_cond_signal
+     2.15s  1.47% 89.59%      2.15s  1.47%  github.com/GetStream/gophonic/internal/whispergemm.smeMulBlock
+     2.05s  1.40% 90.99%      2.05s  1.40%  github.com/GetStream/gophonic/internal/q8gemm.smeRows2F16
+     1.59s  1.09% 92.08%      2.53s  1.73%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).runN
+     1.54s  1.05% 93.13%      1.54s  1.05%  github.com/GetStream/gophonic/internal/q8gemm.packPairsNEON
+     1.48s  1.01% 94.14%      3.60s  2.46%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).execute
+     1.18s  0.81% 94.94%      8.20s  5.60%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).run
+     0.97s  0.66% 95.61%      0.97s  0.66%  runtime.usleep
+     0.06s 0.041% 95.65%      0.85s  0.58%  github.com/GetStream/gophonic/internal/qwen3lm.swigluInto
+     0.05s 0.034% 95.68%        74s 50.50%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).projectPanel
+     0.04s 0.027% 95.71%      5.49s  3.75%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).claim
+     0.03s  0.02% 95.73%      1.64s  1.12%  github.com/GetStream/gophonic/internal/q8gemm.(*Workspace).PackRange
+     0.02s 0.014% 95.74%     74.57s 50.89%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).projectClaims
+     0.02s 0.014% 95.76%      0.83s  0.57%  github.com/GetStream/gophonic/qwen3asr.(*encoderRows).ApplyRows
+     0.01s 0.0068% 95.76%     80.28s 54.78%  github.com/GetStream/gophonic/internal/q8gemm.MulPanels
+     0.01s 0.0068% 95.77%      1.55s  1.06%  github.com/GetStream/gophonic/internal/q8gemm.packRowPairs
+     0.01s 0.0068% 95.78%     12.74s  8.69%  github.com/GetStream/gophonic/internal/qwen3lm.(*Workspace).project
+     0.01s 0.0068% 95.78%     79.83s 54.48%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).ApplyRows
+     0.01s 0.0068% 95.79%      0.88s   0.6%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).pack
+     0.01s 0.0068% 95.80%     18.96s 12.94%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).transcribe
+     0.01s 0.0068% 95.80%      0.95s  0.65%  runtime.goschedImpl
+     0.01s 0.0068% 95.81%      0.95s  0.65%  runtime.newstack
+     0.01s 0.0068% 95.82%     12.66s  8.64%  runtime.park_m
+     0.01s 0.0068% 95.82%     11.56s  7.89%  runtime.schedule
+         0     0% 95.82%     44.16s 30.14%  github.com/GetStream/gophonic/internal/q8gemm.mulPanelsSME
+         0     0% 95.82%     33.87s 23.11%  github.com/GetStream/gophonic/internal/q8gemm.mulRowF16SME
+         0     0% 95.82%      2.24s  1.53%  github.com/GetStream/gophonic/internal/q8gemm.mulRowsF16SME

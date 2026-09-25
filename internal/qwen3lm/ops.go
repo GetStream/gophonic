@@ -40,6 +40,7 @@ type layerOp struct {
 	ws         *Workspace
 	kind       opKind
 	rows       int
+	exactRows  bool // logits batches preserve the single-row FP32 reduction
 	layer      *modelLayer
 	layerIndex int
 

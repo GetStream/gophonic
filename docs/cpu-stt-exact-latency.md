@@ -1,5 +1,9 @@
 # Exact CPU decoder row packing
 
+The subsequent [streaming improvements](cpu-streaming-exact.md) add exact
+multi-row vocabulary projection and bounded reuse of completed encoder
+windows. The measurements below document the earlier one-row packing work.
+
 A one-token Qwen projection used to fill a sixteen-row activation tile,
 zero its fifteen unused rows, then copy the live row into the contiguous
 buffer consumed by the SME row kernel. The new path packs directly into that

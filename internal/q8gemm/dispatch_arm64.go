@@ -66,3 +66,29 @@ func mulRowF16SME(dst []float32, ws *Workspace, w *Weights, p0, p1 int) bool {
 	}
 	return true
 }
+
+// mulRowsF16SME keeps one panel cache-local across all rows. Pairs share
+// weight loads inside ZA; an odd final row uses the unchanged row kernel.
+func mulRowsF16SME(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int) bool {
+	if !usingSME() {
+		return false
+	}
+	var retries int
+	for panel := p0; panel < p1; panel++ {
+		col := panel * OutputPanel
+		weight := &w.h[panel*w.pairs*2*OutputPanel]
+		row := 0
+		for ; row+1 < ws.rows; row += 2 {
+			retries += smeRows2F16(weight, w.k/16, 1, &ws.activation[row*w.k],
+				&dst[row*stride+col], w.n-col, 4*stride, &w.scales[col], &ws.rowInverse[row])
+		}
+		if row < ws.rows {
+			retries += smeRowF16(weight, w.k/16, 1, &ws.activation[row*w.k],
+				&dst[row*stride+col], w.n-col, &w.scales[col], &ws.rowInverse[row])
+		}
+	}
+	if retries != 0 {
+		smeRetries.Add(uint64(retries))
+	}
+	return true
+}
