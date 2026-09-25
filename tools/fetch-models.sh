@@ -7,7 +7,7 @@
 # models/ at the repository root, or $GOPHONIC_MODELS. Files already present
 # are kept, so the script is safe to rerun.
 #
-# Usage: tools/fetch-models.sh [asr] [asr-small] [whisper] [turn] [qwen3] [clm]
+# Usage: tools/fetch-models.sh [asr] [asr-small] [whisper] [turn] [qwen3] [tts] [clm]
 # (default: asr turn)
 #
 # It needs curl and Python 3; the converters' packages (NumPy, ONNX, PyTorch,
@@ -85,6 +85,14 @@ asr_small() {
 		hf Qwen/Qwen3-ASR-0.6B --revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0 --local-dir "$dir/Qwen3-ASR-0.6B"
 }
 
+# tts downloads Qwen3-TTS-12Hz-1.7B-CustomVoice, codec included, at the
+# revision the tests were validated against.
+tts() {
+	[ -e "$dir/Qwen3-TTS-12Hz-1.7B-CustomVoice" ] ||
+		hf Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --revision 0c0e3051f131929182e2c023b9537f8b1c68adfe \
+			--local-dir "$dir/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+}
+
 qwen3() {
 	[ -e "$dir/Qwen3-8B" ] || hf Qwen/Qwen3-8B --local-dir "$dir/Qwen3-8B"
 	[ -e "$dir/qwen3-8b-hello-reference.f32" ] ||
@@ -102,10 +110,10 @@ clm() {
 [ $# -gt 0 ] || set -- asr turn
 for target in "$@"; do
 	case $target in
-	asr | whisper | turn | qwen3 | clm) "$target" ;;
+	asr | whisper | turn | qwen3 | tts | clm) "$target" ;;
 	asr-small) asr_small ;;
 	*)
-		echo "fetch-models.sh: unknown target $target (want asr, asr-small, whisper, turn, qwen3, or clm)" >&2
+		echo "fetch-models.sh: unknown target $target (want asr, asr-small, whisper, turn, qwen3, tts, or clm)" >&2
 		exit 2
 		;;
 	esac

@@ -148,6 +148,12 @@ type LoadOptions struct {
 	// Head names the language-model head tensor, such as "lm_head.weight",
 	// for Logits. Empty loads no head.
 	Head string
+	// Embed names the token embedding table; empty means Prefix +
+	// "embed_tokens.weight".
+	Embed string
+	// NoEmbed loads no embedding table: every input position is a row of
+	// Embeds, as for a model that only ever consumes precomputed inputs.
+	NoEmbed bool
 }
 
 // headChunkRows overrides the head's row-chunk size in tests.
@@ -197,11 +203,17 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 	h, kv, inter := cfg.hidden, cfg.kvDim, cfg.intermediate
 	qdim := cfg.heads * cfg.headDim
 	// The embedding table is used as stored: it is mapped, not read.
-	embed, unmap, err := st.MapBF16(prefix+"embed_tokens.weight", cfg.vocab, h)
-	if err != nil {
-		return nil, err
+	if !opts.NoEmbed {
+		name := opts.Embed
+		if name == "" {
+			name = prefix + "embed_tokens.weight"
+		}
+		embed, unmap, err := st.MapBF16(name, cfg.vocab, h)
+		if err != nil {
+			return nil, err
+		}
+		m.embed, m.unmap = embed, append(m.unmap, unmap)
 	}
-	m.embed, m.unmap = embed, append(m.unmap, unmap)
 	if m.finalNorm, err = st.Float32(prefix+"norm.weight", h); err != nil {
 		return nil, err
 	}

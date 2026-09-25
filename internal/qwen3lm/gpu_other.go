@@ -13,7 +13,7 @@ import (
 
 type gpuModel struct{}
 
-type gpuWorkspace struct{}
+type gpuWorkspace struct{ tail []float32 }
 
 type gpuPrefix struct{}
 
@@ -53,3 +53,7 @@ func (g *gpuModel) maxPositions() int { return 0 }
 
 // GPUAvailable reports whether a Metal GPU is present.
 func GPUAvailable() bool { return false }
+
+func (w *gpuWorkspace) logitsRowsInto(*Weights, []float32, []float32, int) error {
+	return errors.New("qwen3: GPU backend unavailable")
+}

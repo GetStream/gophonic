@@ -20,10 +20,11 @@ import (
 )
 
 // Shape is a small Qwen3 geometry that still exercises grouped-query
-// attention, partial output panels, and odd tile counts.
+// attention, partial output panels, odd tile counts, and attention wider
+// than the hidden state (as in Qwen3-0.6B and Qwen3-4B).
 var Shape = struct {
 	Hidden, Layers, Heads, KVHeads, HeadDim, Inter, Vocab, MaxPos int
-}{Hidden: 96, Layers: 2, Heads: 4, KVHeads: 2, HeadDim: 24, Inter: 136, Vocab: 23, MaxPos: 320}
+}{Hidden: 96, Layers: 2, Heads: 8, KVHeads: 2, HeadDim: 24, Inter: 136, Vocab: 23, MaxPos: 320}
 
 // Checkpoint is a random checkpoint written by Write.
 type Checkpoint struct {

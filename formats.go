@@ -4,12 +4,15 @@
 package gophonic
 
 import (
+	"errors"
 	"io"
 	"os"
 	"reflect"
 
+	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/qwen3"
 	"github.com/GetStream/gophonic/qwen3asr"
+	"github.com/GetStream/gophonic/qwen3tts"
 	"github.com/GetStream/gophonic/smartturn"
 	"github.com/GetStream/gophonic/speech"
 	"github.com/GetStream/gophonic/tinymel"
@@ -23,7 +26,8 @@ func builtinFormats() []Format {
 	turns := []reflect.Type{reflect.TypeFor[speech.TurnDetector](), reflect.TypeFor[speech.AudioClassifier]()}
 	return []Format{
 		{Name: "qwen3-asr", Match: qwen3asr.IsModelDir, Open: openQwen3ASR, Provides: transcriber},
-		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3, Provides: []reflect.Type{reflect.TypeFor[speech.ZeroShot]()}},
+		{Name: "qwen3-tts", Match: qwen3tts.IsModelDir, Open: openQwen3TTS, Provides: []reflect.Type{reflect.TypeFor[speech.Synthesizer]()}},
+		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3, Provides: []reflect.Type{reflect.TypeFor[chat.Generator](), reflect.TypeFor[speech.ZeroShot]()}},
 		{Name: "whisper", Match: signature(whisper.BundleMagic), Open: openWhisper, Provides: transcriber},
 		{Name: "smart-turn", Match: signature(smartturn.BundleMagic), Open: openSmartTurn, Provides: turns},
 		{Name: "tinymel", Match: signature(tinymel.BundleMagic), Open: openTinyMel, Provides: turns},
@@ -41,16 +45,33 @@ func openQwen3ASR(path string, opts Options) (*Model, error) {
 	}), nil
 }
 
-// A Qwen3 language model answers questions about text: it provides
-// speech.ZeroShot, whose classifiers are prepared multiple-choice questions.
-func openQwen3(path string, opts Options) (*Model, error) {
-	m, err := qwen3.Open(path, qwen3.Options{Threads: opts.Threads})
+func openQwen3TTS(path string, opts Options) (*Model, error) {
+	m, err := qwen3tts.Load(path, qwen3tts.Options{Threads: opts.Threads})
 	if err != nil {
 		return nil, err
 	}
-	return Provide(NewModel("qwen3", m.Close), func() (speech.ZeroShot, error) {
-		return zeroShot{m}, nil
+	release := func() error { m.Release(); return nil }
+	return Provide(NewModel("qwen3-tts", release), func() (speech.Synthesizer, error) {
+		return qwen3tts.NewSynthesizer(m)
 	}), nil
+}
+
+// A Qwen3 language model generates text (chat.Generator) and answers
+// questions about text (speech.ZeroShot, whose classifiers are prepared
+// multiple-choice questions), both from one loaded copy of its weights.
+func openQwen3(path string, opts Options) (*Model, error) {
+	g, err := qwen3.OpenChat(path, qwen3.Options{Threads: opts.Threads})
+	if err != nil {
+		return nil, err
+	}
+	m, err := g.Questions(qwen3.Options{Threads: opts.Threads})
+	if err != nil {
+		g.Close()
+		return nil, err
+	}
+	model := NewModel("qwen3", func() error { return errors.Join(m.Close(), g.Close()) })
+	Provide(model, func() (chat.Generator, error) { return generator{g}, nil })
+	return Provide(model, func() (speech.ZeroShot, error) { return zeroShot{m}, nil }), nil
 }
 
 // zeroShot is one lane of a shared Qwen3 model, which serializes its calls;
@@ -62,6 +83,14 @@ func (z zeroShot) Classifier(question string, labels []string) (speech.TextClass
 }
 
 func (zeroShot) Close() error { return nil }
+
+// generator is one lane of a shared Qwen3 generator; closing the lane
+// leaves it open.
+type generator struct{ g *qwen3.Chat }
+
+func (g generator) NewSession(system string) (chat.Session, error) { return g.g.NewSession(system) }
+
+func (generator) Close() error { return nil }
 
 func openWhisper(path string, opts Options) (*Model, error) {
 	m, err := whisper.Load(path)

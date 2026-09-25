@@ -572,6 +572,10 @@ MM_KERNELS_W(_w, Q8)
 MM_KERNELS_W(_q8_w, Q8B)
 MM_KERNELS_W(_q4_w, Q4)
 
+// The language-model head over several rows, as when checking a draft.
+MM_KERNEL_T(mm_head_w, PRO_PLAIN, EPI_STORE, Q8B, 32, 128, true)
+MM_KERNEL(mm_head_16, PRO_PLAIN, EPI_STORE, Q8B, 16)
+
 MM_KERNELS(_16, Q8, 16)
 MM_KERNELS(_q8_16, Q8B, 16)
 MM_KERNELS(_q4_16, Q4, 16)
