@@ -58,6 +58,12 @@ type Options struct {
 	Segments bool
 	// Words requests word timing in Transcript.Words. It implies Segments.
 	Words bool
+	// Partial, when not nil, is an earlier transcript of the beginning of
+	// the same audio, as when speech is transcribed while it is spoken. A
+	// transcriber that can checks it against the audio in one pass and
+	// decodes only where it differs or ends, instead of starting over; the
+	// transcript is the same either way. Others ignore it.
+	Partial *Transcript
 }
 
 // Transcript is the result of one transcription. Offsets index Text.

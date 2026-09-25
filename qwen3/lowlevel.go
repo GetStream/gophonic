@@ -12,12 +12,16 @@ type (
 	Weights = qwen3lm.Weights
 	// Evaluator computes last-token hidden states over Weights.
 	Evaluator = qwen3lm.Evaluator
+	// Embeds replaces the input embeddings of a placeholder token.
+	Embeds = qwen3lm.Embeds
 	// Workspace owns the activations of one concurrent evaluation.
 	Workspace = qwen3lm.Workspace
 	// PrefixKV stores a token sequence's keys and values for extension.
 	PrefixKV = qwen3lm.PrefixKV
 	// Tokenizer is the Qwen3 byte-level BPE tokenizer.
 	Tokenizer = qwen3lm.Tokenizer
+	// LoadOptions selects the format and head of LoadWeightsOptions.
+	LoadOptions = qwen3lm.LoadOptions
 	// TokenizerWorkspace is the reusable scratch of Tokenizer.EncodeInto.
 	TokenizerWorkspace = qwen3lm.TokenizerWorkspace
 )
@@ -39,6 +43,12 @@ var (
 // LoadWeights reads an official Qwen3 safetensors snapshot directory; see
 // the weight format constants.
 func LoadWeights(dir, format string) (*Weights, error) { return qwen3lm.LoadWeights(dir, format) }
+
+// LoadWeightsOptions reads a Qwen3 decoder with options, such as a head
+// for Evaluator.LogitsInto.
+func LoadWeightsOptions(dir string, opts LoadOptions) (*Weights, error) {
+	return qwen3lm.Load(dir, opts)
+}
 
 // NewEvaluator returns an evaluator over m.
 func NewEvaluator(m *Weights) (*Evaluator, error) { return qwen3lm.NewEvaluator(m) }

@@ -1,0 +1,529 @@
+// Copyright 2026 The gophonic authors
+// SPDX-License-Identifier: BSD-2-Clause
+
+// Command gopher joins a Pronto call (Stream's video app) as a voice
+// agent you can just talk to. It listens to everyone, answers out loud,
+// lets you interrupt it, and knows when you have not finished, with every
+// model running in this process: Smart Turn and Qwen3-ASR to listen,
+// Qwen3-8B to think, and Qwen3-TTS to speak.
+//
+//	go run .   # then open the printed link and talk
+//
+// The agent is a speech.Duplex: the call's audio goes in and the agent's
+// speech comes out, 20 ms at a time, on one clock. There are no turns in
+// this program; the duplex decides when to speak.
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"time"
+
+	rtc "github.com/GetStream/getstream-go-webrtc"
+	webaudio "github.com/GetStream/getstream-go-webrtc/audio"
+	"github.com/GetStream/getstream-go-webrtc/audio/opus"
+	audiortc "github.com/GetStream/getstream-go-webrtc/audio/rtc"
+	"github.com/GetStream/getstream-go-webrtc/logger"
+	"github.com/GetStream/getstream-go-webrtc/track"
+	getstream "github.com/GetStream/getstream-go/v5"
+	sfu_events "github.com/GetStream/protocol/protobuf/video/sfu/event"
+	sfu_models "github.com/GetStream/protocol/protobuf/video/sfu/models"
+	"github.com/GetStream/protocol/protobuf/video/sfu/signal_rpc"
+	"github.com/sirupsen/logrus"
+
+	"github.com/GetStream/gophonic"
+	"github.com/GetStream/gophonic/chat"
+	"github.com/GetStream/gophonic/duplex"
+	"github.com/GetStream/gophonic/speech"
+	"github.com/thesyncim/vibejson"
+)
+
+const self = "gopher" // our user ID; we never subscribe to ourselves
+
+var verbose *bool
+
+const prompt = `You are Gopher, a friendly voice assistant taking part in a live video call.
+Everything you write is spoken aloud, so answer in one to three short, natural sentences.
+Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
+Today is %s. Your knowledge may be older than that: when someone tells you about something
+newer, believe them rather than insisting on what you knew.
+In a meeting, what people say reaches you as "name said: ..." and you answer only what is meant
+for you. Messages marked "wrote in the chat" are the call's text chat, typed rather than spoken.
+Use both when asked about them or when summarizing the meeting, but never read a chat message
+out loud or answer it unless someone asks you to.`
+
+func main() {
+	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
+	asrPath := flag.String("asr", "../../models/Qwen3-ASR-1.7B", "speech recognition model")
+	turnPath := flag.String("turn", "../../models/smart-turn-v3.2.gophonic", "turn detection model")
+	llmPath := flag.String("llm", "../../models/Qwen3-8B", "language model")
+	ttsPath := flag.String("tts", "../../models/Qwen3-TTS-12Hz-1.7B-CustomVoice", "speech synthesis model")
+	language := flag.String("language", "", "language spoken in the call (ISO 639-1); empty detects it, and Gopher answers in kind")
+	voice := flag.String("voice", "ryan", "voice: ryan, aiden, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
+	pronto := flag.String("pronto", "https://pronto-staging.getstream.io", "Pronto app whose call to join")
+	verbose = flag.Bool("v", false, "log the input level every second")
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	// Load the four models at once; each maps its cached weights.
+	start := time.Now()
+	models := make([]*gophonic.Model, 4)
+	var wg sync.WaitGroup
+	for i, path := range []string{*asrPath, *turnPath, *llmPath, *ttsPath} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m, err := gophonic.Open(path, gophonic.Options{})
+			check(err)
+			models[i] = m
+		}()
+	}
+	wg.Wait()
+	log.Printf("models loaded in %v", time.Since(start).Round(time.Millisecond))
+
+	apiKey, token, err := prontoToken(*pronto, self)
+	check(err)
+	callType, callID, ok := strings.Cut(*callFlag, ":")
+	if !ok {
+		callType, callID = "default", "gopher-"+randomHex(3)
+	}
+	// The call's chat opens once Gopher has joined, which creates its user.
+	var room *chatChannel
+	humans := &roster{}
+	mix := newMixer()
+	// Closed captions are a server-side API: with the app's secret, what is
+	// said appears as the call's captions; without it, in the chat.
+	captions := newCaptions(apiKey, callType, callID)
+	agent, err := duplex.New(duplex.Config{
+		Prompt: fmt.Sprintf(prompt, time.Now().Format("Monday, January 2, 2006")),
+		Voice:  speech.SpeakOptions{Voice: *voice, Language: *language},
+		Listen: speech.Options{Language: *language},
+		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
+		// Alone with one person Gopher answers everything; in a meeting,
+		// only what is addressed to it, and it keeps track of who said
+		// what, for when it is asked about the meeting.
+		Heard: func(text string) (string, bool) {
+			if humans.count() <= 1 {
+				return text, true
+			}
+			return mix.loudest() + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
+		},
+		OnText: func(role chat.Role, text string, final bool) {
+			if role == chat.Assistant {
+				// Captions follow the voice sentence by sentence.
+				captions.assistant(text, final)
+			} else {
+				captions.show(mix.loudest(), text)
+			}
+			if !final {
+				return
+			}
+			who := mix.loudest() + ":"
+			if role == chat.Assistant {
+				who = "Gopher:"
+			}
+			fmt.Printf("%s %s\n", who, text)
+			if room != nil && captions.call == nil {
+				go room.send(who + " " + text)
+			}
+		},
+		OnError: func(err error) { log.Printf("agent: %v", err) },
+		OnStage: func(stage string, elapsed time.Duration) {
+			if *verbose {
+				log.Printf("reply %s after %v", stage, elapsed.Round(time.Millisecond))
+			}
+		},
+	}, models...)
+	check(err)
+	defer agent.Close()
+
+	sdkLog := logrus.New()
+	sdkLog.SetLevel(logrus.ErrorLevel)
+	if *verbose {
+		sdkLog.SetLevel(logrus.WarnLevel)
+	}
+	client, err := rtc.NewClient(apiKey, rtc.User{ID: self, Name: "Gopher 🐹"}, rtc.StaticToken(token),
+		rtc.WithLogger(logger.FromLogrus(sdkLog)))
+	check(err)
+	defer client.Close()
+	call := client.Call(callType, callID)
+	join, err := call.Join(ctx, rtc.WithOnTrack(rtc.SubscriberFunc(func(t rtc.OnTrackReceived) {
+		if t.TrackType == sfu_models.TrackType_TRACK_TYPE_AUDIO {
+			go hear(ctx, t, mix, humans)
+		}
+	})))
+	check(err)
+	defer call.Leave("done")
+	room = &chatChannel{apiKey: apiKey, token: token, path: "/channels/videocall/" + url.PathEscape(callID)}
+	if err := room.open(); err != nil {
+		log.Printf("chat is off: %v", err)
+		room = nil
+	}
+	if room != nil {
+		// The call's chat is silent context: what people type joins the
+		// conversation without being spoken or answered, so a later
+		// question or summary can draw on it. Gopher's own captions and
+		// replies land in the same channel, so its own messages are
+		// skipped; they are already in the conversation.
+		if err := room.watch(ctx, func(userID, name, text string) {
+			if userID == self {
+				return
+			}
+			if name == "" {
+				name = userID
+			}
+			if err := agent.Add(chat.User, name+" wrote in the chat: "+text); err != nil {
+				log.Printf("chat: %v", err)
+			}
+		}); err != nil {
+			log.Printf("chat history and live updates are off: %v", err)
+		}
+	}
+
+	// Gopher's voice: the writer encodes and paces what the agent says.
+	writer, err := audiortc.NewTrackWriter(audiortc.WriterConfig{})
+	check(err)
+	info := &sfu_models.TrackInfo{TrackId: "gopher-voice-" + randomHex(4), TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO}
+	// Opus is always negotiated as two channels (RFC 7587); the stream
+	// itself is mono. Advertising one channel makes the SFU reject it.
+	codec := writer.Codec()
+	codec.Channels = 2
+	voiceTrack, err := track.NewAudioTrack(info, writer, codec)
+	check(err)
+	_, err = call.AddTrack(info, voiceTrack)
+	check(err)
+	// Tell the SFU the microphone is live, or clients treat Gopher as muted.
+	if _, err := call.Client().UpdateMuteStates(ctx, &signal_rpc.UpdateMuteStatesRequest{SessionId: call.SessionID.Load(),
+		MuteStates: []*signal_rpc.TrackMuteState{{TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO, Muted: false}}}); err != nil {
+		log.Printf("unmute: %v", err)
+	}
+
+	// Hear every microphone: those already live, then each that starts,
+	// stops, or changes. A browser re-publishes its microphone on mute,
+	// device changes, and rejoins; each time the subscription is sent
+	// anew (without the session, then with it) so the SFU renegotiates
+	// the new stream instead of forwarding packets Gopher cannot route.
+	mics := map[string]*signal_rpc.TrackSubscriptionDetails{}
+	var micMu sync.Mutex
+	resubscribe := func(changed string) {
+		micMu.Lock()
+		defer micMu.Unlock()
+		list := func(skip string) []*signal_rpc.TrackSubscriptionDetails {
+			var out []*signal_rpc.TrackSubscriptionDetails
+			for session, d := range mics {
+				if session != skip {
+					out = append(out, d)
+				}
+			}
+			return out
+		}
+		if changed != "" {
+			if err := call.SubscribeToTracks(ctx, list(changed)...); err != nil {
+				log.Printf("subscribe: %v", err)
+			}
+		}
+		if err := call.SubscribeToTracks(ctx, list("")...); err != nil {
+			log.Printf("subscribe: %v", err)
+		}
+	}
+	for _, p := range join.GetCallState().GetParticipants() {
+		for _, t := range p.GetPublishedTracks() {
+			if t == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
+				mics[p.GetSessionId()] = &signal_rpc.TrackSubscriptionDetails{UserId: p.GetUserId(), SessionId: p.GetSessionId(),
+					TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO}
+			}
+		}
+	}
+	resubscribe("")
+	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_TrackPublished) {
+		if p := e.TrackPublished; p.GetType() == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
+			micMu.Lock()
+			mics[p.GetSessionId()] = &signal_rpc.TrackSubscriptionDetails{UserId: p.GetUserId(), SessionId: p.GetSessionId(),
+				TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO}
+			micMu.Unlock()
+			log.Printf("%s published a microphone", p.GetUserId())
+			resubscribe(p.GetSessionId())
+		}
+	})()
+	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_TrackUnpublished) {
+		if p := e.TrackUnpublished; p.GetType() == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
+			micMu.Lock()
+			delete(mics, p.GetSessionId())
+			micMu.Unlock()
+			log.Printf("%s unpublished a microphone", p.GetUserId())
+			resubscribe("")
+		}
+	})()
+
+	fmt.Printf("🐹 Gopher is in the call. Join and say hi: %s/join/%s?type=%s\n", *pronto, url.PathEscape(callID), callType)
+	converse(ctx, agent, mix, writer)
+}
+
+// converse runs the agent on the call's clock: every 20 ms the room's audio
+// goes in and the agent's speech comes out.
+func converse(ctx context.Context, agent speech.Duplex, mix *mixer, writer *audiortc.TrackWriter) {
+	inSize, outSize := agent.Frame()
+	_, outRate := agent.Rates()
+	in, out := make([]float32, inSize), make([]float32, outSize)
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	was := speech.Listening
+	var peak float32 // loudest input of the last second, for the log
+	for frames := 1; ; frames++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		mix.read(in)
+		for _, v := range in {
+			peak = max(peak, v, -v)
+		}
+		state, err := agent.Step(ctx, in, out)
+		if err != nil {
+			return
+		}
+		if *verbose && frames%50 == 0 {
+			if peak > 0.001 {
+				log.Printf("input peak %.1f dBFS, agent %v", 20*math.Log10(float64(peak)), state)
+			}
+			peak = 0
+		}
+		if state != was {
+			log.Printf("agent %v", state)
+		}
+		switch {
+		case state == speech.Speaking:
+			writer.Write(webaudio.FromFloat32(out, outRate, 1))
+		case was == speech.Speaking:
+			// Cut off or finished: drop what the encoder still holds.
+			writer.Clear()
+		}
+		was = state
+	}
+}
+
+// hear decodes one participant's microphone into the mixer.
+func hear(ctx context.Context, t rtc.OnTrackReceived, mix *mixer, humans *roster) {
+	id := string(t.ParticipantID.UserID)
+	humans.add(id)
+	defer humans.remove(id)
+	// A person can publish more than one microphone track (a second tab,
+	// a re-publish): each gets its own queue so their audio never
+	// interleaves.
+	key := id + "/" + t.Track.ID()
+	log.Printf("hearing %s (track %s)", id, t.Track.ID())
+	defer mix.drop(key)
+	reader, err := audiortc.NewTrackReader(t.Track, audiortc.ReaderConfig{Opus: opus.Config{SampleRate: speech.SampleRate}})
+	if err != nil {
+		log.Printf("hear %s: %v", id, err)
+		return
+	}
+	defer reader.Close()
+	for frame, err := range reader.Frames() {
+		if err != nil || ctx.Err() != nil {
+			return
+		}
+		mix.write(key, frame.Float32())
+	}
+}
+
+// mixer sums the participants' audio on the agent's clock. Each track has
+// a queue that doubles as a jitter buffer: a read takes a whole frame from
+// each queue that has one and adds them. A queue short of a frame, because
+// its packet is late, sits this frame out rather than splicing silence into
+// speech, and one that falls behind the clock is trimmed so latency stays
+// low.
+type mixer struct {
+	mu     sync.Mutex
+	queues map[string][]float32
+	energy map[string]float32 // recent loudness per track, decaying
+}
+
+func newMixer() *mixer { return &mixer{queues: map[string][]float32{}, energy: map[string]float32{}} }
+
+const maxQueue = speech.SampleRate / 5 // 200 ms
+
+func (m *mixer) write(id string, pcm []float32) {
+	m.mu.Lock()
+	q := append(m.queues[id], pcm...)
+	if over := len(q) - maxQueue; over > 0 {
+		q = q[over:]
+	}
+	m.queues[id] = q
+	m.mu.Unlock()
+}
+
+func (m *mixer) drop(key string) {
+	m.mu.Lock()
+	delete(m.queues, key)
+	delete(m.energy, key)
+	m.mu.Unlock()
+}
+
+func (m *mixer) read(dst []float32) {
+	clear(dst)
+	m.mu.Lock()
+	for key, q := range m.queues {
+		if len(q) < len(dst) {
+			continue
+		}
+		var e float32
+		for i, v := range q[:len(dst)] {
+			dst[i] += v
+			e += v * v
+		}
+		m.energy[key] = 0.95*m.energy[key] + e
+		m.queues[key] = q[:copy(q, q[len(dst):])]
+	}
+	m.mu.Unlock()
+}
+
+// loudest returns the user whose audio was loudest recently, the likely
+// speaker of what was just transcribed.
+func (m *mixer) loudest() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	best, who := float32(0), self
+	for key, e := range m.energy {
+		if e > best {
+			best, who = e, key
+		}
+	}
+	id, _, _ := strings.Cut(who, "/")
+	return id
+}
+
+// captions sends what is said as the call's closed captions.
+type captions struct {
+	call *getstream.Call // nil without the app's secret
+	send chan getstream.SendClosedCaptionRequest
+	sent int // bytes of the current reply already captioned
+}
+
+func newCaptions(apiKey, callType, callID string) *captions {
+	c := &captions{}
+	secret := os.Getenv("STREAM_API_SECRET")
+	if secret == "" {
+		log.Printf("closed captions are off: set STREAM_API_SECRET to show them")
+		return c
+	}
+	client, err := getstream.NewClient(apiKey, secret)
+	if err != nil {
+		log.Printf("closed captions are off: %v", err)
+		return c
+	}
+	c.call = client.Video().Call(callType, callID)
+	c.send = make(chan getstream.SendClosedCaptionRequest, 64)
+	go func() { // one request at a time, in order
+		for req := range c.send {
+			if _, err := c.call.SendClosedCaption(context.Background(), &req); err != nil {
+				log.Printf("caption: %v", err)
+			}
+		}
+	}()
+	log.Printf("closed captions are on")
+	return c
+}
+
+func (c *captions) show(speaker, text string) {
+	if c.call == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	select {
+	case c.send <- getstream.SendClosedCaptionRequest{SpeakerID: speaker, Text: strings.TrimSpace(text)}:
+	default: // captions are falling behind; drop rather than delay the call
+	}
+}
+
+// assistant captions each finished sentence of the reply growing in text.
+func (c *captions) assistant(text string, final bool) {
+	if c.sent > len(text) {
+		c.sent = 0 // a new reply
+	}
+	rest := text[c.sent:]
+	end := strings.LastIndexAny(rest, ".!?…")
+	if final {
+		end = len(rest) - 1
+	}
+	if end >= 0 {
+		c.show(self, rest[:end+1])
+		c.sent += end + 1
+	}
+	if final {
+		c.sent = 0
+	}
+}
+
+// roster counts the people in the call.
+type roster struct {
+	mu  sync.Mutex
+	ids map[string]int
+}
+
+func (r *roster) add(id string) {
+	r.mu.Lock()
+	if r.ids == nil {
+		r.ids = map[string]int{}
+	}
+	r.ids[id]++
+	r.mu.Unlock()
+}
+
+func (r *roster) remove(id string) {
+	r.mu.Lock()
+	if r.ids[id]--; r.ids[id] <= 0 {
+		delete(r.ids, id)
+	}
+	r.mu.Unlock()
+}
+
+func (r *roster) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ids)
+}
+
+// prontoToken asks a Pronto deployment for a user token for its app.
+func prontoToken(pronto, user string) (apiKey, token string, err error) {
+	resp, err := http.Get(pronto + "/api/auth/create-token?environment=pronto&user_id=" + url.QueryEscape(user))
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	type credentials struct{ APIKey, Token string }
+	var v credentials
+	dec, err := vibejson.CompileDecoder[credentials](vibejson.DecoderOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	r := vibejson.NewReader(resp.Body)
+	if !vibejson.DecodeNext(r, dec, &v) || v.Token == "" {
+		return "", "", fmt.Errorf("pronto token: %s: %v", resp.Status, r.Err())
+	}
+	return v.APIKey, v.Token, nil
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func check(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
