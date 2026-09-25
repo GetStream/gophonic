@@ -54,18 +54,6 @@ const self = "gopher" // our user ID; we never subscribe to ourselves
 
 var verbose *bool
 
-const prompt = `You are Gopher, a friendly voice assistant taking part in a live video call.
-Everything you write is spoken aloud, so answer in one to three short, natural sentences.
-Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
-Today is %s, in the %s time zone. Your knowledge may be older than that: when someone tells you about something
-newer, believe them rather than insisting on what you knew.
-In a meeting, what people say reaches you as "name said: ..." and you answer only what is meant
-for you. Notes about the call reach you as system messages: who joins or leaves, and what people
-type in the call's chat. Use them when asked, to repeat, spell, or summarize what someone wrote,
-but never read a chat message out loud or answer it unless someone asks you to.
-Use your tools rather than guessing: for the time, call now; for facts you are unsure of, or that
-may have changed, call search and answer from what it finds.`
-
 func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
 	asrPath := flag.String("asr", "../../models/Qwen3-ASR-1.7B", "speech recognition model")
@@ -116,66 +104,46 @@ func main() {
 	// Closed captions are a server-side API: with the app's secret, what is
 	// said appears as the call's captions; without it, in the chat.
 	captions := newCaptions(apiKey, callType, callID)
-	spoken := strings.FieldsFunc(*languages, func(r rune) bool { return r == ',' || r == ' ' })
-	system := fmt.Sprintf(prompt, time.Now().Format("Monday, January 2, 2006"), localZone())
-	if len(spoken) > 0 {
-		var names []string
-		for _, code := range spoken {
-			if name, ok := speech.LanguageName(code); ok {
-				names = append(names, name)
-			}
+	cfg := config(*voice, *language, strings.FieldsFunc(*languages, func(r rune) bool { return r == ',' || r == ' ' }))
+	// Alone with one person Gopher answers everything; in a meeting, only
+	// what is addressed to it by name, and it keeps track of who said
+	// what, for when it is asked about the meeting.
+	cfg.Heard = func(text string) (string, bool) {
+		if humans.count() <= 1 {
+			return text, true
 		}
-		system += "\nPeople in this call speak " + strings.Join(names, " and ") +
-			". Answer in the one you are spoken to in, and never in another."
+		return present.name(mix.loudest()) + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
 	}
-	agent, err := duplex.New(duplex.Config{
-		Prompt: system,
-		Voice:  speech.SpeakOptions{Voice: *voice, Language: *language},
-		Listen: speech.Options{Language: *language, Languages: spoken},
-		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
-		// Alone with one person Gopher answers everything; in a meeting,
-		// only what is addressed to it, and it keeps track of who said
-		// what, for when it is asked about the meeting.
-		// Alone with one person Gopher answers everything; in a meeting,
-		// only what is addressed to it by name, and it keeps track of who
-		// said what, for when it is asked about the meeting.
-		Heard: func(text string) (string, bool) {
-			if humans.count() <= 1 {
-				return text, true
+	// Captions follow the voice: closed captions sentence by sentence with
+	// the app's secret; otherwise the call's chat, where each answer is one
+	// message that grows as it is spoken.
+	cfg.OnText = func(role chat.Role, text string, final bool) {
+		if role == chat.Assistant {
+			captions.assistant(text, final)
+			if l := live.Load(); l != nil {
+				l.answer("Gopher: "+text, final)
 			}
-			return present.name(mix.loudest()) + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
-		},
-		Tools: tools(),
-		// Captions follow the voice: closed captions sentence by sentence
-		// with the app's secret; otherwise the call's chat, where each
-		// answer is one message that grows as it is spoken.
-		OnText: func(role chat.Role, text string, final bool) {
-			if role == chat.Assistant {
-				captions.assistant(text, final)
-				if l := live.Load(); l != nil {
-					l.answer("Gopher: "+text, final)
-				}
-			} else {
-				captions.show(present.name(mix.loudest()), text)
-			}
-			if !final {
-				return
-			}
-			who := present.name(mix.loudest()) + ":"
-			if role == chat.Assistant {
-				who = "Gopher:"
-			} else if l := live.Load(); l != nil {
-				l.say(who + " " + text)
-			}
-			fmt.Printf("%s %s\n", who, text)
-		},
-		OnError: func(err error) { log.Printf("agent: %v", err) },
-		OnStage: func(stage string, elapsed time.Duration) {
-			if *verbose {
-				log.Printf("reply %s after %v", stage, elapsed.Round(time.Millisecond))
-			}
-		},
-	}, models...)
+		} else {
+			captions.show(present.name(mix.loudest()), text)
+		}
+		if !final {
+			return
+		}
+		who := present.name(mix.loudest()) + ":"
+		if role == chat.Assistant {
+			who = "Gopher:"
+		} else if l := live.Load(); l != nil {
+			l.say(who + " " + text)
+		}
+		fmt.Printf("%s %s\n", who, text)
+	}
+	cfg.OnError = func(err error) { log.Printf("agent: %v", err) }
+	cfg.OnStage = func(stage string, elapsed time.Duration) {
+		if *verbose {
+			log.Printf("reply %s after %v", stage, elapsed.Round(time.Millisecond))
+		}
+	}
+	agent, err := duplex.New(cfg, models...)
 	check(err)
 	defer agent.Close()
 
