@@ -51,14 +51,14 @@ func (e *Model) NewContext(maxTokens int) (*Context, error) {
 	if e == nil || e.letters == nil {
 		return nil, errors.New("qwen3: this model was opened without the language-model head")
 	}
-	if maxTokens < 1 || maxTokens > e.model.cfg.maxPositions {
-		return nil, fmt.Errorf("qwen3: context size %d outside [1,%d]", maxTokens, e.model.cfg.maxPositions)
+	if maxTokens < 1 || maxTokens > e.model.Config().MaxPositions {
+		return nil, fmt.Errorf("qwen3: context size %d outside [1,%d]", maxTokens, e.model.Config().MaxPositions)
 	}
 	kv, err := e.eval.NewPrefixKV(maxTokens)
 	if err != nil {
 		return nil, err
 	}
-	c := &Context{m: e, kv: kv, ids: make([]int, 0, 4*maxTokens), hidden: [][]float32{make([]float32, e.model.cfg.hidden)}}
+	c := &Context{m: e, kv: kv, ids: make([]int, 0, 4*maxTokens), hidden: [][]float32{make([]float32, e.model.Config().Hidden)}}
 	// The header ends with a special token and a newline, a pre-tokenizer
 	// boundary. The separator is tokenized together with the text, because
 	// the pre-tokenizer joins trailing newlines to preceding punctuation.
@@ -110,11 +110,11 @@ func (c *Context) Set(ctx context.Context, text string) error {
 	}
 	ids = ids[:len(ids)+len(body)]
 	c.ids = ids
-	if len(ids) > c.kv.capacity {
-		return fmt.Errorf("qwen3: context of %d tokens exceeds its limit %d", len(ids), c.kv.capacity)
+	if len(ids) > c.kv.Capacity() {
+		return fmt.Errorf("qwen3: context of %d tokens exceeds its limit %d", len(ids), c.kv.Capacity())
 	}
 	keep := min(c.kv.CommonPrefix(ids), len(ids)-1)
-	if keep == len(ids)-1 && len(c.kv.tokens) == len(ids) {
+	if keep == len(ids)-1 && len(c.kv.Tokens()) == len(ids) {
 		return nil // unchanged
 	}
 	e := c.m
@@ -137,7 +137,7 @@ func (c *Context) Ask(ctx context.Context, questions []*ContextQuestion, probs [
 	if c == nil {
 		return errors.New("qwen3: nil context")
 	}
-	if len(c.kv.tokens) == 0 {
+	if len(c.kv.Tokens()) == 0 {
 		return errors.New("qwen3: context is empty; call Set first")
 	}
 	if len(probs) != len(questions) {
@@ -147,17 +147,17 @@ func (c *Context) Ask(ctx context.Context, questions []*ContextQuestion, probs [
 		if len(probs[i]) != q.options {
 			return fmt.Errorf("qwen3: row %d has %d probabilities for %d options", i, len(probs[i]), q.options)
 		}
-		if len(c.kv.tokens)+len(q.tail) > maxTokens {
+		if len(c.kv.Tokens())+len(q.tail) > maxTokens {
 			return fmt.Errorf("qwen3: question %d does not fit after the context", i)
 		}
 	}
 	e := c.m
 	if len(c.seqs) < len(questions) {
 		c.seqs = make([][]int, len(questions))
-		hidden := make([]float32, len(questions)*e.model.cfg.hidden)
+		hidden := make([]float32, len(questions)*e.model.Config().Hidden)
 		c.hidden = make([][]float32, len(questions))
 		for i := range c.hidden {
-			c.hidden[i] = hidden[i*e.model.cfg.hidden : (i+1)*e.model.cfg.hidden]
+			c.hidden[i] = hidden[i*e.model.Config().Hidden : (i+1)*e.model.Config().Hidden]
 		}
 	}
 	for i, q := range questions {

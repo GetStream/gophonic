@@ -5,9 +5,10 @@ package whisper
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 var encoderBenchmarkSink float32
@@ -17,10 +18,7 @@ var encoderBenchmarkSink float32
 // construction and three warm-up passes (weight packing and worker startup)
 // are excluded explicitly.
 func BenchmarkEncoder(b *testing.B) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en bundle")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		b.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -17,10 +18,7 @@ var decoderBenchmarkSink int
 
 func decoderBenchmarkFixture(b *testing.B) (*Model, []float32, decoderOracle) {
 	b.Helper()
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en weights")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		b.Fatal(err)

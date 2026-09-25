@@ -2,7 +2,7 @@
 
 The `whisper` package runs OpenAI's English Whisper checkpoints end to end in
 Go: log-mel frontend, audio encoder, incremental text decoder, and BPE
-tokenizer. It is separate from the turn-detection `AudioSession` interface.
+tokenizer. `Transcriber` implements `speech.Transcriber`.
 
 ## Sources
 

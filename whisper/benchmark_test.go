@@ -9,15 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 var whisperBenchmarkSink float32
 
 func BenchmarkOfficialTinyENEncoder(b *testing.B) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL to converted official tiny.en weights")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		b.Fatal(err)
@@ -48,10 +47,7 @@ func BenchmarkOfficialTinyENEncoder(b *testing.B) {
 // load, transcriber construction, file read, and first weight packing are
 // outside the timed loop.
 func BenchmarkOfficialTinyENTranscribe(b *testing.B) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL to converted official tiny.en weights")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		b.Fatal(err)
@@ -86,10 +82,7 @@ func BenchmarkOfficialTinyENTranscribe(b *testing.B) {
 // by the pinned single-window JFK oracle. Compare it with CPU references only
 // when the input padding and resulting token sequence match.
 func BenchmarkOfficialTinyENWindow(b *testing.B) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL to converted official tiny.en weights")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		b.Fatal(err)
@@ -123,10 +116,7 @@ func BenchmarkOfficialTinyENWindow(b *testing.B) {
 // BenchmarkOfficialTinyENTimestamps isolates the optional segment and word
 // timing paths on the same pinned JFK workload as the plain-text benchmark.
 func BenchmarkOfficialTinyENTimestamps(b *testing.B) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		b.Skip("set GOPHONIC_WHISPER_MODEL")
-	}
+	path := testmodels.Path(b, testmodels.WhisperTinyEN)
 	model, err := Load(path)
 	if err != nil {
 		b.Fatal(err)

@@ -16,9 +16,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"runtime"
 	"sync"
+
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 )
 
 const (
@@ -90,7 +91,7 @@ func (o Options) threads() int {
 	if o.Threads > 0 {
 		return min(o.Threads, 64)
 	}
-	n := performanceCores()
+	n := qwen3lm.PerformanceCores()
 	if n <= 0 {
 		n = runtime.NumCPU()
 	}
@@ -111,9 +112,9 @@ func Open(path string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := model.cfg
-	if c.hidden != hiddenSize || c.layers != 36 || c.heads != 32 || c.kvHeads != 8 {
-		return nil, fmt.Errorf("qwen3: expected Qwen3-8B geometry, got hidden=%d layers=%d heads=%d kv_heads=%d", c.hidden, c.layers, c.heads, c.kvHeads)
+	c := model.Config()
+	if c.Hidden != hiddenSize || c.Layers != 36 || c.Heads != 32 || c.KVHeads != 8 {
+		return nil, fmt.Errorf("qwen3: expected Qwen3-8B geometry, got hidden=%d layers=%d heads=%d kv_heads=%d", c.Hidden, c.Layers, c.Heads, c.KVHeads)
 	}
 	entries := opts.CacheEntries
 	if entries == 0 {
@@ -123,11 +124,11 @@ func Open(path string, opts Options) (*Model, error) {
 	if prefix == 0 {
 		prefix = maxTokens
 	}
-	letters, err := loadLetterHead(path, tokens, model.cfg.hidden, model.cfg.vocab)
+	letters, err := loadLetterHead(path, tokens, model.Config().Hidden, model.Config().Vocab)
 	if err != nil {
 		return nil, err
 	}
-	e, err := newModel(model, tokens, opts.threads(), entries, min(prefix, maxTokens, model.cfg.maxPositions))
+	e, err := newModel(model, tokens, opts.threads(), entries, min(prefix, maxTokens, model.Config().MaxPositions))
 	if err != nil {
 		return nil, err
 	}
@@ -149,11 +150,11 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 	// batchTokens rows and positions up to maxTokens. Hot-path calls within
 	// those bounds never allocate; a single input longer than batchTokens
 	// grows the row storage once.
-	if err := ws.Reserve(min(batchTokens, model.cfg.maxPositions), min(maxTokens, model.cfg.maxPositions)); err != nil {
+	if err := ws.Reserve(min(batchTokens, model.Config().MaxPositions), min(maxTokens, model.Config().MaxPositions)); err != nil {
 		_ = ws.Close()
 		return nil, err
 	}
-	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.cfg.hidden)}
+	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.Config().Hidden)}
 	if prefixTokens > 0 {
 		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
 			_ = ws.Close()
@@ -310,7 +311,7 @@ func (e *Model) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) e
 			clear(e.shortDst)
 		}()
 		for i, seq := range ids {
-			if len(seq) < prefixMinTokens || len(seq) > e.prefix.capacity {
+			if len(seq) < prefixMinTokens || len(seq) > e.prefix.Capacity() {
 				e.shortIDs = append(e.shortIDs, seq)
 				e.shortDst = append(e.shortDst, dst[i])
 				continue
@@ -344,8 +345,6 @@ func (e *Model) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) e
 	return nil
 }
 
-func finite32(v float32) bool { return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0) }
-
 // Close stops the encoder's workers and releases its model. It waits for an
 // in-flight Embed or EmbedTokensInto call. A closed Model cannot be reused.
 func (e *Model) Close() error {
@@ -360,7 +359,7 @@ func (e *Model) Close() error {
 	e.closed = true
 	err := e.ws.Close()
 	if e.ownsWeights {
-		e.model.releaseGPU()
+		e.model.Release()
 	}
 	e.ws, e.eval, e.model, e.tokens = nil, nil, nil, nil
 	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache, e.prefix = nil, nil, nil, nil, nil, nil

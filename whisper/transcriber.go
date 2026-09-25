@@ -5,13 +5,16 @@ package whisper
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
+
+	"github.com/GetStream/gophonic/speech"
 )
 
 const WindowSamples = 30 * 16000
 
 var (
-	ErrTranscriberClosed       = errors.New("whisper: transcriber is closed")
+	ErrTranscriberClosed       = fmt.Errorf("whisper: transcriber: %w", speech.ErrClosed)
 	ErrTranscriberWindow       = errors.New("whisper: window exceeds 30 seconds of mono 16 kHz PCM")
 	ErrTranscriberTextCapacity = errors.New("whisper: transcription output buffer is too small")
 )
@@ -47,6 +50,8 @@ type Transcriber struct {
 	alignDurations      []float64
 	lastSpeechTimestamp float64
 	recordWords         bool
+	segments            []Segment // Transcribe's scratch
+	words               []Word
 	closed              bool
 }
 
@@ -100,10 +105,11 @@ func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) 
 	return worker, nil
 }
 
-// Close releases this worker's scratch and rejects subsequent use.
-func (t *Transcriber) Close() {
+// Close releases this worker's scratch and rejects subsequent use. It is
+// safe to call more than once.
+func (t *Transcriber) Close() error {
 	if t == nil || t.closed {
-		return
+		return nil
 	}
 	t.closed = true
 	t.frontend.Close()
@@ -128,6 +134,7 @@ func (t *Transcriber) Close() {
 	t.alignCostCurrent = nil
 	t.alignJumps = nil
 	t.alignDurations = nil
+	return nil
 }
 
 // TranscribeWindowInto appends the transcript of at most 30 seconds of mono

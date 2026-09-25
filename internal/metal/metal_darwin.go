@@ -31,11 +31,11 @@ var (
 
 	clsNSString uintptr
 
-	selName, selUTF8, selStringWithUTF8, selRelease, selRetain,
+	selName, selUTF8, selStringWithUTF8, selRelease,
 	selNewQueue, selNewLibrary, selNewFunction, selNewPipeline, selNewBuffer,
-	selContents, selLength, selMaxThreads, selExecWidth, selDescription,
+	selContents, selMaxThreads, selExecWidth, selDescription,
 	selCommandBuffer, selEncoder, selEncoderType, selCommit, selWait, selStatus, selError,
-	selSetPipeline, selSetBuffer, selSetBytes, selDispatch, selDispatchThreads, selBarrier, selEndEncoding,
+	selSetPipeline, selSetBuffer, selSetBytes, selDispatch, selBarrier, selEndEncoding,
 	selSetThreadgroupMemory uintptr
 )
 
@@ -80,14 +80,12 @@ func load() error {
 	selUTF8 = sel("UTF8String")
 	selStringWithUTF8 = sel("stringWithUTF8String:")
 	selRelease = sel("release")
-	selRetain = sel("retain")
 	selNewQueue = sel("newCommandQueue")
 	selNewLibrary = sel("newLibraryWithSource:options:error:")
 	selNewFunction = sel("newFunctionWithName:")
 	selNewPipeline = sel("newComputePipelineStateWithFunction:error:")
 	selNewBuffer = sel("newBufferWithLength:options:")
 	selContents = sel("contents")
-	selLength = sel("length")
 	selMaxThreads = sel("maxTotalThreadsPerThreadgroup")
 	selExecWidth = sel("threadExecutionWidth")
 	selDescription = sel("localizedDescription")
@@ -102,7 +100,6 @@ func load() error {
 	selSetBuffer = sel("setBuffer:offset:atIndex:")
 	selSetBytes = sel("setBytes:length:atIndex:")
 	selDispatch = sel("dispatchThreadgroups:threadsPerThreadgroup:")
-	selDispatchThreads = sel("dispatchThreads:threadsPerThreadgroup:")
 	selBarrier = sel("memoryBarrierWithScope:")
 	selEndEncoding = sel("endEncoding")
 	selSetThreadgroupMemory = sel("setThreadgroupMemoryLength:atIndex:")

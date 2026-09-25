@@ -8,9 +8,9 @@ CPUs use portable kernels (NEON on arm64).
 
 | M4 Max, one text | 1 token | 12 tokens | ~70 tokens | 16 × 12 tokens | cosine vs BF16 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `gpu` (default on Apple silicon), GPTQ | **15.8 ms** | **25 ms** | **130 ms** | **325 ms** | **0.99990** |
-| `gpu`, round-to-nearest | 15.8 ms | 25 ms | 130 ms | 325 ms | 0.99933 |
-| `gpu-q4`, GPTQ | **11.0 ms** | 25 ms | 159 ms | 331 ms | 0.99946 |
+| `gpu` (default on Apple silicon), GPTQ | **15.8 ms** | **25 ms** | **123 ms** | **281 ms** | **0.99990** |
+| `gpu`, round-to-nearest | 15.8 ms | 25 ms | 123 ms | 281 ms | 0.99933 |
+| `gpu-q4`, GPTQ | **10.8 ms** | 25 ms | 126 ms | 289 ms | 0.99946 |
 | CPU `int8` | 28 ms | 43 ms | 150 ms | 415 ms | 0.99866 |
 | CPU exact (default elsewhere) | 51 ms | 66 ms | 304 ms | 841 ms | **0.99991** |
 | llama.cpp Metal Q8_0 | 19.5 ms | 57 ms | 92 ms (64) | — | 0.99933 |
@@ -81,8 +81,8 @@ The programs in [`../examples/qwen3`](../examples/qwen3) are each one short
 hand-written inputs are not an accuracy study; validate on your own data.
 
 ```sh
-export GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B
-CGO_ENABLED=0 GOEXPERIMENT=simd go run ./examples/qwen3/turn
+tools/fetch-models.sh qwen3      # once: the official checkpoint into models/
+CGO_ENABLED=0 GOEXPERIMENT=simd go run ./examples/qwen3/turn   # -model PATH to use another copy
 ```
 
 ## CLM ranking
@@ -203,20 +203,22 @@ prefix is reused; `Question.Choose` takes 128 ms per new input and
 
 ## Tests
 
-Unit tests build a small random Qwen3 checkpoint, load it through the real
-safetensors loader, and compare every path (both weight formats, SME and
-portable kernels, 1–8 workers, packed batches, prefix extension) with a
-float64 reference implementation. Official-checkpoint gates are opt-in:
+The transformer itself lives in [`internal/qwen3lm`](../internal/qwen3lm), which
+this package and the speech decoder build on. Its unit tests write small
+random Qwen3 checkpoints ([`lmtest`](../internal/qwen3lm/lmtest)), load them
+through the real safetensors loader, and compare every path (all CPU weight
+formats, SME and portable kernels, 1–8 workers, packed batches, prefix
+extension) with a float64 forward pass. Official-checkpoint gates run when
+[`models/`](../models) holds the checkpoint, the BF16 reference vector, and
+the CLM head:
 
 ```sh
-GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B \
-GOPHONIC_QWEN3_TOKENIZER=/path/to/Qwen3-8B \
-GOPHONIC_QWEN3_HELLO_REFERENCE=/path/to/hello.f32 \
-GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm \
-CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 ./examples/qwen3 -run 'Official|Tokenizer' -v
+tools/fetch-models.sh qwen3 clm
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./internal/qwen3lm ./qwen3 ./examples/qwen3
 ```
 
 `tools/reference_hidden.py MODEL hello.f32` writes the BF16 reference vector
 and `tools/reference_rank.py` regenerates the golden CLM probabilities. The
-tokenizer goldens in `testdata/` come from the official Hugging Face
-tokenizer.
+tokenizer goldens in `internal/qwen3lm/testdata/` come from the official
+Hugging Face tokenizer. `-short` skips the slowest gate, which loads every
+weight format.

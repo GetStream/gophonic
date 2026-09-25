@@ -8,8 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"math"
-	"os"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 // dimsBundle writes a version-2 bundle whose tensors hold small finite values.
@@ -94,10 +95,7 @@ func TestDecodeFiniteFloat32RejectsNaN(t *testing.T) {
 }
 
 func TestOfficialTinyENBundle(t *testing.T) {
-	path := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if path == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en bundle")
-	}
+	path := testmodels.Path(t, testmodels.WhisperTinyEN)
 	m, err := Load(path)
 	if err != nil {
 		t.Fatal(err)

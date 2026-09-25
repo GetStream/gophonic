@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+
+	"github.com/GetStream/gophonic/speech"
 )
 
 var (
@@ -20,6 +22,8 @@ var (
 type upload struct {
 	name        []byte
 	audio       []byte
+	prompt      []byte
+	language    string // canonical English name, or empty to detect
 	format      byte
 	words       bool
 	granularity bool
@@ -97,7 +101,9 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 			}
 			result.name, result.audio = filename, value
 		case bytes.Equal(field, []byte("model")):
-			if len(value) > 128 || len(value) != 0 && !bytes.Equal(value, []byte("gophonic-whisper")) && !bytes.Equal(value, []byte("whisper-1")) {
+			// The server runs the model it was started with; the name only
+			// has to be plausible.
+			if len(value) > 128 {
 				return upload{}, errValue
 			}
 		case bytes.Equal(field, []byte("response_format")):
@@ -120,9 +126,18 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 				return upload{}, errValue
 			}
 		case bytes.Equal(field, []byte("language")):
-			if len(value) != 0 && !bytes.Equal(value, []byte("en")) {
+			if len(value) != 0 {
+				name, ok := speech.LanguageNameBytes(value)
+				if !ok {
+					return upload{}, errValue
+				}
+				result.language = name
+			}
+		case bytes.Equal(field, []byte("prompt")):
+			if len(value) > 4096 {
 				return upload{}, errValue
 			}
+			result.prompt = value
 		default:
 			return upload{}, errField
 		}

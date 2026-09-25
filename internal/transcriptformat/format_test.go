@@ -5,7 +5,7 @@ package transcriptformat
 
 import (
 	"encoding/json"
-	"github.com/GetStream/gophonic/whisper"
+	"github.com/GetStream/gophonic/speech"
 	"strings"
 	"testing"
 )
@@ -32,12 +32,12 @@ func TestAppendJSONStringControlBytes(t *testing.T) {
 
 func TestAppendSubtitles(t *testing.T) {
 	text := []byte(" hello")
-	segments := []whisper.Segment{{Start: 0.5, End: 1.25, TextStart: 0, TextEnd: len(text)}}
-	srt := string(AppendSubtitles(make([]byte, 0, 128), text, segments, false))
+	transcript := &speech.Transcript{Text: text, Segments: []speech.Segment{{Start: 0.5, End: 1.25, TextStart: 0, TextEnd: len(text)}}}
+	srt := string(AppendSubtitles(make([]byte, 0, 128), transcript, false))
 	if srt != "1\n00:00:00,500 --> 00:00:01,250\nhello\n\n" {
 		t.Fatalf("SRT = %q", srt)
 	}
-	vtt := string(AppendSubtitles(make([]byte, 0, 128), text, segments, true))
+	vtt := string(AppendSubtitles(make([]byte, 0, 128), transcript, true))
 	if vtt != "WEBVTT\n\n00:00:00.500 --> 00:00:01.250\nhello\n\n" {
 		t.Fatalf("VTT = %q", vtt)
 	}

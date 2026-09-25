@@ -452,12 +452,6 @@ func (w *EncoderWorkspace) valid() bool {
 		w.conv1Weight != nil && w.conv2Weight != nil && w.attention != nil && w.gemm != nil
 }
 
-// conv1Audio consumes Whisper's channel-major mel [channel,time] tensor and
-// writes time-major channels so the second convolution can use contiguous rows.
-func conv1Audio(src, dst, weights, bias []float32) {
-	conv1DChannelMajor(src, dst, weights, bias, MelFrames, MelBins, AudioState)
-}
-
 func conv1DChannelMajor(src, dst, weights, bias []float32, frames, inChannels, outChannels int) {
 	for t := 0; t < frames; t++ {
 		for oc := 0; oc < outChannels; oc++ {
@@ -477,11 +471,6 @@ func conv1DChannelMajor(src, dst, weights, bias []float32, frames, inChannels, o
 			dst[t*outChannels+oc] = sum
 		}
 	}
-}
-
-// conv2Audio applies Whisper's stride-two padded convolution to time-major input.
-func conv2Audio(src, dst, weights, bias []float32) {
-	conv1DStride2TimeMajor(src, dst, weights, bias, MelFrames, AudioFrames, AudioState)
 }
 
 func conv1DStride2TimeMajor(src, dst, weights, bias []float32, inputFrames, outputFrames, channels int) {
@@ -601,11 +590,5 @@ func multiHeadAttention(q, k, v, dst, scores []float32, rows, state, heads int) 
 				dst[outBase+d] = sum
 			}
 		}
-	}
-}
-
-func addInPlace(dst, src []float32) {
-	for i := range dst {
-		dst[i] += src[i]
 	}
 }

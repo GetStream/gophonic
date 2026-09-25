@@ -1,7 +1,9 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-// Command gophonic-server serves bounded local Whisper file transcription.
+// Command gophonic-server serves bounded local file transcription with any
+// transcription model gophonic.Open recognizes, over an OpenAI-compatible
+// POST /v1/audio/transcriptions endpoint.
 package main
 
 import (
@@ -15,25 +17,29 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/internal/httpserver"
-	"github.com/GetStream/gophonic/whisper"
 )
 
 func main() {
-	modelPath := flag.String("whisper-model", "", "converted English Whisper .gophonic bundle")
+	modelPath := flag.String("model", "", "transcription model: a converted Whisper .gophonic bundle or a Qwen3-ASR checkpoint directory")
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
 	workers := flag.Int("workers", 1, "independent transcription lanes")
 	maxSeconds := flag.Int("max-audio-seconds", 120, "maximum decoded audio duration")
+	threads := flag.Int("threads", 0, "CPU workers per lane (0: model default)")
 	flag.Parse()
-	if *modelPath == "" || flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: gophonic-server -whisper-model MODEL [-listen 127.0.0.1:8080] [-workers 1]")
+	if *modelPath == "" || flag.NArg() != 0 || *threads < 0 {
+		fmt.Fprintln(os.Stderr, "usage: gophonic-server -model MODEL [-listen 127.0.0.1:8080] [-workers 1] [-threads 0]")
 		os.Exit(2)
 	}
-	model, err := whisper.Load(*modelPath)
+	model, err := gophonic.Open(*modelPath, gophonic.Options{Threads: *threads})
 	if err != nil {
 		fatal(err)
 	}
-	handler, err := httpserver.NewWhisperServer(model, *workers, *maxSeconds)
+	if model.Kind() != gophonic.Transcription {
+		fatal(fmt.Errorf("%s is a %s model; the server needs a transcription model", model.Name(), model.Kind()))
+	}
+	handler, err := httpserver.NewServer(model.NewTranscriber, *workers, *maxSeconds)
 	if err != nil {
 		fatal(err)
 	}

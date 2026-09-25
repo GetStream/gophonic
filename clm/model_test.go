@@ -10,8 +10,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"math"
-	"os"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 func identityFixture(t *testing.T) *HeadPair {
@@ -241,10 +242,7 @@ func TestGELUExactMatchesPyTorchErfDefinition(t *testing.T) {
 // checkpoint whose SHA-256 is pinned below. CI can run the same test by setting
 // GOPHONIC_CLM_BUNDLE to a bundle converted from that checkpoint.
 func TestReferenceHeadOfficialCheckpointOracle(t *testing.T) {
-	path := os.Getenv("GOPHONIC_CLM_BUNDLE")
-	if path == "" {
-		t.Skip("set GOPHONIC_CLM_BUNDLE to a converted CLM-v0.1-8B checkpoint")
-	}
+	path := testmodels.Path(t, testmodels.CLMHead)
 	head, err := Load(path)
 	if err != nil {
 		t.Fatal(err)

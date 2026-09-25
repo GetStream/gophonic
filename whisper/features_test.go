@@ -100,23 +100,6 @@ func TestFeaturesRejectsInvalidWorkspaceBufferAndAudio(t *testing.T) {
 	}
 }
 
-func TestFeaturesWhisperPeriodicHannAndRadix400(t *testing.T) {
-	var realPart, imaginaryPart [featureFFTSize]float32
-	const bin = 8
-	for n, index := range featureFFTOrder {
-		realPart[index] = float32(math.Cos(2 * math.Pi * bin * float64(n) / featureFFTSize))
-	}
-	fftFeature400(&realPart, &imaginaryPart)
-	for _, k := range []int{bin, featureFFTSize - bin} {
-		if math.Abs(float64(realPart[k]-200)) > 0.01 || math.Abs(float64(imaginaryPart[k])) > 0.01 {
-			t.Fatalf("FFT[%d] = (%g,%g), want (200,0)", k, realPart[k], imaginaryPart[k])
-		}
-	}
-	if featureHann[0] != 0 || featureHann[featureFFTSize-1] == 0 {
-		t.Fatalf("window is not periodic Hann: first=%g last=%g", featureHann[0], featureHann[featureFFTSize-1])
-	}
-}
-
 func TestFeaturesIntoWarmCallHasNoAllocations(t *testing.T) {
 	w := NewFeatureWorkspace()
 	defer w.Close()

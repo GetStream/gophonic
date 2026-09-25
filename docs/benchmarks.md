@@ -11,8 +11,7 @@ warm call with a converted model:
 
 ```sh
 # 30-second window, PCM to text
-GOPHONIC_WHISPER_MODEL="$PWD/tiny.en.gophonic" GOMAXPROCS=1 \
-  GOEXPERIMENT=simd go test ./whisper -run '^$' \
+GOMAXPROCS=1 GOEXPERIMENT=simd go test ./whisper -run '^$' \
   -bench '^BenchmarkOfficialTinyENWindow$' -benchtime=20x -count=3
 
 # Matrix kernels alone
@@ -73,20 +72,18 @@ or cold-start cost.
 
 ## Reproduce Go results
 
-First [convert the model](models.md#convert-tinymelnet). The full helper sweep
-also shows whether smaller pools perform better on your machine:
+With `tinymel.gophonic` in [`models/`](../models), the full helper sweep also
+shows whether smaller pools perform better on your machine:
 
 ```sh
-GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic" \
-GOEXPERIMENT=simd go test . -run '^$' \
+GOEXPERIMENT=simd go test ./tinymel -run '^$' \
   -bench '^BenchmarkTinyMelWorkers$' -benchtime=200x -count=3 -cpu=1,2,4,8
 ```
 
 To measure just the eight-slot, seven-helper configuration:
 
 ```sh
-GOPHONIC_TEST_TINYMEL_MODEL="$PWD/tinymel.gophonic" \
-GOMAXPROCS=8 GOEXPERIMENT=simd go test . -run '^$' \
+GOMAXPROCS=8 GOEXPERIMENT=simd go test ./tinymel -run '^$' \
   -bench '^BenchmarkTinyMelWorkers/(features|audio)/helpers=7$' \
   -benchtime=200x -count=3
 ```
@@ -121,8 +118,7 @@ the same M4 Max, the Go SIMD path takes roughly 41–46 ms model-only at
 package's SME kernels.
 
 ```sh
-GOPHONIC_TEST_MODEL="$PWD/smart-turn-v3.2.gophonic" \
-GOEXPERIMENT=simd go test . -run '^$' \
+GOEXPERIMENT=simd go test ./smartturn -run '^$' \
   -bench '^BenchmarkPredict(Features|Mono16k)$' \
   -benchtime=50x -count=3 -cpu=12
 ```

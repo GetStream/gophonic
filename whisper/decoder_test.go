@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
@@ -79,10 +80,7 @@ func TestDecoderMathHelpers(t *testing.T) {
 }
 
 func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
-	modelPath := os.Getenv("GOPHONIC_WHISPER_MODEL")
-	if modelPath == "" {
-		t.Skip("set GOPHONIC_WHISPER_MODEL to the converted official tiny.en weights")
-	}
+	modelPath := testmodels.Path(t, testmodels.WhisperTinyEN)
 	m, err := Load(modelPath)
 	if err != nil {
 		t.Fatal(err)

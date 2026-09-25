@@ -4,22 +4,29 @@
 package examples
 
 import (
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 // TestOfficialExamples runs every example on the official checkpoint and
 // checks its answers. Each example loads the model itself, so they run one
 // after another.
 func TestOfficialExamples(t *testing.T) {
-	if os.Getenv("GOPHONIC_QWEN3_MODEL") == "" || os.Getenv("GOPHONIC_CLM_HEAD_BUNDLE") == "" {
-		t.Skip("set GOPHONIC_QWEN3_MODEL and GOPHONIC_CLM_HEAD_BUNDLE to run the examples")
-	}
+	model := testmodels.Path(t, testmodels.Qwen3)
+	head := testmodels.Path(t, testmodels.CLMHead)
 	goTool, err := exec.LookPath("go")
 	if err != nil {
 		t.Skip("go tool not found")
+	}
+	run := func(t *testing.T, example string) ([]byte, error) {
+		args := []string{"run", "./" + example, "-model", model}
+		if example == "reply" {
+			args = append(args, "-head", head)
+		}
+		return exec.CommandContext(t.Context(), goTool, args...).CombinedOutput()
 	}
 	// want lists each output line's expected first field, in order.
 	for example, want := range map[string][]string{
@@ -29,7 +36,7 @@ func TestOfficialExamples(t *testing.T) {
 		"tools":     {"search_flights", "get_weather", "book_restaurant", "", "set_timer", "play_music"},
 	} {
 		t.Run(example, func(t *testing.T) {
-			out, err := exec.CommandContext(t.Context(), goTool, "run", "./"+example).CombinedOutput()
+			out, err := run(t, example)
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
@@ -46,7 +53,7 @@ func TestOfficialExamples(t *testing.T) {
 		})
 	}
 	t.Run("turn", func(t *testing.T) {
-		out, err := exec.CommandContext(t.Context(), goTool, "run", "./turn").CombinedOutput()
+		out, err := run(t, "turn")
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
@@ -65,7 +72,7 @@ func TestOfficialExamples(t *testing.T) {
 		}
 	})
 	t.Run("conversation", func(t *testing.T) {
-		out, err := exec.CommandContext(t.Context(), goTool, "run", "./conversation").CombinedOutput()
+		out, err := run(t, "conversation")
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
@@ -84,7 +91,7 @@ func TestOfficialExamples(t *testing.T) {
 		}
 	})
 	t.Run("reply", func(t *testing.T) {
-		out, err := exec.CommandContext(t.Context(), goTool, "run", "./reply").CombinedOutput()
+		out, err := run(t, "reply")
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}

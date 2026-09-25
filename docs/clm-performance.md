@@ -1,4 +1,4 @@
-# CLM and Qwen3-8B CPU performance
+# Qwen3-8B and CLM performance
 
 Measured on 2026-09-24 on an Apple M4 Max (12 performance + 4 efficiency
 cores, 64 GB), CPU only, model loading excluded unless stated. The local path
@@ -45,8 +45,8 @@ Q4_K_M (0.942); the llama.cpp 4-bit files were requantized from Q8_0. One
 token must stream every projection weight once, 6.95 GB in int8 and 3.9 GB
 in 4.5 bits, so at the measured ≈440 GB/s the int8 path is at its bandwidth
 floor. Batched GPU kernels take 12 tokens in 25 ms (llama.cpp Metal Q8_0:
-57 ms; CPU: 90 ms), about 70 tokens in 179 ms, and 16 texts of 12 tokens in
-356 ms.
+57 ms; CPU: 90 ms), about 70 tokens in 123 ms, and 16 texts of 12 tokens in
+281 ms.
 
 The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
 with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
@@ -58,6 +58,27 @@ Its
 answers on the 31 `Question` probes match the exact mode. GPTQ-rounded
 weights raise its fidelity further in an offline study (cosine 0.99961);
 that conversion is not yet part of the loader.
+
+### Long inputs
+
+Fresh prefill throughput, caches off, in tokens per second. Each engine ran in
+short bursts alternating with the other, each burst starting from a nominal
+thermal state (the M4 Max loses about 35% under sustained load); ranges span
+the bursts. llama.cpp uses the official Q8_0 GGUF, flash attention on Metal,
+and 8 threads on the CPU.
+
+| Input tokens | gophonic `gpu` | llama.cpp Metal | gophonic `int8` | gophonic exact | llama.cpp CPU |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 667–690 | 733–747 | — | — | — |
+| 512 | 660–665 | 676–733 | 536 | 263 | 116 |
+| 1024 | 670–745 | 668–698 | — | — | — |
+| 2048 | 576–582 | 651–657 | 467 | 253 | 72 |
+
+On the GPU, gophonic leads up to about 64 tokens, the engines tie through
+1024, and llama.cpp is about 12% faster at 2048: gophonic's cost per token
+grows about 15% from 1024 to 2048 tokens against llama.cpp's 3%, which points
+at long-context attention. On the CPU, gophonic is 3.5–6.5× faster. Inputs
+longer than 2048 tokens keep their last 2048.
 
 All warmed paths report 0 allocs/op. “Before” is the previous single-thread
 per-row int8 path. Probabilities for the pinned CLM ranking now differ from the
@@ -132,14 +153,14 @@ panel-decode kernel (NEON on arm64) that is correct but far slower.
 ## Reproducing
 
 ```sh
-export GOPHONIC_QWEN3_MODEL=/path/to/Qwen3-8B
-export GOPHONIC_QWEN3_TOKENIZER=$GOPHONIC_QWEN3_MODEL
-export GOPHONIC_QWEN3_HELLO_REFERENCE=/path/to/qwen3-8b-hello-reference.f32
-export GOPHONIC_CLM_HEAD_BUNDLE=/path/to/CLM_v0.1-8B.gclm
+tools/fetch-models.sh qwen3 clm   # checkpoint, BF16 reference vector, CLM head into models/
 CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run TestOfficial -v
-CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run '^$' -bench 'Official' -benchtime=5x
-llama-bench -m Qwen3-8B-Q8_0.gguf -p 1,12,64 -n 0 -embd 1 -t 8 -ngl 0 -dev none
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run '^$' -bench 'OfficialEmbed' -benchtime=5x
+CGO_ENABLED=0 GOEXPERIMENT=simd go test ./qwen3 -run '^$' -bench 'OfficialEmbed/gpu/' -benchtime=5x   # one format
+llama-bench -m Qwen3-8B-Q8_0.gguf -p 1,12,64,512,2048 -n 0 -embd 1 -t 8 -ngl 0 -dev none
+llama-bench -m Qwen3-8B-Q8_0.gguf -p 1,12,64,512,2048 -n 0 -embd 1 -ngl 99 -fa on
 ```
 
-`qwen3/tools/reference_hidden.py` writes the BF16 reference vector. Set
-`GOPHONIC_QWEN_WEIGHTS=int8` or `GOPHONIC_QWEN_THREADS=N` to vary benchmarks.
+Every official benchmark has one sub-benchmark per weight format (`f16`,
+`int8`, `gpu`, `gpu-q4`). The M4 Max throttles under sustained load, so start
+each run from a cool machine and alternate engines when comparing them.

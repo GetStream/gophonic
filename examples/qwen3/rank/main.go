@@ -24,13 +24,13 @@ func main() {
 }
 
 func run() error {
-	qwenPath := flag.String("qwen", "", "official Qwen3-8B safetensors directory")
-	headPath := flag.String("head", "", "converted CLM .gclm head bundle")
+	qwenPath := flag.String("qwen", "models/Qwen3-8B", "official Qwen3-8B safetensors directory")
+	headPath := flag.String("head", "models/CLM_v0.1-8B.gclm", "converted CLM .gclm head bundle")
 	state := flag.String("state", "", "state text to rank candidate actions against")
 	weights := flag.String("weights", "", "projection weights: f16 (exact BF16, default) or int8")
 	threads := flag.Int("threads", 0, "worker threads (0 selects a default)")
 	flag.Parse()
-	if *qwenPath == "" || *headPath == "" || *state == "" || flag.NArg() == 0 {
+	if *state == "" || flag.NArg() == 0 {
 		return errors.New("usage: rank -qwen PATH -head PATH -state TEXT [-weights int8] CANDIDATE...")
 	}
 	head, err := clm.Load(*headPath)

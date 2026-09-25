@@ -1,7 +1,8 @@
 # Local Whisper HTTP server
 
-`gophonic-server` serves completed audio recordings with one immutable English
-Whisper model and a fixed pool of independent transcribers. Its inference path
+`gophonic-server` serves completed audio recordings with one immutable
+transcription model (any model `gophonic.Open` recognizes as a transcriber)
+and a fixed pool of independent `speech.Transcriber` lanes. Its inference path
 uses the same Go runtime as the CLI. Each worker owns reusable request, decoded
 audio, inference, and response buffers. On the measured warmed WAV handler
 path, multipart parsing through response writing takes zero heap allocations.
@@ -10,7 +11,7 @@ measurement starts at the handler with a reusable request object.
 
 ```sh
 CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic-server ./cmd/gophonic-server
-./gophonic-server -whisper-model tiny.en.gophonic -listen 127.0.0.1:8080 -workers 1
+./gophonic-server -model models/tiny.en.gophonic -listen 127.0.0.1:8080 -workers 1
 ```
 
 In another terminal:
@@ -29,9 +30,11 @@ subtitles. `response_format=verbose_json` returns segment start/end times; add
 `words` array has `word`, `start`, and `end` fields; the Go API also returns
 mean token probability for each word.
 Word timing uses a second decoder pass over selected OpenAI alignment heads;
-plain text and segment timing do not pay that cost. The server accepts
-`model=gophonic-whisper` or `model=whisper-1`, and `language=en`. Unsupported
-transcription options are rejected explicitly.
+plain text and segment timing do not pay that cost. The `model` field may name
+anything: the server runs the model it was started with. `language` takes an
+ISO 639-1 code or an English name, and `prompt` becomes
+`speech.Options.Context`; a value the model cannot honor, such as a language
+other than English for Whisper's English checkpoints, returns HTTP 400.
 This is a small file-transcription subset of the OpenAI API, not a claim of full
 API compatibility. `GET /healthz` and `GET /readyz` return 200 while the server
 is running.
@@ -57,13 +60,11 @@ needs an audio/Opus ingestion loop, buffering and VAD, and a separate contract
 for partial versus committed transcripts. The file endpoint does not pretend
 that repeated complete-file requests are incremental decoding.
 
-To validate a converted official `tiny.en` bundle without HTTP, run the pinned
-JFK test documented in [README](../README.md#testing). With a local bundle,
-this server's official JFK test also exercises the multipart endpoint:
+With `tiny.en.gophonic` in [`models/`](../models), the server's official JFK
+test exercises the multipart endpoint end to end:
 
 ```sh
-GOPHONIC_WHISPER_MODEL=/path/to/tiny.en.gophonic \
-  GOEXPERIMENT=simd go test ./internal/httpserver -run TestWhisperServerOfficialJFK -count=1
+GOEXPERIMENT=simd go test ./internal/httpserver -run TestServerOfficialJFK -count=1
 ```
 
 To request word timestamps:

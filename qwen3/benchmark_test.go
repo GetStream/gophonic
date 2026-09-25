@@ -4,8 +4,9 @@
 package qwen3
 
 import (
-	"os"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/testmodels"
 )
 
 var (
@@ -14,10 +15,7 @@ var (
 )
 
 func BenchmarkOfficialQwenTokenizer(b *testing.B) {
-	path := os.Getenv("GOPHONIC_QWEN3_TOKENIZER")
-	if path == "" {
-		b.Skip("set GOPHONIC_QWEN3_TOKENIZER to the official Qwen3-8B directory")
-	}
+	path := testmodels.Path(b, testmodels.Qwen3)
 	tok, err := LoadTokenizer(path)
 	if err != nil {
 		b.Fatal(err)
