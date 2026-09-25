@@ -9,6 +9,7 @@ import (
 	"math"
 	"runtime"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
@@ -29,6 +30,7 @@ var (
 // EncoderWorkspace owns temporary storage for one concurrent encoder call.
 // Allocate one workspace per concurrent caller and reuse it between calls.
 type EncoderWorkspace struct {
+	memory      *arena.Arena
 	conv1       []float32
 	convColumns []float32 // time-major mel with a zero row at each end
 	conv1Pad    []float32 // conv1 output after one zero row of left padding
@@ -81,22 +83,26 @@ func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
 		return nil, err
 	}
 	state := d.AudioState
+	memory, err := arena.New((MelFrames+1)*state, (MelFrames+2)*MelBins,
+		AudioFrames*state, AudioFrames*state, AudioFrames*state, AudioFrames*state, AudioFrames*4*state)
+	if err != nil {
+		_ = gemm.Close()
+		return nil, err
+	}
 	w := &EncoderWorkspace{
 		dims:        d,
-		conv1Pad:    make([]float32, (MelFrames+1)*state),
-		convColumns: make([]float32, (MelFrames+2)*MelBins),
-		normalized:  make([]float32, AudioFrames*state),
-		q:           make([]float32, AudioFrames*state),
-		k:           make([]float32, AudioFrames*state),
-		v:           make([]float32, AudioFrames*state),
-		feedForward: make([]float32, AudioFrames*4*state),
-		packed:      make([]packedEncoderBlock, d.AudioLayers),
+		memory:      memory,
+		conv1Pad:    memory.Take((MelFrames + 1) * state),
+		convColumns: memory.Take((MelFrames + 2) * MelBins),
+		normalized:  memory.Take(AudioFrames * state),
+		q:           memory.Take(AudioFrames * state),
+		k:           memory.Take(AudioFrames * state),
+		v:           memory.Take(AudioFrames * state),
+		feedForward: memory.Take(AudioFrames * 4 * state),
 		gemm:        gemm,
 	}
 	// Validated dimensions are small and positive, so these cannot fail.
 	w.conv1 = w.conv1Pad[state:]
-	w.conv1Weight, _ = whispergemm.NewPackedB(MelBins*3, state)
-	w.conv2Weight, _ = whispergemm.NewPackedB(state*3, state)
 	w.attention, err = newAudioAttention(AudioFrames, state, d.AudioHeads, workers)
 	if err != nil {
 		w.Close()
@@ -129,6 +135,8 @@ func (w *EncoderWorkspace) Close() {
 		_ = w.gemm.Close()
 		w.gemm = nil
 	}
+	_ = w.memory.Close()
+	w.memory = nil
 }
 
 // EncodeInto runs Whisper tiny.en's audio encoder. mel is the flattened,
@@ -140,6 +148,7 @@ func (m *Model) EncodeInto(mel, dst []float32, w *EncoderWorkspace) error {
 }
 
 func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(stage int, values []float32)) error {
+	defer runtime.KeepAlive(w)
 	if m == nil {
 		return errNilModel
 	}
@@ -163,10 +172,10 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 		if !ok {
 			return errEncoderWeights
 		}
-		w.weights = weights
 		if err := w.preparePacked(m, weights); err != nil {
 			return err
 		}
+		w.weights = weights
 	}
 	weights := w.weights
 	dst = dst[:outLen]
@@ -277,36 +286,58 @@ func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderB
 		normW: nextW, normB: nextB, width: state}, AudioFrames)
 }
 
+// packedEncoderWeights is immutable after publication on Model.
+type packedEncoderWeights struct {
+	conv1Weight, conv2Weight *whispergemm.PackedB
+	packed                   []packedEncoderBlock
+}
+
 func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) error {
-	state, ffn := w.dims.AudioState, 4*w.dims.AudioState
-	if w.gemm == nil {
-		return errEncoderGEMM
+	p, err := model.packedEncoder(weights)
+	if err != nil {
+		return err
 	}
+	w.conv1Weight, w.conv2Weight, w.packed = p.conv1Weight, p.conv2Weight, p.packed
+	w.packedModel = model
+	return nil
+}
+
+func (model *Model) packedEncoder(weights encoderWeights) (*packedEncoderWeights, error) {
+	defer runtime.KeepAlive(model)
+	model.encoderMu.Lock()
+	defer model.encoderMu.Unlock()
+	if model.encoderPacking != nil {
+		return model.encoderPacking, nil
+	}
+	state, ffn := model.dims.AudioState, 4*model.dims.AudioState
+	w := &packedEncoderWeights{packed: make([]packedEncoderBlock, model.dims.AudioLayers)}
+	w.conv1Weight, _ = whispergemm.NewPackedB(MelBins*3, state)
+	w.conv2Weight, _ = whispergemm.NewPackedB(state*3, state)
 	if w.conv1Weight.Pack(tapMajor(weights.conv1W, state, MelBins), MelBins*3, true) != nil ||
 		w.conv2Weight.Pack(tapMajor(weights.conv2W, state, state), state*3, true) != nil {
-		return errEncoderGEMM
+		return nil, errEncoderGEMM
 	}
 	for i, block := range weights.blocks {
 		packed := &w.packed[i]
 		if packed.query == nil {
 			var err error
 			if packed.query, err = whispergemm.NewPackedB(state, state); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 			if packed.key, err = whispergemm.NewPackedB(state, state); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 			if packed.value, err = whispergemm.NewPackedB(state, state); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 			if packed.out, err = whispergemm.NewPackedB(state, state); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 			if packed.mlpIn, err = whispergemm.NewPackedB(state, ffn); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 			if packed.mlpOut, err = whispergemm.NewPackedB(ffn, state); err != nil {
-				return errEncoderGEMM
+				return nil, errEncoderGEMM
 			}
 		}
 		if packed.query.Pack(block.queryW, state, true) != nil ||
@@ -315,11 +346,11 @@ func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) e
 			packed.out.Pack(block.outW, state, true) != nil ||
 			packed.mlpIn.Pack(block.mlpInW, state, true) != nil ||
 			packed.mlpOut.Pack(block.mlpOutW, ffn, true) != nil {
-			return errEncoderGEMM
+			return nil, errEncoderGEMM
 		}
 	}
-	w.packedModel = model
-	return nil
+	model.encoderPacking = w
+	return w, nil
 }
 
 // tapMajor reorders PyTorch Conv1d weights [out][in][3] into [out][3][in],
@@ -437,8 +468,7 @@ func (w *EncoderWorkspace) valid() bool {
 		len(w.normalized) >= AudioFrames*state &&
 		len(w.q) >= AudioFrames*state &&
 		len(w.k) >= AudioFrames*state && len(w.v) >= AudioFrames*state &&
-		len(w.feedForward) >= AudioFrames*4*state && len(w.packed) == w.dims.AudioLayers &&
-		w.conv1Weight != nil && w.conv2Weight != nil && w.attention != nil && w.gemm != nil
+		len(w.feedForward) >= AudioFrames*4*state && w.attention != nil && w.gemm != nil
 }
 
 func conv1DChannelMajor(src, dst, weights, bias []float32, frames, inChannels, outChannels int) {

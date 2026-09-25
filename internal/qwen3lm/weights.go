@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/safetensors"
 	"github.com/thesyncim/vibejson"
@@ -48,6 +49,7 @@ const (
 // the language-model head is loaded only when LoadOptions.Head names it.
 // Weights may be shared by any number of evaluators and workspaces.
 type Weights struct {
+	memory    *arena.Arena
 	cfg       modelConfig
 	embed     []uint16 // BF16 bits, [vocab][hidden]
 	finalNorm []float32
@@ -249,12 +251,42 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 		}
 		return m, nil
 	}
+	if format == WeightsF16 {
+		sizes := make([]int, len(jobs), len(jobs)+1)
+		for i, j := range jobs {
+			if sizes[i], err = q8gemm.WeightsF16Bytes(j.k, j.n); err != nil {
+				return nil, err
+			}
+		}
+		if opts.Head != "" {
+			size, e := q8gemm.WeightsF16Bytes(h, cfg.vocab)
+			if e != nil {
+				return nil, e
+			}
+			sizes = append(sizes, size)
+		}
+		if m.memory, err = arena.NewBytes(sizes...); err != nil {
+			return nil, err
+		}
+		for i, j := range jobs {
+			if j.dst.f16, err = q8gemm.NewWeightsF16Buffer(j.k, j.n, m.memory.TakeBytes(sizes[i])); err != nil {
+				return nil, err
+			}
+		}
+		if opts.Head != "" {
+			if m.head.f16, err = q8gemm.NewWeightsF16Buffer(h, cfg.vocab, m.memory.TakeBytes(sizes[len(jobs)])); err != nil {
+				return nil, err
+			}
+		}
+	}
 	maxSize := max(inter*h, qdim*h)
 	if opts.Head != "" {
 		// The head is the largest matrix (vocabulary × hidden); it is read
 		// and packed in row chunks no larger than a layer projection.
-		if m.head, err = newHead(&cfg, format, rotHidden); err != nil {
-			return nil, err
+		if format != WeightsF16 {
+			if m.head, err = newHead(&cfg, format, rotHidden); err != nil {
+				return nil, err
+			}
 		}
 		step := max(q8gemm.OutputPanel, maxSize/h/q8gemm.OutputPanel*q8gemm.OutputPanel)
 		if headChunkRows > 0 {
@@ -288,6 +320,8 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 				var err error
 				if j.rows[1] > 0 {
 					err = loadRows(st, j.name, j.n, j.k, j.rows[0], j.rows[1], buf, j.dst)
+				} else if format == WeightsF16 {
+					err = loadRows(st, j.name, j.n, j.k, 0, j.n, buf, j.dst)
 				} else {
 					var w linear
 					w, err = loadProjection(st, j.name, j.n, j.k, buf, j.rot)
@@ -302,6 +336,7 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 		}()
 	}
 	wg.Wait()
+	runtime.KeepAlive(m)
 	if first != nil {
 		return nil, first
 	}
@@ -311,6 +346,8 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 // Release frees what the Weights hold outside the Go heap: GPU buffers and
 // mapped files. The Weights are unusable afterwards.
 func (m *Weights) Release() {
+	_ = m.memory.Close()
+	m.memory = nil
 	m.releaseGPU()
 	for _, unmap := range m.unmap {
 		unmap()

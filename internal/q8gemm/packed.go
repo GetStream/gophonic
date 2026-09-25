@@ -10,6 +10,7 @@ package q8gemm
 import (
 	"errors"
 	"math"
+	"unsafe"
 )
 
 const (
@@ -71,6 +72,46 @@ func NewWeightsF16(k, n int) (*Weights, error) {
 		return nil, ErrDimensions
 	}
 	w.h = make([]uint16, w.panels*w.pairs*2*OutputPanel)
+	return w, nil
+}
+
+// WeightsF16Bytes reports bytes for NewWeightsF16Buffer, including scales.
+func WeightsF16Bytes(k, n int) (int, error) {
+	if k < 0 || n < 0 || k > math.MaxInt-1 || n > math.MaxInt-(OutputPanel-1) {
+		return 0, ErrDimensions
+	}
+	panels, pairs := (n+OutputPanel-1)/OutputPanel, (k+1)/2
+	if n > (math.MaxInt-63)/4 {
+		return 0, ErrDimensions
+	}
+	scales := n * 4
+	if panels != 0 && pairs > (math.MaxInt-scales-63)/panels/(4*OutputPanel) {
+		return 0, ErrDimensions
+	}
+	return panels*pairs*4*OutputPanel + scales, nil
+}
+
+// NewWeightsF16Buffer binds packed FP16 weights and scales to caller-owned,
+// four-byte-aligned zeroed storage. The caller must retain its owner through
+// all Pack and Mul calls and release it only after all consumers have stopped.
+func NewWeightsF16Buffer(k, n int, data []byte) (*Weights, error) {
+	size, err := WeightsF16Bytes(k, n)
+	if err != nil || len(data) < size {
+		return nil, ErrDimensions
+	}
+	w := &Weights{k: k, n: n, pairs: (k + 1) / 2, panels: (n + OutputPanel - 1) / OutputPanel}
+	if size == 0 {
+		w.h = []uint16{}
+		return w, nil
+	}
+	if uintptr(unsafe.Pointer(&data[0]))%4 != 0 {
+		return nil, ErrDimensions
+	}
+	count := w.panels * w.pairs * 2 * OutputPanel
+	w.h = unsafe.Slice((*uint16)(unsafe.Pointer(&data[0])), count)
+	if n != 0 {
+		w.scales = unsafe.Slice((*float32)(unsafe.Pointer(&data[count*2])), n)
+	}
 	return w, nil
 }
 

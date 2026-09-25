@@ -104,7 +104,7 @@ func (t *Transcriber) transcribeFullInto(pcm []float32, dst []byte, segments []S
 		t.tokens = t.tokens[:promptLen]
 		noSpeech := float64(0)
 		for position, id := range t.tokens {
-			if err := t.model.LogitsForTokenInto(id, position, t.decoder, t.logits); err != nil {
+			if err := t.model.decodeTokenInto(id, position, t.decoder, t.logits, position == promptLen-1 || id == t.tokenizer.SOT()); err != nil {
 				return dst, segments, words, err
 			}
 			if id == t.tokenizer.SOT() {

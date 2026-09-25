@@ -151,8 +151,13 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 		return nil, err
 	}
 	defer func() {
-		if err != nil && genc != nil {
-			genc.release()
+		if err != nil {
+			if genc != nil {
+				genc.release()
+			}
+			if enc != nil {
+				_ = enc.memory.Close()
+			}
 		}
 	}()
 	lm, err := qwen3lm.Load(dir, qwen3lm.LoadOptions{Format: opts.Format, Prefix: "thinker.model.", Config: &text, Head: head})
@@ -241,6 +246,9 @@ func (m *Model) Languages() []string {
 // Release frees resources the decoder holds outside the Go heap. The model
 // is unusable afterwards.
 func (m *Model) Release() {
+	if m.enc != nil {
+		_ = m.enc.memory.Close()
+	}
 	m.lm.Release()
 	if m.genc != nil {
 		m.genc.release()
