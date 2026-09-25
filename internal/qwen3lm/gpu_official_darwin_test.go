@@ -23,14 +23,18 @@ type officialLM struct {
 	hidden  int
 }
 
-func loadOfficialLM(t testing.TB, format string) *officialLM {
+func loadOfficialLM(t testing.TB, format string, head ...string) *officialLM {
 	t.Helper()
 	path := testmodels.Path(t, testmodels.Qwen3)
 	tokens, err := LoadTokenizer(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	weights, err := LoadWeights(path, format)
+	opts := LoadOptions{Format: format}
+	if len(head) > 0 {
+		opts.Head = head[0]
+	}
+	weights, err := Load(path, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,4 +168,35 @@ func TestOfficialGPUFlashAttention(t *testing.T) {
 		}
 		return out
 	})
+}
+
+// TestOfficialGPUTailMatchesPositions checks tail states and batched logits
+// on the GPU against the positions evaluated one at a time.
+func TestOfficialGPUTailMatchesPositions(t *testing.T) {
+	lm := loadOfficialLM(t, WeightsGPUQ8, "lm_head.weight")
+	ids, err := lm.tokens.EncodeInto("The quick brown fox jumps over the lazy dog while the band plays a slow song about rivers.", make([]int, 0, 64), &lm.tokenWS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []int{2, 6} {
+		checkTail(t, lm.eval, lm.ws, 0, ids, Embeds{}, k, 0.9999)
+	}
+}
+
+func BenchmarkOfficialGPULogitsRows(b *testing.B) {
+	lm := loadOfficialLM(b, WeightsGPUQ8, "lm_head.weight")
+	c := lm.weights.Config()
+	for _, k := range []int{1, 8, 32} {
+		hidden, logits := make([]float32, k*c.Hidden), make([]float32, k*c.Vocab)
+		for i := range hidden {
+			hidden[i] = float32(i%7) * 0.01
+		}
+		b.Run(fmt.Sprint(k), func(b *testing.B) {
+			for b.Loop() {
+				if err := lm.eval.LogitsRowsInto(hidden, logits, lm.ws); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

@@ -172,12 +172,15 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	if ws == nil {
 		return errors.New("qwen3: nil workspace")
 	}
-	if len(embeds.Rows) != 0 {
+	if len(embeds.Rows) != 0 || e.m.embed == nil {
 		n := 0
 		for _, id := range ids {
 			if id == embeds.Token {
 				n++
 			}
+		}
+		if e.m.embed == nil && (n != len(ids) || len(embeds.Rows) == 0) {
+			return errors.New("qwen3: weights loaded without an embedding table take only Embeds rows")
 		}
 		if len(embeds.Rows) != n*e.m.cfg.hidden {
 			return fmt.Errorf("qwen3: %d embedding values for %d placeholders of width %d", len(embeds.Rows), n, e.m.cfg.hidden)
@@ -201,6 +204,53 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 			id = -1
 		}
 		kv.tokens = append(kv.tokens, id)
+	}
+	return nil
+}
+
+// maxTail bounds the states of HiddenTailExtendEmbedInto and
+// LogitsRowsInto, within one GPU pass.
+const maxTail = 256
+
+// HiddenTailExtendEmbedInto is HiddenLastExtendEmbedInto that writes the
+// post-final-RMSNorm states of the last len(dst)/hidden positions to dst, in
+// order. With LogitsRowsInto it checks a draft continuation in one pass: the
+// state at each position predicts the token after it.
+func (e *Evaluator) HiddenTailExtendEmbedInto(kv *PrefixKV, keep int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
+	if e == nil || e.m == nil || ws == nil {
+		return errors.New("qwen3: nil evaluator or workspace")
+	}
+	h := e.m.cfg.hidden
+	k := len(dst) / h
+	if k == 0 || len(dst) != k*h || k > len(ids) || k > maxTail {
+		return fmt.Errorf("qwen3: %d tail values for %d tokens of width %d", len(dst), len(ids), h)
+	}
+	ws.tail = dst
+	defer func() { ws.tail = nil }()
+	return e.HiddenLastExtendEmbedInto(kv, keep, ids, embeds, dst[(k-1)*h:], ws)
+}
+
+// LogitsRowsInto is LogitsInto for several states: hidden holds whole
+// states, and dst receives the logits of each in turn.
+func (e *Evaluator) LogitsRowsInto(hidden, dst []float32, ws *Workspace) error {
+	if e == nil || e.m == nil || ws == nil || ws.owner != e {
+		return errors.New("qwen3: nil evaluator or foreign workspace")
+	}
+	c := &e.m.cfg
+	k := len(hidden) / c.hidden
+	if k == 0 || len(hidden) != k*c.hidden || len(dst) != k*c.vocab || k > maxTail {
+		return fmt.Errorf("qwen3: logits of %d values into %d, want whole states of %d and %d", len(hidden), len(dst), c.hidden, c.vocab)
+	}
+	if ws.gpu != nil && k > 1 {
+		if e.m.gpu == nil || !e.m.gpu.hasHead() {
+			return errors.New("qwen3: the weights were loaded without a language-model head")
+		}
+		return ws.gpu.logitsRowsInto(e.m, hidden, dst, k)
+	}
+	for r := range k {
+		if err := e.LogitsInto(hidden[r*c.hidden:(r+1)*c.hidden], dst[r*c.vocab:(r+1)*c.vocab], ws); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -290,6 +340,7 @@ type Workspace struct {
 	attnScratch                     []attentionScratch // per participant
 	prefix                          *PrefixKV          // set by HiddenLastExtendInto and HiddenLastSharedInto
 	embeds                          Embeds             // set by HiddenLastExtendEmbedInto
+	tail                            []float32          // set by HiddenTailExtendEmbedInto
 	shared                          bool               // prefix is read-only and shared by every sequence
 	attnPerHead                     bool               // prefix attention items are per query head, not per group
 	past                            int
@@ -422,6 +473,8 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if ws.prefix != nil {
 			pre = ws.prefix.gpu
 		}
+		ws.gpu.tail = ws.tail
+		defer func() { ws.gpu.tail = nil }()
 		return ws.gpu.batch(m, seqs, dst, pre, ws.past, ws.shared, ws.embeds)
 	}
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {
@@ -509,9 +562,13 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 			ws.run(opStorePrefix, c.kvHeads, 1)
 		}
 		if layer == len(m.layers)-1 {
-			// Only each sequence's last row reaches the output, so the final
-			// output projection and MLP run on those rows alone.
-			ws.keepLastRows(seqs, c)
+			// Only each sequence's last row (or a tail) reaches the output,
+			// so the final output projection and MLP run on those rows alone.
+			if k := len(ws.tail) / c.hidden; k > 1 {
+				ws.keepTailRows(rows, k, c)
+			} else {
+				ws.keepLastRows(seqs, c)
+			}
 		}
 		ws.project(ws.ctx, c.heads*c.headDim, false, projection{&l.o, ws.attn})
 		ws.addNorm(ws.attn, l.mlpNorm, &l.gate)
@@ -520,6 +577,20 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.project(ws.gate, c.intermediate, false, projection{&l.down, ws.attn})
 	}
 	op.layer = nil
+	if k := len(ws.tail) / c.hidden; k > 1 {
+		for r := range k {
+			last := ws.h[r*c.hidden : (r+1)*c.hidden]
+			addInto(last, ws.attn[r*c.hidden:(r+1)*c.hidden])
+			out := ws.tail[r*c.hidden : (r+1)*c.hidden]
+			rmsNorm32(out, last, m.finalNorm, c.eps)
+			for _, value := range out {
+				if !finite32(value) {
+					return errors.New("qwen3: non-finite hidden state")
+				}
+			}
+		}
+		return nil
+	}
 	for s := range seqs {
 		last := ws.h[s*c.hidden : (s+1)*c.hidden]
 		addInto(last, ws.attn[s*c.hidden:(s+1)*c.hidden])
@@ -547,6 +618,15 @@ func (ws *Workspace) keepLastRows(seqs [][]int, c *modelConfig) {
 		}
 	}
 	ws.op.rows = len(seqs)
+}
+
+// keepTailRows moves the last k of rows rows of h and ctx to the front and
+// shrinks the batch to them.
+func (ws *Workspace) keepTailRows(rows, k int, c *modelConfig) {
+	qdim := c.heads * c.headDim
+	copy(ws.h[:k*c.hidden], ws.h[(rows-k)*c.hidden:rows*c.hidden])
+	copy(ws.ctx[:k*qdim], ws.ctx[(rows-k)*qdim:rows*qdim])
+	ws.op.rows = k
 }
 
 // Reserve allocates storage for batches of up to rows tokens and sequences

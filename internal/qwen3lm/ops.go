@@ -225,12 +225,12 @@ func (o *layerOp) projectStrip(strip int) {
 
 func (o *layerOp) qkRope(start, end int) {
 	ws, f := o.ws, &o.ws.owner.m.cfg
-	hd, half := f.headDim, f.headDim/2
+	hd, half, qdim := f.headDim, f.headDim/2, f.heads*f.headDim
 	for r := start; r < end; r++ {
 		base := int(ws.rowPos[r]) * half
 		cos, sin := ws.ropeCos[base:base+half], ws.ropeSin[base:base+half]
 		for head := range f.heads {
-			v := ws.q[r*f.hidden+head*hd : r*f.hidden+(head+1)*hd]
+			v := ws.q[r*qdim+head*hd : r*qdim+(head+1)*hd]
 			rmsNorm32(v, v, o.layer.qNorm, f.eps)
 			rotateHalves(v[:half], v[half:], cos, sin)
 		}
@@ -253,7 +253,7 @@ func rmsNorm32(dst, src, weight []float32, eps float64) {
 // so no per-item score scratch is needed.
 func (o *layerOp) attention(start, end int) {
 	ws, f := o.ws, &o.ws.owner.m.cfg
-	hd, group := f.headDim, f.heads/f.kvHeads
+	hd, group, qdim := f.headDim, f.heads/f.kvHeads, f.heads*f.headDim
 	scale := float32(f.attnScale)
 	for item := start; item < end; item++ {
 		r, g := item/f.kvHeads, item%f.kvHeads
@@ -262,8 +262,8 @@ func (o *layerOp) attention(start, end int) {
 		}
 		first := int(ws.rowStart[r])
 		for qh := g * group; qh < (g+1)*group; qh++ {
-			q := ws.q[r*f.hidden+qh*hd : r*f.hidden+(qh+1)*hd]
-			out := ws.ctx[r*f.hidden+qh*hd : r*f.hidden+(qh+1)*hd]
+			q := ws.q[r*qdim+qh*hd : r*qdim+(qh+1)*hd]
+			out := ws.ctx[r*qdim+qh*hd : r*qdim+(qh+1)*hd]
 			clear(out)
 			maxScore := float32(math.Inf(-1))
 			var sum float32
