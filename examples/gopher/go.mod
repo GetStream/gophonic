@@ -8,6 +8,7 @@ require (
 	github.com/GetStream/getstream-go-webrtc v0.0.0-20260923215301-80daf64c2fc1
 	github.com/GetStream/gophonic v0.0.0
 	github.com/GetStream/protocol v1.49.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/thesyncim/vibejson v0.1.0
 )
 
@@ -37,7 +38,6 @@ require (
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pion/turn/v5 v5.1.0 // indirect
 	github.com/pion/webrtc/v4 v4.2.20 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/thesyncim/gopus v0.1.2 // indirect
 	github.com/thesyncim/skipset v0.19.0 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect

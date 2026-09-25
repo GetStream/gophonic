@@ -65,6 +65,8 @@ type Config struct {
 	TurnDetector speech.TurnDetector
 	Session      chat.Session // the conversation, its system prompt added
 	Synthesizer  speech.Synthesizer
+	// Listen configures transcription, such as the language spoken.
+	Listen speech.Options
 	// Voice selects the synthesizer's voice and language.
 	Voice speech.SpeakOptions
 	// Reply shapes the language model's answers.
@@ -79,6 +81,9 @@ type Config struct {
 	OnText func(role chat.Role, text string)
 	// OnError, when not nil, receives errors of the workers.
 	OnError func(error)
+	// OnStage, when not nil, receives each reply's progress from the
+	// moment the turn ended: "transcribed", "first text", "first audio".
+	OnStage func(stage string, elapsed time.Duration)
 }
 
 // Cascade is a speech.Duplex made of lanes; see the package comment.
@@ -379,14 +384,21 @@ func (c *Cascade) respond() {
 		c.mu.Lock()
 		c.cancel = cancel
 		c.mu.Unlock()
+		began := time.Now()
+		trace := func(stage string) {
+			if c.cfg.OnStage != nil {
+				c.cfg.OnStage(stage, time.Since(began))
+			}
+		}
 		c.played.Store(0)
 		mark := c.cfg.Session.Checkpoint()
 		text := j.say
 		if j.audio != nil {
-			if err := c.cfg.Transcriber.Transcribe(ctx, j.audio, speech.Options{}, &t); err != nil {
+			if err := c.cfg.Transcriber.Transcribe(ctx, j.audio, c.cfg.Listen, &t); err != nil {
 				c.finish(cancel, err)
 				continue
 			}
+			trace("transcribed")
 			text = strings.TrimSpace(string(t.Text))
 			if text == "" || c.cfg.Addressed != nil && !c.cfg.Addressed(text) {
 				if text != "" && c.cfg.OnText != nil {
@@ -415,6 +427,9 @@ func (c *Cascade) respond() {
 					return nil, ctx.Err()
 				}
 			}, func(pcm []float32) error {
+				if c.play.len() == 0 && c.played.Load() == 0 {
+					trace("first audio")
+				}
 				c.play.write(pcm)
 				return ctx.Err()
 			})
@@ -422,6 +437,9 @@ func (c *Cascade) respond() {
 		var err error
 		if j.audio != nil {
 			err = c.cfg.Session.Reply(ctx, c.cfg.Reply, func(p []byte) error {
+				if reply.Len() == 0 {
+					trace("first text")
+				}
 				reply.Write(p)
 				select {
 				case pieces <- string(p):
