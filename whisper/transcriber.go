@@ -163,7 +163,7 @@ func (t *Transcriber) TranscribeWindowInto(pcm []float32, dst []byte) ([]byte, e
 	}
 	t.tokens = t.tokens[:promptLen]
 	for position, tokenID := range t.tokens {
-		if err := t.model.LogitsForTokenInto(tokenID, position, t.decoder, t.logits); err != nil {
+		if err := t.model.decodeTokenInto(tokenID, position, t.decoder, t.logits, position == promptLen-1); err != nil {
 			return dst, err
 		}
 	}

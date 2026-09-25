@@ -1,0 +1,182 @@
+{
+  "benchmark": "Benchmark(Transcribe|Decoder)/f16",
+  "iterations": 8,
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/stt-qwen-reference.test",
+      "sha256": "12b151ce1d9c22344428a14f9af7a73b4a8514237fa4568811edb422abe4df11"
+    },
+    "after": {
+      "path": "/private/tmp/stt-qwen-final.test",
+      "sha256": "0a3a8f279b07b7ed7691cd20c9226a69faf4bc54e98ca2b9dd572c7134cac462"
+    }
+  },
+  "samples": [
+    {
+      "block": 0,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 666254088.0,
+        "BenchmarkTranscribe/f16/zh-16": 252384240.0,
+        "BenchmarkDecoder/f16/prefill-16": 144938755.0,
+        "BenchmarkDecoder/f16/token-16": 15564912.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 666254088 ns/op\t         0.06057 RTF\t     198 B/op\t       2 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 252384240 ns/op\t         0.06004 RTF\t      42 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 144938755 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15564912 ns/op\nPASS\n"
+    },
+    {
+      "block": 0,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 666881078.0,
+        "BenchmarkTranscribe/f16/zh-16": 253675234.0,
+        "BenchmarkDecoder/f16/prefill-16": 150882922.0,
+        "BenchmarkDecoder/f16/token-16": 15483859.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 666881078 ns/op\t         0.06063 RTF\t     214 B/op\t       2 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 253675234 ns/op\t         0.06034 RTF\t      56 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 150882922 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15483859 ns/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 661554885.0,
+        "BenchmarkTranscribe/f16/zh-16": 248148505.0,
+        "BenchmarkDecoder/f16/prefill-16": 144993547.0,
+        "BenchmarkDecoder/f16/token-16": 15729870.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 661554885 ns/op\t         0.06014 RTF\t     200 B/op\t       2 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 248148505 ns/op\t         0.05903 RTF\t      56 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 144993547 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15729870 ns/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 663515750.0,
+        "BenchmarkTranscribe/f16/zh-16": 249623844.0,
+        "BenchmarkDecoder/f16/prefill-16": 150639630.0,
+        "BenchmarkDecoder/f16/token-16": 15872010.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 663515750 ns/op\t         0.06032 RTF\t     128 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 249623844 ns/op\t         0.05938 RTF\t      56 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 150639630 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15872010 ns/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 695816255.0,
+        "BenchmarkTranscribe/f16/zh-16": 262983344.0,
+        "BenchmarkDecoder/f16/prefill-16": 150343516.0,
+        "BenchmarkDecoder/f16/token-16": 15689734.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 695816255 ns/op\t         0.06326 RTF\t     110 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 262983344 ns/op\t         0.06256 RTF\t      70 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 150343516 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15689734 ns/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 690551302.0,
+        "BenchmarkTranscribe/f16/zh-16": 270244745.0,
+        "BenchmarkDecoder/f16/prefill-16": 156445500.0,
+        "BenchmarkDecoder/f16/token-16": 16457047.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 690551302 ns/op\t         0.06278 RTF\t     170 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 270244745 ns/op\t         0.06428 RTF\t      98 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 156445500 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  16457047 ns/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 695108875.0,
+        "BenchmarkTranscribe/f16/zh-16": 252349552.0,
+        "BenchmarkDecoder/f16/prefill-16": 151474031.0,
+        "BenchmarkDecoder/f16/token-16": 15381125.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 695108875 ns/op\t         0.06319 RTF\t     160 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 252349552 ns/op\t         0.06003 RTF\t      84 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 151474031 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15381125 ns/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 671504969.0,
+        "BenchmarkTranscribe/f16/zh-16": 248902714.0,
+        "BenchmarkDecoder/f16/prefill-16": 148242583.0,
+        "BenchmarkDecoder/f16/token-16": 16164875.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 671504969 ns/op\t         0.06105 RTF\t     200 B/op\t       2 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 248902714 ns/op\t         0.05921 RTF\t      70 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 148242583 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  16164875 ns/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 679701573.0,
+        "BenchmarkTranscribe/f16/zh-16": 258525057.0,
+        "BenchmarkDecoder/f16/prefill-16": 153612182.0,
+        "BenchmarkDecoder/f16/token-16": 15728005.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 679701573 ns/op\t         0.06179 RTF\t     192 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 258525057 ns/op\t         0.06150 RTF\t      84 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 153612182 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15728005 ns/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 685718609.0,
+        "BenchmarkTranscribe/f16/zh-16": 259712068.0,
+        "BenchmarkDecoder/f16/prefill-16": 155425651.0,
+        "BenchmarkDecoder/f16/token-16": 15494667.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 685718609 ns/op\t         0.06234 RTF\t     222 B/op\t       2 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 259712068 ns/op\t         0.06178 RTF\t     126 B/op\t       1 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 155425651 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  15494667 ns/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 726123609.0,
+        "BenchmarkTranscribe/f16/zh-16": 280538588.0,
+        "BenchmarkDecoder/f16/prefill-16": 164102151.0,
+        "BenchmarkDecoder/f16/token-16": 16505141.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 726123609 ns/op\t         0.06601 RTF\t     114 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 280538588 ns/op\t         0.06673 RTF\t      56 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 164102151 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  16505141 ns/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkTranscribe/f16/jfk-16": 788618401.0,
+        "BenchmarkTranscribe/f16/zh-16": 313578630.0,
+        "BenchmarkDecoder/f16/prefill-16": 184290422.0,
+        "BenchmarkDecoder/f16/token-16": 17534797.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkTranscribe/f16/jfk-16         \t       8\t 788618401 ns/op\t         0.07169 RTF\t     138 B/op\t       1 allocs/op\nBenchmarkTranscribe/f16/zh-16          \t       8\t 313578630 ns/op\t         0.07459 RTF\t      70 B/op\t       0 allocs/op\nBenchmarkDecoder/f16/prefill-16        \t       8\t 184290422 ns/op\nBenchmarkDecoder/f16/token-16          \t       8\t  17534797 ns/op\nPASS\n"
+    }
+  ],
+  "summary": {
+    "BenchmarkTranscribe/f16/jfk-16": {
+      "before_median_ms": 675.603271,
+      "after_median_ms": 688.1349555,
+      "after_over_before_95pct": [
+        0.9543531641988289,
+        1.035150754037086
+      ]
+    },
+    "BenchmarkTranscribe/f16/zh-16": {
+      "before_median_ms": 255.4546485,
+      "after_median_ms": 256.693651,
+      "after_over_before_95pct": [
+        0.9443229754958737,
+        1.0276116384009475
+      ]
+    },
+    "BenchmarkDecoder/f16/prefill-16": {
+      "before_median_ms": 150.491573,
+      "after_median_ms": 153.449841,
+      "after_over_before_95pct": [
+        0.9456210109585306,
+        1.0405869449002376
+      ]
+    },
+    "BenchmarkDecoder/f16/token-16": {
+      "before_median_ms": 15.8000075,
+      "after_median_ms": 15.6122685,
+      "after_over_before_95pct": [
+        0.9546929376193753,
+        1.0476277112111727
+      ]
+    }
+  }
+}

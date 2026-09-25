@@ -43,6 +43,7 @@ func main() {
 	if err != nil {
 		fatal(err.Error())
 	}
+	defer model.Close()
 	worker, err := whisper.NewTranscriberWithWorkers(model, threads)
 	if err != nil {
 		fatal(err.Error())

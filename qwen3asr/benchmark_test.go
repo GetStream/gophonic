@@ -92,6 +92,9 @@ func BenchmarkDecoder(b *testing.B) {
 			}
 		})
 		b.Run(format+"/token", func(b *testing.B) {
+			if err := m.eval.HiddenLastExtendEmbedInto(kv, 0, tr.ids, embeds, tr.hidden, tr.lm); err != nil {
+				b.Fatal(err)
+			}
 			step := tr.gen[:1]
 			for b.Loop() {
 				if err := m.eval.HiddenLastExtendInto(kv, len(tr.ids), step, tr.hidden, tr.lm); err != nil {

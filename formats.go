@@ -97,7 +97,7 @@ func openWhisper(path string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Provide(NewModel("whisper", nil), func() (speech.Transcriber, error) {
+	return Provide(NewModel("whisper", m.Close), func() (speech.Transcriber, error) {
 		if opts.Threads == 0 {
 			return whisper.NewTranscriber(m)
 		}

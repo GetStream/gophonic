@@ -9,6 +9,7 @@ import (
 	"math"
 	"runtime"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
@@ -38,6 +39,8 @@ type attentionItem struct {
 // floating-point reassociation. It belongs to one Evaluator; it is not safe for
 // concurrent use.
 type PrefixKV struct {
+	memory       *arena.Arena
+	cleanup      runtime.Cleanup
 	owner        *Evaluator
 	tokens       []int
 	keys, values [][]float32 // per layer, [capacity][kvDim]
@@ -79,20 +82,53 @@ func (e *Evaluator) NewPrefixKV(capacity int) (*PrefixKV, error) {
 			return nil, err
 		}
 		kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity, gpu: pre}
-		runtime.AddCleanup(kv, func(p *gpuPrefix) { p.release() }, pre)
+		kv.cleanup = runtime.AddCleanup(kv, func(p *gpuPrefix) { p.release() }, pre)
 		return kv, nil
 	}
+	// One mapping holds every layer; no per-layer heap payloads or holes.
+	if capacity > int(^uint(0)>>1)/c.kvDim {
+		return nil, arena.ErrSize
+	}
+	lengths := make([]int, 2*c.layers)
+	for i := range lengths {
+		lengths[i] = capacity * c.kvDim
+	}
+	memory, err := arena.New(lengths...)
+	if err != nil {
+		return nil, err
+	}
 	kv := &PrefixKV{owner: e, tokens: make([]int, 0, capacity), capacity: capacity,
-		keys: make([][]float32, c.layers), values: make([][]float32, c.layers)}
+		keys: make([][]float32, c.layers), values: make([][]float32, c.layers), memory: memory}
 	for l := range c.layers {
-		kv.keys[l] = make([]float32, capacity*c.kvDim)
-		kv.values[l] = make([]float32, capacity*c.kvDim)
+		kv.keys[l] = memory.Take(capacity * c.kvDim)
+		kv.values[l] = memory.Take(capacity * c.kvDim)
 	}
 	return kv, nil
 }
 
+// Close releases the cache's storage. The caller must wait for every
+// evaluation or prefix copy using this cache before calling Close. Repeated
+// Close calls are harmless; the cache cannot be reused afterwards.
+func (kv *PrefixKV) Close() error {
+	if kv == nil {
+		return nil
+	}
+	if kv.gpu != nil {
+		kv.cleanup.Stop()
+		kv.gpu.release()
+		kv.gpu = nil
+	}
+	err := kv.memory.Close()
+	kv.memory = nil
+	kv.keys, kv.values, kv.packs, kv.tokens = nil, nil, nil, nil
+	kv.capacity = 0
+	return err
+}
+
 // CopyPrefix makes kv hold the first p tokens of src.
 func (kv *PrefixKV) CopyPrefix(src *PrefixKV, p int) {
+	defer runtime.KeepAlive(kv)
+	defer runtime.KeepAlive(src)
 	c := &kv.owner.m.cfg
 	n := p * c.kvDim
 	if kv.gpu != nil {
@@ -240,6 +276,7 @@ func (e *Evaluator) LogitsRowsInto(hidden, dst []float32, ws *Workspace) error {
 // value per vocabulary entry. The weights must have been loaded with
 // LoadOptions.Head. Warm calls allocate nothing.
 func (e *Evaluator) LogitsInto(hidden, dst []float32, ws *Workspace) error {
+	defer runtime.KeepAlive(ws)
 	if e == nil || e.m == nil || ws == nil || ws.owner != e {
 		return errors.New("qwen3: nil evaluator or foreign workspace")
 	}
@@ -311,6 +348,7 @@ func (e *Evaluator) HiddenLastSharedInto(kv *PrefixKV, seqs [][]int, dst [][]flo
 // keys and values, per-tile activation scratch, and optionally a pool of
 // persistent workers. It belongs to one evaluator and one concurrent call.
 type Workspace struct {
+	memory                          *arena.Arena
 	h, norm, q, ctx, attn, gate, up []float32
 	keys, values                    []float32 // K and V projections of the current layer, [rows][kvDim]
 	rowStart, rowPos, rowLen        []int32   // each row's sequence start, position, and sequence length
@@ -364,8 +402,8 @@ func (e *Evaluator) NewWorkspace(workers int) (*Workspace, error) {
 		ws.pool = newWorkerPool(workers)
 	}
 	c := &e.m.cfg
-	ws.attnScratch = make([]attentionScratch, workers)
-	ws.scratch = make([]*q8gemm.Scratch, workers)
+	ws.attnScratch = make([]attentionScratch, min(workers, maxSMEWorkers))
+	ws.scratch = make([]*q8gemm.Scratch, min(workers, maxSMEWorkers))
 	for i := range ws.scratch {
 		ws.scratch[i] = q8gemm.NewScratch(max(c.hidden, c.heads*c.headDim, c.intermediate))
 	}
@@ -375,16 +413,20 @@ func (e *Evaluator) NewWorkspace(workers int) (*Workspace, error) {
 // Close stops the workspace's worker goroutines. The workspace must not be
 // used afterwards.
 func (ws *Workspace) Close() error {
-	if ws != nil && ws.gpu != nil {
+	if ws == nil {
+		return nil
+	}
+	if ws.gpu != nil {
 		ws.gpu.release()
 		ws.gpu = nil
 	}
-	if ws == nil || ws.pool == nil {
-		return nil
-	}
 	ws.pool.close()
 	ws.pool = nil
-	return nil
+	err := ws.memory.Close()
+	ws.memory = nil
+	ws.h, ws.norm, ws.q, ws.ctx, ws.attn, ws.gate, ws.up, ws.keys, ws.values = nil, nil, nil, nil, nil, nil, nil, nil, nil
+	ws.capacity = 0
+	return err
 }
 
 // HiddenLastInto evaluates ids with causal attention and writes the
@@ -406,6 +448,7 @@ func (e *Evaluator) HiddenLastInto(ids []int, dst []float32, ws *Workspace) erro
 // floating-point reassociation. After the workspace has seen this total token
 // count, the method allocates no heap memory.
 func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Workspace) error {
+	defer runtime.KeepAlive(ws)
 	if e == nil || e.m == nil || ws == nil {
 		return errors.New("qwen3: nil evaluator or workspace")
 	}
@@ -656,15 +699,23 @@ func (ws *Workspace) ensure(c *modelConfig, n, positions int) error {
 				return errors.New("qwen3: workspace size overflows int")
 			}
 		}
-		ws.h = make([]float32, capN*c.hidden)
-		ws.norm = make([]float32, capN*c.hidden)
-		ws.q = make([]float32, capN*qdim)
-		ws.ctx = make([]float32, capN*qdim)
-		ws.attn = make([]float32, capN*c.hidden)
-		ws.gate = make([]float32, capN*c.intermediate)
-		ws.up = make([]float32, capN*c.intermediate)
-		ws.keys = make([]float32, capN*c.kvDim)
-		ws.values = make([]float32, capN*c.kvDim)
+		memory, err := arena.New(capN*c.hidden, capN*c.hidden, capN*qdim, capN*qdim,
+			capN*c.hidden, capN*c.intermediate, capN*c.intermediate, capN*c.kvDim, capN*c.kvDim)
+		if err != nil {
+			return err
+		}
+		old := ws.memory
+		ws.memory = memory
+		ws.h = memory.Take(capN * c.hidden)
+		ws.norm = memory.Take(capN * c.hidden)
+		ws.q = memory.Take(capN * qdim)
+		ws.ctx = memory.Take(capN * qdim)
+		ws.attn = memory.Take(capN * c.hidden)
+		ws.gate = memory.Take(capN * c.intermediate)
+		ws.up = memory.Take(capN * c.intermediate)
+		ws.keys = memory.Take(capN * c.kvDim)
+		ws.values = memory.Take(capN * c.kvDim)
+		_ = old.Close()
 		ws.rowStart = make([]int32, capN)
 		ws.rowPos = make([]int32, capN)
 		ws.rowLen = make([]int32, capN)

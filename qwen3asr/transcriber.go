@@ -114,7 +114,12 @@ func (t *Transcriber) Close() error {
 	}
 	t.closed = true
 	t.closeEncoder()
-	return t.lm.Close()
+	err := t.lm.Close()
+	if e := t.kv.Close(); err == nil {
+		err = e
+	}
+	t.kv = nil
+	return err
 }
 
 // Transcribe implements speech.Transcriber. Options.Language forces the
@@ -373,6 +378,7 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 		if err != nil {
 			return fmt.Errorf("qwen3asr: %w", err)
 		}
+		_ = t.kv.Close()
 		t.kv = kv
 	}
 	keep := min(t.kv.CommonPrefix(t.ids), prompt-1)

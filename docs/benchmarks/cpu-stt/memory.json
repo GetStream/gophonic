@@ -1,0 +1,46 @@
+{
+  "whisper": {
+    "reference": {
+      "loaded_model_heap_mib": 144.066,
+      "warm_lane_heap_mib": {
+        "1": 333.774,
+        "2": 464.481
+      },
+      "peak_rss_bytes": 462487552,
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_benchmark_test.go:113: lanes=1 live_heap_mib=333.774\n    cpu_benchmark_test.go:113: lanes=2 live_heap_mib=464.481\n    cpu_benchmark_test.go:115: loaded_model_heap_mib=144.066\n--- PASS: TestCPUMemoryFootprint (0.38s)\nPASS\n",
+      "rusage": "        0.38 real         0.81 user         0.08 sys\n           462487552  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               28458  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                 123  signals received\n                  87  voluntary context switches\n               13809  involuntary context switches\n         10917039570  instructions retired\n          3276021613  cycles elapsed\n           458883936  peak memory footprint\n"
+    },
+    "final": {
+      "loaded_model_heap_mib": 0.02,
+      "warm_lane_heap_mib": {
+        "1": 153.637,
+        "2": 219.211
+      },
+      "peak_rss_bytes": 432586752,
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_benchmark_test.go:113: lanes=1 live_heap_mib=153.637\n    cpu_benchmark_test.go:113: lanes=2 live_heap_mib=219.211\n    cpu_benchmark_test.go:115: loaded_model_heap_mib=0.020\n--- PASS: TestCPUMemoryFootprint (0.38s)\nPASS\n",
+      "rusage": "        0.38 real         0.80 user         0.09 sys\n           432586752  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               26820  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                  64  signals received\n                   1  voluntary context switches\n               13898  involuntary context switches\n         10910988745  instructions retired\n          3318262129  cycles elapsed\n           428950320  peak memory footprint\n"
+    }
+  },
+  "qwen": {
+    "reference": {
+      "loaded_model_heap_mib": 3902.88,
+      "warm_lane_heap_mib": {
+        "1": 4272.958,
+        "2": 4642.255
+      },
+      "peak_rss_bytes": 4600020992,
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:41: lanes=1 live_heap_mib=4272.958\n    cpu_memory_test.go:41: lanes=2 live_heap_mib=4642.255\n    cpu_memory_test.go:43: loaded_model_heap_mib=3902.880\n--- PASS: TestCPUMemoryFootprint (2.46s)\nPASS\n",
+      "rusage": "        2.84 real        17.42 user         0.99 sys\n          4600020992  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              283041  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1264  signals received\n                1331  voluntary context switches\n               86391  involuntary context switches\n        239165253309  instructions retired\n         63873537654  cycles elapsed\n          4598468688  peak memory footprint\n"
+    },
+    "final": {
+      "loaded_model_heap_mib": 12.306,
+      "warm_lane_heap_mib": {
+        "1": 100.308,
+        "2": 187.541
+      },
+      "peak_rss_bytes": 4581310464,
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:41: lanes=1 live_heap_mib=100.308\n    cpu_memory_test.go:41: lanes=2 live_heap_mib=187.541\n    cpu_memory_test.go:43: loaded_model_heap_mib=12.306\n--- PASS: TestCPUMemoryFootprint (2.34s)\nPASS\n",
+      "rusage": "        2.34 real        17.22 user         0.96 sys\n          4581310464  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              282397  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1303  signals received\n                1600  voluntary context switches\n               71754  involuntary context switches\n        230333290621  instructions retired\n         63764879347  cycles elapsed\n          4476391528  peak memory footprint\n"
+    }
+  }
+}
