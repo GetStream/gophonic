@@ -4,8 +4,8 @@
 
 #include "textflag.h"
 
-// func smeMulBlock(a *float32, lda, rows, k int, b *float32, n int, c *float32, ldc int, scratch *float32) (retries int)
-TEXT ·smeMulBlock(SB), NOSPLIT, $0-80
+// func smeMulBlock(a *float32, lda, rows, k int, b *float32, n int, c *float32, ldc int, scratch *float32, panelK int) (retries int)
+TEXT ·smeMulBlock(SB), NOSPLIT, $0-88
 	MOVD	a+0(FP), R0
 	MOVD	lda+8(FP), R1
 	MOVD	rows+16(FP), R2
@@ -15,6 +15,7 @@ TEXT ·smeMulBlock(SB), NOSPLIT, $0-80
 	MOVD	c+48(FP), R6
 	MOVD	ldc+56(FP), R7
 	MOVD	scratch+64(FP), R8
+	MOVD	panelK+72(FP), R15
 	WORD	$0xd503477f	// smstart
 	WORD	$0x2598e3e0	// ptrue p0.s
 	WORD	$0x25a07810	// ptrue pn8.s
@@ -48,7 +49,7 @@ TEXT ·smeMulBlock(SB), NOSPLIT, $0-80
 	WORD	$0x91004129	// add x9, x9, #0x10
 	WORD	$0xeb03013f	// cmp x9, x3
 	WORD	$0x54fffccb	// b.lt 0x18
-	WORD	$0xd37ae46f	// lsl x15, x3, #6
+	WORD	$0xd37ae5ef	// lsl x15, x15, #6
 	WORD	$0xd280000e	// mov x14, #0x0 ; =0
 	WORD	$0xaa0403eb	// mov x11, x4
 	WORD	$0x910041cd	// add x13, x14, #0x10
@@ -168,7 +169,7 @@ TEXT ·smeMulBlock(SB), NOSPLIT, $0-80
 	WORD	$0x54fff1ab	// b.lt 0x8c
 	WORD	$0xd503467f	// smstop
 	WORD	$0xaa1103e0	// mov x0, x17
-	MOVD	R0, retries+72(FP)
+	MOVD	R0, retries+80(FP)
 	RET
 
 // func smeVectorF32(x *float32, k int, w *float32, n int, y *float32, kp int) (retries int)

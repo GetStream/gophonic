@@ -7,6 +7,15 @@ packing and multiplication allocate no memory. Treat packed model weights as
 immutable after initialization. Dynamic attention keys and values can reuse a
 preallocated `PackedB` after its previous multiplication has completed.
 
+`NewPackedBBuffer` instead borrows a bounded numeric buffer whose owner must
+outlive all calls. It cannot grow beyond that buffer. `NewPackedBRows` adds a
+fixed physical row pitch for append-only KV value pages: `PackRows` writes
+new rows, `CopyRowsFrom` copies or truncates initialized rows, and multiplication
+ignores unused capacity. SME receives the physical panel pitch separately
+from logical K; portable dispatch uses existing single-panel kernels. The
+headers are ordinary Go objects, while the backing buffer may belong to an
+arena. Never store Go pointers in that numeric storage.
+
 `PackedB.Mul` runs on the calling goroutine. `Executor.Mul` uses persistent
 workers with a configurable limit of 1–64, including the caller. Every shard
 owns complete output rows, and boundaries stay on four-row tiles. This keeps

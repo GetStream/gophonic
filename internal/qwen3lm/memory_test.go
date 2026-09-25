@@ -66,3 +66,23 @@ func TestArenaGrowthPrefixCopyAndClose(t *testing.T) {
 		t.Fatal("Close retained storage")
 	}
 }
+
+// Recover keys with identity multiplication so the test observes every cached
+// value without depending on the packed layout or its private backing slices.
+func packedPrefixKeys(t *testing.T, kv *PrefixKV, layer int) []float32 {
+	t.Helper()
+	hd := kv.owner.m.cfg.headDim
+	n := len(kv.tokens)
+	identity := make([]float32, hd*hd)
+	for i := range hd {
+		identity[i*hd+i] = 1
+	}
+	out := make([]float32, len(kv.packs[layer].keysT)*hd*n)
+	for g, k := range kv.packs[layer].keysT {
+		if err := k.Mul(out[g*hd*n:], n, identity, hd, hd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.KeepAlive(kv)
+	return out
+}
