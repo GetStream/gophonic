@@ -6,7 +6,6 @@ package qwen3asr
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/speech"
+	"github.com/thesyncim/vibejson"
 )
 
 // reference is testdata/qwen3asr/reference.json, written by
@@ -41,7 +41,7 @@ func loadReference(t testing.TB) *reference {
 		t.Fatal(err)
 	}
 	var r reference
-	if err := json.Unmarshal(raw, &r); err != nil {
+	if err := vibejson.Unmarshal(raw, &r); err != nil {
 		t.Fatal(err)
 	}
 	return &r

@@ -32,7 +32,7 @@ var (
 	clsNSString uintptr
 
 	selName, selUTF8, selStringWithUTF8, selRelease,
-	selNewQueue, selNewLibrary, selNewFunction, selNewPipeline, selNewBuffer,
+	selNewQueue, selNewLibrary, selNewFunction, selNewPipeline, selNewBuffer, selNewBufferNoCopy,
 	selContents, selMaxThreads, selExecWidth, selDescription,
 	selCommandBuffer, selEncoder, selEncoderType, selCommit, selWait, selStatus, selError,
 	selSetPipeline, selSetBuffer, selSetBytes, selDispatch, selBarrier, selEndEncoding,
@@ -85,6 +85,7 @@ func load() error {
 	selNewFunction = sel("newFunctionWithName:")
 	selNewPipeline = sel("newComputePipelineStateWithFunction:error:")
 	selNewBuffer = sel("newBufferWithLength:options:")
+	selNewBufferNoCopy = sel("newBufferWithBytesNoCopy:length:options:deallocator:")
 	selContents = sel("contents")
 	selMaxThreads = sel("maxTotalThreadsPerThreadgroup")
 	selExecWidth = sel("threadExecutionWidth")
@@ -264,6 +265,25 @@ func (d *Device) Buffer(n int) (*Buffer, error) {
 	}
 	p := send0(b, selContents)
 	return &Buffer{b: b, data: unsafe.Slice((*byte)(pointer(p)), n)}, nil
+}
+
+// PageSize is the alignment Wrap requires.
+const PageSize = 16 << 10
+
+// Wrap makes a shared buffer of existing memory, such as a memory-mapped
+// file, without copying it. mem must start on a PageSize boundary and its
+// length must be a multiple of PageSize. The memory must stay mapped until
+// the buffer is released; the GPU only writes it if the caller dispatches
+// writes to it, and read-only mappings must only be read.
+func (d *Device) Wrap(mem []byte) (*Buffer, error) {
+	if len(mem) == 0 || len(mem)%PageSize != 0 || uintptr(unsafe.Pointer(&mem[0]))%PageSize != 0 {
+		return nil, errors.New("metal: Wrap needs page-aligned memory")
+	}
+	b := send(d.dev, selNewBufferNoCopy, uintptr(unsafe.Pointer(&mem[0])), uintptr(len(mem)), 0, 0)
+	if b == 0 {
+		return nil, errors.New("metal: cannot wrap memory")
+	}
+	return &Buffer{b: b, data: mem}, nil
 }
 
 // Bytes returns the buffer's memory, shared with the GPU.

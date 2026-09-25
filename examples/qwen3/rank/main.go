@@ -6,14 +6,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/GetStream/gophonic/clm"
 	"github.com/GetStream/gophonic/qwen3"
+	"github.com/thesyncim/vibejson"
 )
 
 func main() {
@@ -52,5 +53,21 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(results)
+	return writeJSON(os.Stdout, &results)
+}
+
+// writeJSON streams v to out as one line of JSON.
+func writeJSON[T any](out io.Writer, v *T) error {
+	enc, err := vibejson.CompileEncoder[T](vibejson.EncoderOptions{})
+	if err != nil {
+		return err
+	}
+	w := vibejson.NewWriter(out)
+	if err := vibejson.EncodeTo(w, enc, v); err != nil {
+		return err
+	}
+	if err := w.Newline(); err != nil {
+		return err
+	}
+	return w.Flush()
 }

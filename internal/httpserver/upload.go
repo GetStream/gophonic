@@ -20,6 +20,7 @@ var (
 
 // upload aliases the caller's bounded request body. No part bytes are copied.
 type upload struct {
+	model       []byte // the model to run, or empty for the default
 	name        []byte
 	audio       []byte
 	prompt      []byte
@@ -101,11 +102,10 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 			}
 			result.name, result.audio = filename, value
 		case bytes.Equal(field, []byte("model")):
-			// The server runs the model it was started with; the name only
-			// has to be plausible.
 			if len(value) > 128 {
 				return upload{}, errValue
 			}
+			result.model = value
 		case bytes.Equal(field, []byte("response_format")):
 			if bytes.Equal(value, []byte("text")) {
 				result.format = 1

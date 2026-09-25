@@ -4,7 +4,6 @@
 package whisper
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/internal/whispergemm"
+	"github.com/thesyncim/vibejson"
 )
 
 var decoderBenchmarkSink int
@@ -33,7 +33,7 @@ func decoderBenchmarkFixture(b *testing.B) (*Model, []float32, decoderOracle) {
 		b.Fatal(err)
 	}
 	var oracle decoderOracle
-	if err := json.Unmarshal(manifest, &oracle); err != nil {
+	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		b.Fatal(err)
 	}
 	return m, encoder, oracle

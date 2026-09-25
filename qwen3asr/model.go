@@ -95,7 +95,7 @@ func IsModelDir(dir string) bool {
 // Load reads an official Qwen3-ASR snapshot directory (Qwen/Qwen3-ASR-1.7B
 // or Qwen/Qwen3-ASR-0.6B from Hugging Face), for the GPU where Metal is
 // present and for the CPU otherwise.
-func Load(dir string, opts Options) (*Model, error) {
+func Load(dir string, opts Options) (_ *Model, err error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
@@ -150,10 +150,20 @@ func Load(dir string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil && genc != nil {
+			genc.release()
+		}
+	}()
 	lm, err := qwen3lm.Load(dir, qwen3lm.LoadOptions{Format: opts.Format, Prefix: "thinker.model.", Config: &text, Head: head})
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: decoder: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			lm.Release()
+		}
+	}()
 	eval, err := qwen3lm.NewEvaluator(lm)
 	if err != nil {
 		return nil, err

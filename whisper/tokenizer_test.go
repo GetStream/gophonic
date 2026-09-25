@@ -4,12 +4,13 @@
 package whisper
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/thesyncim/vibejson"
 )
 
 func TestEnglishTokenizerWhisperSpecialIDs(t *testing.T) {
@@ -55,7 +56,7 @@ func TestTokenizerOfficialJFKTokenTranscript(t *testing.T) {
 		Transcript string
 		Tokens     []int
 	}
-	if err := json.Unmarshal(data, &oracle); err != nil {
+	if err := vibejson.Unmarshal(data, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	wantText := " " + oracle.Transcript

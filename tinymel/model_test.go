@@ -4,7 +4,6 @@
 package tinymel
 
 import (
-	"encoding/json"
 	"math"
 	"os"
 	"runtime"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/testmodels"
+	"github.com/thesyncim/vibejson"
 )
 
 func TestTinyQuantizeDynamicMatchesONNXRules(t *testing.T) {
@@ -171,7 +171,7 @@ func checkTinyConvStages(t *testing.T, model *Model, features []float32, ws *Wor
 		t.Fatal(err)
 	}
 	var oracle tinyOracleFile
-	if err := json.Unmarshal(oracleBytes, &oracle); err != nil {
+	if err := vibejson.Unmarshal(oracleBytes, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	var tone *struct {

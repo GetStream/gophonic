@@ -4,8 +4,8 @@
 package transcriptformat
 
 import (
-	"encoding/json"
 	"github.com/GetStream/gophonic/speech"
+	"github.com/thesyncim/vibejson"
 	"strings"
 	"testing"
 )
@@ -18,7 +18,7 @@ func TestAppendJSONStringControlBytes(t *testing.T) {
 		t.Fatalf("Go-only escape in JSON: %s", got)
 	}
 	var decoded string
-	if err := json.Unmarshal(got, &decoded); err != nil {
+	if err := vibejson.Unmarshal(got, &decoded); err != nil {
 		t.Fatal(err)
 	}
 	if decoded != string(input) {

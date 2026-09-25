@@ -10,7 +10,7 @@ implementation of one audited architecture.
 flowchart TB
     subgraph app [Applications, cmd/gophonic, cmd/gophonic-server]
     end
-    app --> open[gophonic.Open]
+    app --> open[gophonic.Open, gophonic.Pool]
     app --> speech[speech: Transcriber, TurnDetector, Transcript, Resampler]
     open --> qwen3asr
     open --> whisper
@@ -35,6 +35,7 @@ flowchart TB
         qwen3lm[qwen3lm: Qwen3 transformer]
         kernels[whispergemm, q8gemm, q8gemv, vec, metal]
         safetensors
+        wcache[wcache, mmap: prepared-weight cache]
     end
     qwen3asr --> mel
     qwen3asr & whisper --> nn
@@ -44,6 +45,7 @@ flowchart TB
     mel --> resample
     speech --> resample
     qwen3lm --> safetensors
+    qwen3lm & qwen3asr --> wcache
     whisper & smartturn & tinymel & qwen3lm --> kernels
 ```
 
@@ -59,7 +61,8 @@ flowchart TB
   it; the built-in formats are one table in `formats.go`, and `Register` adds
   third-party ones. A loaded `Model` provides lanes of the interface types
   its format declares, `speech`'s or any other, so a new capability needs no
-  change to gophonic. The package also hosts the turn detectors' standalone frontend,
+  change to gophonic. `Pool` shares models among callers and closes idle
+  ones. The package also hosts the turn detectors' standalone frontend,
   which external backends reuse.
 - **Numerical work is shared, not duplicated.** One FFT, one mel-bank
   builder, and one resampling filter serve every model; one Qwen3 core serves
@@ -184,6 +187,33 @@ pass for the tests of every package on the core. The
 [qwen3 README](../qwen3/README.md) and the
 [performance report](clm-performance.md) describe the kernels and results.
 
+## Loading
+
+A loader converts a checkpoint's weights into the layout its kernels read
+(GPU formats rotate, quantize, and interleave Qwen3's projections; the
+Qwen3-ASR encoder stores BF16 rows as scaled FP16) once, into an entry of
+`internal/wcache`, and every later load maps the entry. The cache
+guarantees three things:
+
+- **The GPU reads only complete, read-only mappings.** A first load fills a
+  writable mapping of a temporary file, which the GPU never sees; `Commit`
+  writes it to disk, marks it complete, renames it into place, and maps it
+  again read-only. Only then does the loader make Metal buffers of it
+  (`metal.Device.Wrap`, `newBufferWithBytesNoCopy`), 16 KiB-aligned regions
+  as Apple silicon requires, the way llama.cpp maps GGUF files.
+- **One builder, no partial entries.** A lock file per checkpoint and kind
+  makes concurrent loaders wait for the one building an entry. The payload
+  is synced before the completion mark, and a crash leaves at most a
+  temporary file.
+- **Keys cover everything the bytes depend on:** the checkpoint's path, its
+  files' names, sizes, and modification times, the format, and a layout
+  version that each loader bumps when its output changes.
+
+Loaders hand each finished region to `File.Done`, which starts writing it
+out while later regions are converted, so building an entry costs little
+more than the conversion. Tensors used as stored, such as embedding tables,
+are mapped from the safetensors file directly.
+
 ## SIMD dispatch
 
 `GOEXPERIMENT=simd` selects tiled FP32 kernels on ARM64 and AMD64 through Go
@@ -218,7 +248,7 @@ affects quantization or recurrence.
 | Concern | Location |
 | --- | --- |
 | Model-independent interfaces, transcripts, languages, resampler | `speech/` |
-| Format detection and lanes; standalone turn frontend | `gophonic.go`, `features.go` |
+| Format detection and lanes; model pool; standalone turn frontend | `gophonic.go`, `formats.go`, `pool.go`, `features.go` |
 | Log-mel frontends, FFT, mel banks | `internal/mel/` |
 | 16 kHz polyphase filter | `internal/resample/` |
 | Qwen3-ASR loader, audio encoder, prompt, decoding, output rules | `qwen3asr/` |
@@ -227,7 +257,7 @@ affects quantization or recurrence.
 | TinyMelNet weights, graph, quantization, GRU, workers | `tinymel/` |
 | Qwen3 text tasks and cache | `qwen3/` |
 | Qwen3 transformer, loader, tokenizer, GPU, GPTQ | `internal/qwen3lm/` |
-| Safetensors reader | `internal/safetensors/` |
+| Safetensors reader, file mappings, prepared-weight cache | `internal/safetensors/`, `internal/mmap/`, `internal/wcache/` |
 | CLM ranking heads | `clm/` |
 | SME, NEON, and scalar kernels | `internal/whispergemm/`, `internal/q8gemm/`, `internal/q8gemv/`, `internal/vec/` |
 | Encoder row kernels: exact GELU, LayerNorm, softmax exponential | `internal/nn/` |

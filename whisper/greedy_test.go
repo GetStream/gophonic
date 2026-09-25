@@ -6,10 +6,11 @@ package whisper
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/thesyncim/vibejson"
 )
 
 func TestGreedyEnglishPromptAndOfficialSuppression(t *testing.T) {
@@ -47,7 +48,7 @@ func TestGreedyEnglishPromptAndOfficialSuppression(t *testing.T) {
 	if len(suppressIDs) != 90 {
 		t.Fatalf("combined non-speech and control suppression count %d, want 90", len(suppressIDs))
 	}
-	encoded, err := json.Marshal(suppressIDs)
+	encoded, err := vibejson.Marshal(&suppressIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
