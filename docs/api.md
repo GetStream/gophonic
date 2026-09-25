@@ -33,10 +33,13 @@ case gophonic.TurnDetection:
 }
 ```
 
-`Open` recognizes the format from the path: an official Qwen3-ASR snapshot
-directory (`config.json` with `model_type` `qwen3_asr`), or a converted
-Whisper, Smart Turn, or TinyMelNet `.gophonic` bundle. It returns
-`ErrUnknownFormat` for anything else. `Model.Name` reports the architecture
+`Open` tries each registered format's `Match` and loads the path with the
+first that claims it. The built-in formats recognize an official Qwen3-ASR
+snapshot directory (`config.json` with `model_type` `qwen3_asr`) and converted
+Whisper, Smart Turn, and TinyMelNet `.gophonic` bundles; `Register` adds more
+([Add a backend](#add-a-backend)). It returns `ErrUnknownFormat` for anything
+no format claims. `Model.Close` releases the model's resources, such as GPU
+memory, once its lanes are closed. `Model.Name` reports the architecture
 (`"qwen3-asr"`, `"whisper"`, `"smart-turn"`, `"tinymel"`). Asking a model for
 the other kind of lane fails with `speech.ErrUnsupported`.
 
@@ -237,9 +240,30 @@ sample rate is warm, successful extraction does not allocate.
 ## Add a backend
 
 A new model implements `speech.TurnDetector` or `speech.Transcriber` in its
-own package and is passed to the application like a built-in lane. No
-registration is needed. This sketch assumes your package defines `LoadModel`,
-`NewScratch`, and `Model.PredictPCMInto`; those names are your backend's, not
+own package and is passed to the application like a built-in lane. To make
+`gophonic.Open` (and so the CLI and server) load it by path, register a
+format:
+
+```go
+gophonic.Register(gophonic.Format{
+	Name:  "my-turn",
+	Match: func(path string) bool { return strings.HasSuffix(path, ".myturn") },
+	Open: func(path string, opts gophonic.Options) (*gophonic.Model, error) {
+		model, err := LoadModel(path)
+		if err != nil {
+			return nil, err
+		}
+		return gophonic.NewTurnDetectionModel("my-turn", func() (speech.TurnDetector, error) {
+			return OpenSession(model, 0.5)
+		}, nil), nil
+	},
+})
+```
+
+Formats registered later are tried first, so a registered format can take
+over paths a built-in one would claim; `gophonic.Formats` lists them in
+order. This sketch assumes your package defines `LoadModel`, `NewScratch`,
+and `Model.PredictPCMInto`; those names are your backend's, not
 gophonic's:
 
 ```go
@@ -252,11 +276,7 @@ type Session struct {
 
 var _ speech.TurnDetector = (*Session)(nil)
 
-func OpenSession(path string, threshold float32) (*Session, error) {
-	model, err := LoadModel(path)
-	if err != nil {
-		return nil, err
-	}
+func OpenSession(model *Model, threshold float32) (*Session, error) {
 	return &Session{model: model, scratch: NewScratch(), threshold: threshold}, nil
 }
 

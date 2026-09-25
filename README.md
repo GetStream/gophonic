@@ -195,7 +195,7 @@ path stores every BF16 weight without rounding (0.99991). See the [package READM
 
 | Package | Contents |
 | --- | --- |
-| `gophonic` | `Open`, which recognizes and loads any supported model, and the turn detectors' standalone log-mel frontend |
+| `gophonic` | `Open` and the format registry it loads models through (`Register` adds formats), and the turn detectors' standalone log-mel frontend |
 | `speech` | `Transcriber`, `TurnDetector`, transcripts, predictions, languages, and the 16 kHz resampler |
 | `qwen3asr`, `whisper`, `smartturn`, `tinymel`, `qwen3`, `clm` | One model family each; model packages never import each other |
 | `internal/mel`, `internal/resample`, `internal/nn` | The log-mel frontends, the resampling filter, and the GELU, LayerNorm, and softmax kernels the encoders share |

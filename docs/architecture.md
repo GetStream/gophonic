@@ -54,9 +54,12 @@ flowchart TB
   including a third-party backend, can implement its interfaces.
 - **Model packages never import each other.** Whatever two models share (a
   frontend, a filter, a kernel, a transformer core) lives in `internal`.
-- **The root package only dispatches.** `gophonic.Open` reads a file's
-  signature and hands back lanes typed as `speech` interfaces. It also hosts
-  the turn detectors' standalone frontend, which external backends reuse.
+- **The root package only dispatches.** `gophonic.Open` asks each
+  registered `Format` whether it matches the path and lets the first one load
+  it; the built-in formats are one table in `formats.go`, and `Register` adds
+  third-party ones. The loaded `Model` hands back lanes typed as `speech`
+  interfaces. The package also hosts the turn detectors' standalone frontend,
+  which external backends reuse.
 - **Numerical work is shared, not duplicated.** One FFT, one mel-bank
   builder, and one resampling filter serve every model; one Qwen3 core serves
   every Qwen3 model.
