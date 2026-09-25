@@ -17,8 +17,8 @@ gophonic-server models/                                 # OpenAI-compatible API 
 | --- | --- | --- |
 | **Speech to text** | **Qwen3-ASR** 1.7B / 0.6B: 30 languages, 22 Chinese dialects | 11 s of audio in **226 ms** |
 | Speech to text, English | Whisper `tiny.en` / `base.en` / `small.en` | ~3× whisper.cpp on one core |
-| End of turn | Smart Turn v3.2, TinyMelNet | **3.6 ms** per prediction |
-| **Text to speech** | **Qwen3-TTS-12Hz-1.7B**, 10 languages, 9 voices, streaming | first audio **43 ms** after the text; 5× real time |
+| End of turn | Qwen3-ASR-1.7B as it transcribes; Smart Turn v3.2, TinyMelNet | free with the transcript; **3.6 ms** per prediction |
+| **Text to speech** | **Qwen3-TTS-12Hz-1.7B**, 10 languages, 9 voices, streaming | first audio **18 ms** after the text; 5× real time |
 | Generate text | Qwen3, any size: chat with streaming replies | Qwen3-8B: 19 ms per token, reply starts 52 ms after a message |
 | Classify text | Qwen3, any size: moderation, routing, intent, sentiment | one Qwen3-8B token in **15 ms** (llama.cpp: 19 ms) |
 | **Voice agent** | any of the above as a `speech.Duplex`: listens and speaks at once | stops within 300 ms when talked over |
@@ -153,7 +153,11 @@ goes in and comes out 20 ms at a time, and the agent decides when to talk.
 `duplex.New` builds one from whatever models you give it:
 
 ```go
-agent, err := duplex.New(duplex.Config{Prompt: "You are Gopher."}, asr, turns, llm, tts)
+agent, err := duplex.New(duplex.Config{
+	Prompt: "You are Gopher.",
+	Listen: speech.Options{Languages: []string{"en", "pt"}},
+	Tools:  []duplex.Tool{duplex.Func("now", "The current time.", now)},
+}, asr, llm, tts)
 for { // every 20 ms
 	state, err := agent.Step(ctx, micFrame, speakerFrame)
 }
@@ -167,18 +171,32 @@ It works while you talk, so that almost nothing is left when you stop:
   you have said so far.
 - **It drafts the answer at your first pause.** The answer is transcribed,
   judged, written, and voiced while the turn is still open, and held.
-- **It judges the turn by sound and by words.** Smart Turn hears whether
-  you sound finished; the language model reads whether your words are (the
-  probability that your message ends there). A finished question plays at
-  once; "Give me a quick…" waits for the rest.
+- **The recognizer knows when you are done.** Qwen3-ASR's state as it
+  ends your transcript has heard how you spoke and read what you said; a
+  head trained on labeled speech judges the turn from it in the same pass,
+  for free. On held-out human speech 40 ms into a pause it is right
+  95.7% of the time, where Smart Turn, a separate model, is right
+  89.8%. An unsure pause is judged again as it grows.
 - **It lets you go on.** Speech before or just as the answer starts means
   you were not done: the draft is dropped and forgotten, and your whole
   utterance is heard again. Talk over it later and it judges, in context,
   whether you are interrupting or just saying "mm-hmm".
 
-It remembers only what you heard, keeps a meeting's typed chat as context
-([`Add`](duplex)), and [`examples/gopher`](examples/gopher) puts it in a
-video call.
+- **It may say nothing.** The model can answer with silence, now or until
+  something it names happens ("stop talking until I say hi"), and a one-token
+  question to the same model tells when that has happened. Speech clearly
+  meant for someone else in a meeting gets no answer.
+- **It acts with tools.** A tool is a Go function whose arguments struct is
+  its schema (`duplex.Func`); the model calls it in Qwen3's own format, the
+  call's fixed parts are drafted and checked in one pass, and its result
+  becomes part of the answer, on the same voice.
+- **It speaks your languages.** `Languages` limits the recognizer to the
+  languages of the call, their names and their scripts: a noise in an
+  English and Portuguese call cannot come out as Chinese.
+
+It remembers only what you heard, keeps a meeting's typed chat and who comes
+and goes as context ([`Add`](duplex)), and [`examples/gopher`](examples/gopher)
+puts it in a video call.
 
 ## Example: an AI listener on a video call
 

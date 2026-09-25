@@ -158,9 +158,21 @@ length and writes the result into `dst`:
 | `Language` | English name of the detected or requested language |
 | `Segments` | Timed spans, when `Options.Segments` or `Options.Words` is set |
 | `Words` | Aligned words with a confidence, when `Options.Words` is set |
+| `Turn` | Whether the speaker's turn ends where the audio does, when `Options.Turn` is set |
 
 `Options.Language` takes an ISO 639-1 code or an English name
-(`speech.LanguageName` normalizes both). An option the model cannot honor, such
+(`speech.LanguageName` normalizes both). `Options.Languages` instead lists the
+languages that may be spoken: Qwen3-ASR detects the likeliest of them and
+writes only in their scripts, so noise in an English and Portuguese call
+cannot come out as Chinese. `Options.Partial` continues an earlier
+transcript of the start of the same audio, checking it in one pass and
+decoding only where it differs; the result is the same.
+
+`Options.Turn` judges the end of the speaker's turn from the transcriber's
+own state, at no extra cost: Qwen3-ASR-1.7B carries a head trained on
+labeled human and synthetic speech cut at pauses
+([`qwen3asr/tools/turn.py`](../qwen3asr/tools/turn.py) reproduces it).
+Transcribers without one fail with `speech.ErrUnsupported`. An option the model cannot honor, such
 as a language it does not know or a `Context` prompt it cannot use, fails with
 an error that wraps `speech.ErrUnsupported`; the Whisper English models accept
 only English and no context. A closed lane returns an error wrapping
@@ -300,6 +312,29 @@ Smart Turn's frontend on its own workspace.
 
 See the [package README](../qwen3/README.md): `Open`, `Embed`, `Question`,
 `Context`, and the low-level `Evaluator` for pretokenized batches.
+
+Qwen3 models also provide `chat.Generator`, conversations that keep their
+context evaluated between replies. A session may offer tools, described by
+`chat.ToolSpec`; the model calls them in Qwen3's own format, calls reach
+`Session.Calls` rather than the reply's text, and results join the
+conversation as `chat.Tool` messages:
+
+```go
+s, err := gen.NewSession("You are a helpful assistant.", chat.ToolSpec{
+	Name: "now", Description: "The current time.",
+	Parameters: `{"type": "object", "properties": {}}`,
+})
+s.Add(chat.User, "What time is it?")
+err = s.Reply(ctx, chat.Options{}, speak)
+for _, call := range s.Calls() {
+	s.Add(chat.Tool, run(call.Name, call.Arguments))
+}
+err = s.Reply(ctx, chat.Options{}, speak) // answers with the result
+```
+
+A call's fixed parts, `{"name": "now", "arguments":`, are drafted and checked
+in one pass, sampling each position as decoding one token at a time would.
+`duplex.Func` derives a tool's schema from a Go function's arguments struct.
 
 ## The turn detectors' frontend
 
