@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/safetensors"
+	"github.com/GetStream/gophonic/speech"
 )
 
 // maxChoices is the number of answer letters Choose can offer (A–Z).
@@ -73,6 +75,7 @@ func loadLetterHead(dir string, tokens *Tokenizer, hidden, vocab int) (*letterHe
 // concurrent use; calls on its Model are serialized anyway.
 type Question struct {
 	m       *Model
+	labels  []string
 	kv      *PrefixKV // the prompt prefix's keys and values, never modified
 	suffix  []int     // end of turn and the empty non-thinking block
 	options int
@@ -111,7 +114,7 @@ func (e *Model) Question(question string, options []string) (*Question, error) {
 		text += string(rune('A'+i)) + ") " + o + "\n"
 	}
 	text += questionFooter
-	q := &Question{m: e, options: len(options)}
+	q := &Question{m: e, options: len(options), labels: slices.Clone(options)}
 	prefix, err := e.tokens.EncodeInto(text, make([]int, 0, len(text)), &q.tok)
 	if err != nil {
 		return nil, err
@@ -149,6 +152,34 @@ func (q *Question) Choose(ctx context.Context, input string, probs []float32) er
 	q.one[0], q.oneOut[0] = "", nil
 	return err
 }
+
+// Labels returns the options, in the order Choose writes their
+// probabilities; with ClassifyInto and Close it makes a Question a
+// speech.TextClassifier. The slice must not be modified.
+func (q *Question) Labels() []string { return q.labels }
+
+// ClassifyInto is Choose.
+func (q *Question) ClassifyInto(ctx context.Context, text string, probs []float32) error {
+	return q.Choose(ctx, text, probs)
+}
+
+// Close does nothing: a Question holds no resources beyond memory.
+func (q *Question) Close() error { return nil }
+
+// Classifier is Question as a speech.TextClassifier; with Close it makes a
+// Model a speech.ZeroShot.
+func (e *Model) Classifier(question string, labels []string) (speech.TextClassifier, error) {
+	q, err := e.Question(question, labels)
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+var (
+	_ speech.TextClassifier = (*Question)(nil)
+	_ speech.ZeroShot       = (*Model)(nil)
+)
 
 // ChooseTokens is Choose for input already tokenized with the model's
 // tokenizer; it involves no strings at all.

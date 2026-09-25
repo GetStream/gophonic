@@ -6,11 +6,12 @@ workers, and warm calls on it allocate nothing.
 
 There are two layers:
 
-- **Model-independent.** `gophonic.Open` loads any supported model by path.
-  Its lanes implement the interfaces of package `speech`:
-  `speech.Transcriber` for speech-to-text and `speech.TurnDetector` for
-  end-of-turn detection. Applications, the CLI, and the HTTP server use only
-  this layer.
+- **Model-independent.** `gophonic.Open` loads any registered model by
+  path. A model provides lanes of the interface types it supports: the
+  interfaces of package `speech` (`Transcriber`, `TurnDetector`,
+  `AudioClassifier`, `TextClassifier`, `ZeroShot`) or any interface a
+  third-party package defines. Applications, the CLI, and the HTTP server use
+  only this layer.
 - **Per model.** Packages `qwen3asr`, `whisper`, `smartturn`, `tinymel`, and
   `qwen3` expose each model's own entry points: decoder formats, explicit
   workspaces, feature-level prediction, caller-sized result buffers, and
@@ -23,25 +24,41 @@ model, err := gophonic.Open(path, gophonic.Options{Threads: 4})
 if err != nil {
 	return err
 }
-switch model.Kind() {
-case gophonic.Transcription:
-	lane, err := model.NewTranscriber()
-	// ...
-case gophonic.TurnDetection:
-	detector, err := model.NewTurnDetector()
+defer model.Close()
+if gophonic.Supports[speech.Transcriber](model) {
+	lane, err := gophonic.Lane[speech.Transcriber](model) // or model.NewTranscriber()
 	// ...
 }
 ```
 
+A model's capabilities are the lane types it provides, not a fixed list:
+`Lane[T]` opens a lane of interface type `T` and fails with
+`speech.ErrUnsupported` when the model does not provide it, `Supports[T]`
+asks first, and `Model.Provides` lists them.
+
+| Model | Provides |
+| --- | --- |
+| Qwen3-ASR, Whisper | `speech.Transcriber` |
+| Smart Turn, TinyMelNet | `speech.TurnDetector`, `speech.AudioClassifier` (incomplete, complete) |
+| Qwen3 (any size) | `speech.ZeroShot`: text classifiers from a question and its answers |
+
+```go
+llm, err := gophonic.Open("models/Qwen3-8B", gophonic.Options{})
+zeroShot, err := gophonic.Lane[speech.ZeroShot](llm)
+moderate, err := zeroShot.Classifier("Is this message acceptable in a workplace chat?",
+	[]string{"acceptable", "rude", "harassment", "spam"})
+probs := make([]float32, 4)
+err = moderate.ClassifyInto(ctx, message, probs) // warm calls allocate nothing
+```
+
 `Open` tries each registered format's `Match` and loads the path with the
-first that claims it. The built-in formats recognize an official Qwen3-ASR
-snapshot directory (`config.json` with `model_type` `qwen3_asr`) and converted
+first that claims it. The built-in formats recognize official Qwen3-ASR and
+Qwen3 snapshot directories (by `config.json`'s `model_type`) and converted
 Whisper, Smart Turn, and TinyMelNet `.gophonic` bundles; `Register` adds more
 ([Add a backend](#add-a-backend)). It returns `ErrUnknownFormat` for anything
 no format claims. `Model.Close` releases the model's resources, such as GPU
 memory, once its lanes are closed. `Model.Name` reports the architecture
-(`"qwen3-asr"`, `"whisper"`, `"smart-turn"`, `"tinymel"`). Asking a model for
-the other kind of lane fails with `speech.ErrUnsupported`.
+(`"qwen3-asr"`, `"qwen3"`, `"whisper"`, `"smart-turn"`, `"tinymel"`).
 
 `Options.Threads` bounds each lane's CPU workers, including the caller: a
 Qwen3-ASR transcriber uses that many (default `min(GOMAXPROCS, 16)`, at most
@@ -239,10 +256,10 @@ sample rate is warm, successful extraction does not allocate.
 
 ## Add a backend
 
-A new model implements `speech.TurnDetector` or `speech.Transcriber` in its
-own package and is passed to the application like a built-in lane. To make
-`gophonic.Open` (and so the CLI and server) load it by path, register a
-format:
+A new model implements whatever lane interfaces fit it, from package
+`speech` or its own, and is passed to the application like a built-in lane.
+To make `gophonic.Open` (and so the CLI and server) load it by path, register
+a format whose `Open` builds a `Model` and provides its lanes:
 
 ```go
 gophonic.Register(gophonic.Format{
@@ -253,9 +270,10 @@ gophonic.Register(gophonic.Format{
 		if err != nil {
 			return nil, err
 		}
-		return gophonic.NewTurnDetectionModel("my-turn", func() (speech.TurnDetector, error) {
-			return OpenSession(model, 0.5)
-		}, nil), nil
+		m := gophonic.NewModel("my-turn", nil)
+		gophonic.Provide(m, func() (speech.TurnDetector, error) { return OpenSession(model, 0.5) })
+		// A capability gophonic does not define is provided the same way.
+		return gophonic.Provide(m, func() (mypkg.Diarizer, error) { return NewDiarizer(model) }), nil
 	},
 })
 ```

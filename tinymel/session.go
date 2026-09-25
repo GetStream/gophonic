@@ -5,6 +5,7 @@ package tinymel
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/GetStream/gophonic/speech"
 )
@@ -20,7 +21,30 @@ type Session struct {
 	closed    bool
 }
 
-var _ speech.TurnDetector = (*Session)(nil)
+var (
+	_ speech.TurnDetector    = (*Session)(nil)
+	_ speech.AudioClassifier = (*Session)(nil)
+)
+
+// turnLabels are ClassifyInto's classes: the turn goes on, or it is over.
+var turnLabels = []string{"incomplete", "complete"}
+
+// Labels implements speech.AudioClassifier; the slice must not be modified.
+func (s *Session) Labels() []string { return turnLabels }
+
+// ClassifyInto implements speech.AudioClassifier: probs receives the
+// probabilities that the turn is incomplete and complete.
+func (s *Session) ClassifyInto(pcm []float32, sampleRate, channels int, probs []float32) error {
+	if len(probs) != len(turnLabels) {
+		return fmt.Errorf("%s: %d probabilities for %d labels", "tinymel", len(probs), len(turnLabels))
+	}
+	p, err := s.PredictInto(pcm, sampleRate, channels)
+	if err != nil {
+		return err
+	}
+	probs[0], probs[1] = 1-p.Probability, p.Probability
+	return nil
+}
 
 // NewSession creates a TinyMelNet session. helpers is the requested
 // persistent helper count; it is clamped to [0, MaxWorkers] and

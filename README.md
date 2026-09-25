@@ -14,16 +14,18 @@ GPU through a pure-Go Metal binding, with portable kernels everywhere else.
 | Transcription, English | OpenAI Whisper `tiny.en`, `base.en`, `small.en` | [`whisper`](whisper) | about 3× whisper.cpp on one core, identical transcripts |
 | Turn detection | Pipecat Smart Turn v3.2 | [`smartturn`](smartturn) | FP32 Whisper encoder, ONNX parity within 2e-5 |
 | Turn detection | TinyMelNet | [`tinymel`](tinymel) | 3.6 ms from PCM to prediction, zero allocations |
-| Language | Qwen3-8B, CLM action ranking | [`qwen3`](qwen3), [`clm`](clm) | one token in 15 ms on the GPU (llama.cpp Metal: 19 ms) |
+| Language | Qwen3 (any size): zero-shot classification, embeddings, CLM action ranking | [`qwen3`](qwen3), [`clm`](clm) | one Qwen3-8B token in 15 ms on the GPU (llama.cpp Metal: 19 ms) |
 
 Qwen3-ASR is the state-of-the-art open speech recognizer: it detects the
 language, takes context text, and is the model to use unless you need
 Whisper's word timestamps or a CPU-only English model.
 
-- **One interface per task.** Every transcription model implements
-  `speech.Transcriber` and every turn detector `speech.TurnDetector`;
-  `gophonic.Open` loads any supported model by path. The CLI and the HTTP
-  server see only those interfaces.
+- **One interface per task, any task.** Models provide lanes of the
+  interface types they support: `speech.Transcriber`, `speech.TurnDetector`,
+  audio and text classifiers, zero-shot classifiers from a language model, or
+  an interface of your own. `gophonic.Open` loads any registered model by
+  path, and `gophonic.Lane[T]` opens the capability you need. The CLI and
+  the HTTP server see only those interfaces.
 - **Built for servers.** A loaded model is immutable and shared. Each
   concurrent lane owns its scratch, and warm calls allocate nothing.
 - **Pure Go toolchain.** `CGO_ENABLED=0` builds everything. Hand-written
@@ -54,6 +56,8 @@ CGO_ENABLED=0 GOEXPERIMENT=simd go build -o gophonic ./cmd/gophonic
 ./gophonic -model models/Qwen3-ASR-1.7B -context "gophonic, SME" speech.wav
 ./gophonic -model models/base.en.gophonic -response-format verbose_json -word-timestamps speech.wav
 ./gophonic -model models/smart-turn-v3.2.gophonic speech.wav    # {"probability":0.91,"complete":true}
+./gophonic -model models/Qwen3-8B -question "Is this message acceptable at work?" \
+  -labels acceptable,rude,spam "you absolute clown"               # ...{"label":"rude","probability":1}...
 ```
 
 The CLI reads WAV and Ogg Opus. [`gophonic-server`](docs/server.md) serves the
