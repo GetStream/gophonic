@@ -5,7 +5,6 @@ package whisper
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/internal/whispergemm"
+	"github.com/thesyncim/vibejson"
 )
 
 type decoderOracle struct {
@@ -92,7 +92,7 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(manifest, &oracle); err != nil {
+	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	encoder, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.encoder.f32le"), AudioFrames*AudioState)

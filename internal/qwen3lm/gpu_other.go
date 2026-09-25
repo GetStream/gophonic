@@ -35,8 +35,7 @@ func (w *gpuWorkspace) batch(*Weights, [][]int, [][]float32, *gpuPrefix, int, bo
 
 func (w *gpuWorkspace) release() {}
 
-// Release frees the GPU buffers of a GPU model; CPU weights need no release.
-func (m *Weights) Release() {}
+func (m *Weights) releaseGPU() {}
 
 func (p *gpuPrefix) copyFrom(*gpuPrefix, int, int) {}
 

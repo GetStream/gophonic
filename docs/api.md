@@ -60,11 +60,75 @@ no format claims. `Model.Close` releases the model's resources, such as GPU
 memory, once its lanes are closed. `Model.Name` reports the architecture
 (`"qwen3-asr"`, `"qwen3"`, `"whisper"`, `"smart-turn"`, `"tinymel"`).
 
+`Detect` reports the format `Open` would use without loading anything, and
+a format's `Provides` lists the lane types its models provide when that is
+known up front, which is how the server picks a model for a request.
+
 `Options.Threads` bounds each lane's CPU workers, including the caller: a
 Qwen3-ASR transcriber uses that many (default `min(GOMAXPROCS, 16)`, at most
 8 for the encoder), a Whisper transcriber that many execution slots (default
 `min(GOMAXPROCS, 8)`), and a TinyMelNet detector `Threads-1` helper
 goroutines (default none). Smart Turn uses `GOMAXPROCS-1` helpers regardless.
+
+## Loading and the weight cache
+
+The first load of a checkpoint converts its weights for the backend that
+runs them (rotating, quantizing, and packing Qwen3's projections for the GPU,
+for example) and writes the result to a cache entry. Every later load maps
+that entry and uses it in place: nothing is read or converted, pages load
+from the page cache as the model first touches them, and on Apple silicon the
+mapped pages become GPU buffers without a copy, as llama.cpp maps GGUF files.
+
+| Load (warm page cache, M4 Max) | Without the cache | First load, writing the entry | From the cache |
+| --- | ---: | ---: | ---: |
+| Qwen3-8B, GPU (`qwen3.Open`) | 4.5 s | 5.0 s | **0.09 s** |
+| Qwen3-ASR-1.7B, GPU (`qwen3asr.Load`) | 1.3 s | 1.8 s | **0.085 s** |
+
+The first load writes each finished layer to disk while it converts the
+next, so building the entry costs little more than converting.
+
+The GPU formats of Qwen3 and Qwen3-ASR, the defaults on Apple silicon, load
+this way; the CPU formats still convert at every load, and Whisper and the
+turn detectors load their small converted bundles directly.
+
+Entries live in the user cache directory (`~/Library/Caches/gophonic` on
+macOS, `~/.cache/gophonic` on Linux), or in `$GOPHONIC_CACHE`; setting it to
+an empty string disables the cache. An entry is keyed by the checkpoint's
+path, the names, sizes, and modification times of its files, the weight
+format, and a layout version, so a changed checkpoint or a new gophonic
+release rebuilds it; building an entry removes the one it replaces. One
+process builds an entry while others wait for it, and a crash leaves no
+partial entry. A Qwen3-8B GPU entry takes about 7 GB of disk; delete the
+directory at any time to reclaim it. Without a writable cache directory,
+every load converts the weights in memory.
+
+Embedding tables are used as the checkpoint stores them, so they are mapped
+from the safetensors file itself rather than copied.
+
+## Serve many models: Pool
+
+A `Pool` opens models on demand, shares them, reuses their lanes, and closes
+each model after it has gone unused for a while (15 minutes by default).
+Services that load models by request use it instead of `Open`:
+
+```go
+pool := gophonic.NewPool(gophonic.Options{}, gophonic.DefaultKeepAlive)
+defer pool.Close()
+
+lease, err := gophonic.Acquire[speech.Transcriber](pool, "models/Qwen3-ASR-1.7B")
+if err != nil {
+	return err
+}
+defer lease.Release()
+err = lease.Lane.Transcribe(ctx, pcm, speech.Options{}, &transcript)
+```
+
+The first `Acquire` of a model opens it (concurrent callers wait for the one
+load); later ones reuse released lanes and allocate nothing. A model stays
+open while any lease of it is out, and closes, with its lanes, once it has
+been idle for the keep-alive time; the next `Acquire` opens it again from
+the weight cache. `Pool.Close` closes idle models at once and the others as
+their last leases are released.
 
 ## Transcription
 
@@ -348,21 +412,22 @@ latency.
 ## CLI
 
 ```sh
-./gophonic -model base.en.gophonic -response-format verbose_json -word-timestamps speech.wav
-./gophonic -model tinymel.gophonic -threads 4 speech.ogg
+./gophonic -model models/Qwen3-ASR-1.7B one.wav two.ogg three.opus
+./gophonic -model models/base.en.gophonic -response-format verbose_json -word-timestamps speech.wav
+./gophonic -model models/tinymel.gophonic -threads 4 turn.wav
+./gophonic -model models/Qwen3-1.7B -question "Is this message spam?" -labels "spam,not spam" "WIN A FREE CRUISE" "lunch at 1?"
 ```
 
-`-model` takes any bundle `gophonic.Open` recognizes. Transcription models
-print `json` (`{"text":"..."}`, the default), `text`, `verbose_json`, `srt`, or
-`vtt`, chosen with `-response-format`; `-word-timestamps` adds words to
+`-model` takes any path `gophonic.Open` recognizes, and the command runs the
+model once per input, loading it once. Transcription models print `json`
+(`{"text":"..."}`, the default), `text`, `verbose_json`, `srt`, or `vtt`,
+chosen with `-response-format`; `-word-timestamps` adds words to
 `verbose_json`; `-language` and `-context` set the corresponding
-`speech.Options`. Turn detectors print the prediction as JSON. Input formats:
+`speech.Options`. Turn detectors print each prediction as a JSON line, and
+classifiers each input's label probabilities. A language model answers
+`-question` about each text argument with one of `-labels`. Input formats:
 
 - WAV: RIFF/WAVE PCM at 8, 16, 24, or 32 bits, or IEEE float at 32 or 64 bits;
   one or two channels at 8–96 kHz.
 - Ogg Opus: `.ogg` or `.opus`, one or two channels, decoded by `gopus` to
   16 kHz with pre-skip and the final granule position applied.
-
-The CLI reads and decodes the file, loads the model, runs once, and prints the
-result. Warm library benchmarks exclude these per-process setup and I/O
-costs.

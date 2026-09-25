@@ -8,7 +8,6 @@ package whisper
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/testmodels"
+	"github.com/thesyncim/vibejson"
 )
 
 func TestSIMDEncoderPreservesOfficialGreedyTokens(t *testing.T) {
@@ -34,7 +34,7 @@ func TestSIMDEncoderPreservesOfficialGreedyTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var oracle decoderOracle
-	if err := json.Unmarshal(manifest, &oracle); err != nil {
+	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	workspace := NewEncoderWorkspace()

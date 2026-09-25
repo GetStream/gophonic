@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 // Package safetensors reads Hugging Face safetensors checkpoints, single
-// file or sharded, without mapping them: tensors are read on demand into
-// caller storage, so a loader can convert and pack one tensor at a time.
+// file or sharded. Tensors are read on demand into caller storage, so a
+// loader can convert and pack one tensor at a time, or mapped in place when
+// they are used as stored.
 package safetensors
 
 import (
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"unsafe"
 
+	"github.com/GetStream/gophonic/internal/mmap"
 	"github.com/thesyncim/vibejson"
 )
 
@@ -173,6 +175,30 @@ func (c *Checkpoint) BF16(name string, shape ...int) ([]uint16, error) {
 	}
 	out := make([]uint16, t.size/2)
 	return out, t.ReadBits(out, 0)
+}
+
+// MapBF16 maps a BF16 tensor's raw bits read-only, without reading them:
+// pages load on first use and stay shared with the page cache. The mapping
+// outlives the checkpoint; unmap releases it. Where the platform or the
+// tensor's alignment does not allow a mapping, MapBF16 reads a copy and
+// unmap does nothing.
+func (c *Checkpoint) MapBF16(name string, shape ...int) (bits []uint16, unmap func() error, err error) {
+	t, err := c.Lookup(name, shape...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if t.DType != "BF16" {
+		return nil, nil, fmt.Errorf("%s is %s; the loader expects the official BF16 checkpoint", name, t.DType)
+	}
+	start := t.offset &^ int64(mmap.PageSize-1)
+	if t.offset%2 == 0 && t.size > 0 {
+		if m, err := mmap.File(t.file, start, int(t.offset+t.size-start), false); err == nil {
+			data := m[t.offset-start:]
+			return unsafe.Slice((*uint16)(unsafe.Pointer(&data[0])), t.size/2), func() error { return mmap.Unmap(m) }, nil
+		}
+	}
+	bits = make([]uint16, t.size/2)
+	return bits, func() error { return nil }, t.ReadBits(bits, 0)
 }
 
 // ReadBits reads len(dst) 16-bit elements starting at element offset of a

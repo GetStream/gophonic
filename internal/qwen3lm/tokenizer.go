@@ -4,7 +4,6 @@
 package qwen3lm
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/thesyncim/vibejson"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -163,7 +163,7 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 		return nil, fmt.Errorf("qwen3: read tokenizer.json: %w", err)
 	}
 	var spec qwenTokenizerJSON
-	if err := json.Unmarshal(raw, &spec); err != nil {
+	if err := vibejson.Unmarshal(raw, &spec); err != nil {
 		return nil, fmt.Errorf("qwen3: parse tokenizer.json: %w", err)
 	}
 	if spec.Model.Type != "BPE" || spec.Model.IgnoreMerges || spec.Model.ByteFallback {
@@ -203,7 +203,7 @@ func loadQwen2Tokenizer(dir string) (*Tokenizer, error) {
 		return nil, fmt.Errorf("qwen3: no tokenizer.json, and %w", err)
 	}
 	var config qwenTokenizerConfig
-	if err := json.Unmarshal(raw, &config); err != nil {
+	if err := vibejson.Unmarshal(raw, &config); err != nil {
 		return nil, fmt.Errorf("qwen3: parse tokenizer_config.json: %w", err)
 	}
 	if config.TokenizerClass != "Qwen2Tokenizer" && config.TokenizerClass != "Qwen2TokenizerFast" {
@@ -213,7 +213,7 @@ func loadQwen2Tokenizer(dir string) (*Tokenizer, error) {
 		return nil, fmt.Errorf("qwen3: read vocab.json: %w", err)
 	}
 	var vocab map[string]int32
-	if err := json.Unmarshal(raw, &vocab); err != nil {
+	if err := vibejson.Unmarshal(raw, &vocab); err != nil {
 		return nil, fmt.Errorf("qwen3: parse vocab.json: %w", err)
 	}
 	if raw, err = os.ReadFile(filepath.Join(dir, "merges.txt")); err != nil {

@@ -55,7 +55,8 @@ type Weights struct {
 	head      linear // language-model head, [vocab][hidden]; unset unless loaded
 	prefix    string
 	format    string
-	gpu       *gpuModel // set for WeightsGPU
+	gpu       *gpuModel      // set for WeightsGPU
+	unmap     []func() error // mappings to release
 }
 
 type modelLayer struct {
@@ -152,11 +153,8 @@ var headChunkRows int
 
 // Load reads a Qwen3 decoder from the safetensors checkpoint in dir, which
 // may hold it inside a larger model.
-func Load(dir string, opts LoadOptions) (*Weights, error) {
-	var (
-		cfg modelConfig
-		err error
-	)
+func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
+	var cfg modelConfig
 	if opts.Config != nil {
 		cfg, err = opts.Config.model()
 	} else {
@@ -189,11 +187,19 @@ func Load(dir string, opts LoadOptions) (*Weights, error) {
 	defer st.Close()
 
 	m := &Weights{cfg: cfg, format: format, prefix: prefix, layers: make([]modelLayer, cfg.layers)}
+	defer func() {
+		if err != nil {
+			m.Release()
+		}
+	}()
 	h, kv, inter := cfg.hidden, cfg.kvDim, cfg.intermediate
 	qdim := cfg.heads * cfg.headDim
-	if m.embed, err = st.BF16(prefix+"embed_tokens.weight", cfg.vocab, h); err != nil {
+	// The embedding table is used as stored: it is mapped, not read.
+	embed, unmap, err := st.MapBF16(prefix+"embed_tokens.weight", cfg.vocab, h)
+	if err != nil {
 		return nil, err
 	}
+	m.embed, m.unmap = embed, append(m.unmap, unmap)
 	if m.finalNorm, err = st.Float32(prefix+"norm.weight", h); err != nil {
 		return nil, err
 	}
@@ -300,6 +306,16 @@ func Load(dir string, opts LoadOptions) (*Weights, error) {
 		return nil, first
 	}
 	return m, nil
+}
+
+// Release frees what the Weights hold outside the Go heap: GPU buffers and
+// mapped files. The Weights are unusable afterwards.
+func (m *Weights) Release() {
+	m.releaseGPU()
+	for _, unmap := range m.unmap {
+		unmap()
+	}
+	m.unmap, m.embed = nil, nil
 }
 
 // Config is the geometry of a Qwen3 model.

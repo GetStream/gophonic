@@ -13,11 +13,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/GetStream/gophonic/internal/metal"
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/safetensors"
+	"github.com/GetStream/gophonic/internal/wcache"
 )
 
 //go:embed gpu.metal
@@ -32,6 +34,9 @@ const (
 	// gpuMaxPositions bounds the RoPE table, and so the positions a GPU
 	// prefix can hold.
 	gpuMaxPositions = 1 << 16
+	// gpuCacheVersion names the layout of prepared weights in the cache;
+	// change it with anything that changes their bytes.
+	gpuCacheVersion = "qwen3lm-gpu-1"
 )
 
 // gpuLayer holds one layer's projections in one shared buffer: int8 rows
@@ -64,6 +69,7 @@ type gpuModel struct {
 	lm      *metal.Buffer
 	lmScale int // byte offset of the scales in lm
 	lmRows  int
+	cache   *wcache.File // holds the layer and head buffers' memory
 }
 
 // gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
@@ -121,6 +127,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	}
 	g := &gpuModel{dev: dev, cfg: c, layers: make([]gpuLayer, c.layers), bits: bits,
 		positions: min(c.maxPositions, gpuMaxPositions)}
+	m.gpu = g // Release frees what is loaded when loading fails
 	suffix := map[int]string{8: "", 9: "_q8", 4: "_q4"}[bits]
 	lib, err := dev.Compile(gpuSourceFor(c))
 	if err != nil {
@@ -181,12 +188,93 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		}
 	}
 
+	// Every layer's projections share one buffer: int8 or 4-bit rows, then
+	// their scales, at the same offsets in every layer.
+	var shape gpuLayer
+	layerBytes := 0
+	place := func(rows, k int) (int, int) {
+		w := layerBytes
+		if bits == 4 {
+			layerBytes = alignUp(layerBytes + rows*k/2)
+		} else {
+			layerBytes = alignUp(layerBytes + rows*k)
+		}
+		s := layerBytes
+		if bits == 8 {
+			layerBytes = alignUp(layerBytes + 4*rows)
+		} else {
+			layerBytes = alignUp(layerBytes + 2*rows*(k/q4Group))
+		}
+		return w, s
+	}
+	shape.qkv, shape.qkvScale = place(qdim+2*kv, h)
+	shape.o, shape.oScale = place(h, qdim)
+	shape.gu, shape.guScale = place(2*inter, h)
+	shape.d, shape.dScale = place(h, inter)
+	headBytes := 0
+	if headName != "" {
+		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
+		// rotates the normalized state.
+		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
+		g.lmScale = alignUp(g.lmRows * h)
+		headBytes = g.lmScale + 2*g.lmRows*(h/q4Group)
+	}
+	// The buffers are regions of a cache entry: quantized on the first load,
+	// mapped as they are afterwards.
+	cut := func(l *wcache.Layout) (layers [][]byte, lm []byte) {
+		for range c.layers {
+			layers = append(layers, l.Take(layerBytes))
+		}
+		if headBytes > 0 {
+			lm = l.Take(headBytes)
+		}
+		return layers, lm
+	}
+	size := wcache.NewLayout(nil)
+	cut(size)
+	key, err := wcache.Key(st.Dir(), m.format, gpuCacheVersion, m.prefix, headName)
+	if err != nil {
+		return err
+	}
+	if g.cache, err = wcache.Open(key, size.Size()); err != nil {
+		return err
+	}
+	if g.cache.Fresh() {
+		layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
+		if err := m.prepareGPU(st, g, shape, layers, lm, downIn, headName, g.cache.Done); err != nil {
+			return err
+		}
+		g.cache.Commit()
+	}
+	// The GPU reads the committed, read-only entry in place.
+	layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
+	for i := range g.layers {
+		g.layers[i] = shape
+		if g.layers[i].buf, err = dev.Wrap(layers[i]); err != nil {
+			return err
+		}
+	}
+	if lm != nil {
+		if g.lm, err = dev.Wrap(lm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prepareGPU quantizes every projection into its layer's region, and the
+// head, when named, into lm.
+func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuLayer, layers [][]byte, lm []byte, downIn *rotation, headName string, filled func([]byte)) error {
+	c := &m.cfg
+	bits := g.bits
+	h, kv, inter, qdim := c.hidden, c.kvDim, c.intermediate, c.heads*c.headDim
+
 	type job struct {
 		name     string
 		n, k     int
 		norm     []float32 // folded input RMSNorm weight
 		in, out  *rotation // input- and output-side rotations
-		buf      *metal.Buffer
+		buf      []byte
 		base, sc int // byte offsets of row 0 and scale 0
 		step     int // destination row stride in rows
 		scaleMul float32
@@ -195,60 +283,44 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	}
 	var jobs []job
 	for i := range m.layers {
-		l, gl := &m.layers[i], &g.layers[i]
-		off := 0
-		place := func(rows, k int) (int, int) {
-			w := off
-			if bits == 4 {
-				off = alignUp(off + rows*k/2)
-			} else {
-				off = alignUp(off + rows*k)
-			}
-			s := off
-			if bits == 8 {
-				off = alignUp(off + 4*rows)
-			} else {
-				off = alignUp(off + 2*rows*(k/q4Group))
-			}
-			return w, s
-		}
-		gl.qkv, gl.qkvScale = place(qdim+2*kv, h)
-		gl.o, gl.oScale = place(h, qdim)
-		gl.gu, gl.guScale = place(2*inter, h)
-		gl.d, gl.dScale = place(h, inter)
-		if gl.buf, err = dev.Buffer(off); err != nil {
-			return err
-		}
+		l, gl, buf := &m.layers[i], &shape, layers[i]
 		p := fmt.Sprintf("%slayers.%d.", m.prefix, i)
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, gl.buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}},
-			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, gl.buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}},
-			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, gl.buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}},
-			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, gl.buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}},
-			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl.buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}},
-			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, gl.buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}},
-			job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, gl.buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}},
+			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}},
+			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}},
+			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}},
+			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}},
+			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}},
+			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}},
+			job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}},
 		)
 	}
-	if headName != "" {
-		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
-		// rotates the normalized state. It is read in chunks of at most one
-		// projection.
-		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
-		g.lmScale = alignUp(g.lmRows * h)
-		if g.lm, err = dev.Buffer(g.lmScale + 2*g.lmRows*(h/q4Group)); err != nil {
-			return err
-		}
-		step := inter
-		for r := 0; r < c.vocab; r += step {
-			jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, g.lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+step, c.vocab)}})
-		}
+	// The head, the largest matrix, is read in chunks of at most one
+	// projection.
+	for r := 0; headName != "" && r < c.vocab; r += inter {
+		jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+inter, c.vocab)}})
 	}
 	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
 	var pre *gptqFile
 	if format := map[int]string{8: WeightsGPU, 4: WeightsGPUQ4}[bits]; format != "" {
 		if pre = openGPTQ(st.Dir(), format, bits, c); pre != nil {
 			defer pre.close()
+		}
+	}
+	// A region is filled when its last job finishes.
+	region := map[*byte]int{}
+	left := make([]atomic.Int32, len(layers)+1)
+	for _, j := range jobs {
+		r, ok := region[&j.buf[0]]
+		if !ok {
+			r = len(region)
+			region[&j.buf[0]] = r
+		}
+		left[r].Add(1)
+	}
+	finish := func(j job) {
+		if left[region[&j.buf[0]]].Add(-1) == 0 {
+			filled(j.buf)
 		}
 	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
@@ -274,7 +346,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 				next++
 				mu.Unlock()
 				if pre != nil {
-					done, err := pre.place(strings.TrimPrefix(j.name, m.prefix), j.n, j.k, j.buf.Bytes(), j.base, j.sc, j.row0, j.step)
+					done, err := pre.place(strings.TrimPrefix(j.name, m.prefix), j.n, j.k, j.buf, j.base, j.sc, j.row0, j.step)
 					if err != nil {
 						mu.Lock()
 						first = errors.Join(first, err)
@@ -282,6 +354,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 						return
 					}
 					if done {
+						finish(j)
 						continue
 					}
 				}
@@ -321,12 +394,12 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 				if j.out != nil {
 					j.out.applyRows(mat, j.n, j.k)
 				}
-				buf := j.buf.Bytes()
+				buf := j.buf
 				for r := range n {
 					row := mat[r*j.k : (r+1)*j.k]
 					dst := j.row0 + (r0+r)*j.step
 					scheme := bits
-					if j.buf == g.lm {
+					if j.name == headName {
 						scheme = 9
 					}
 					groups := j.k / q4Group
@@ -343,15 +416,12 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 						floats(buf[j.sc:])[dst] = quantizeRow(row, q) * j.scaleMul
 					}
 				}
+				finish(j)
 			}
 		}()
 	}
 	wg.Wait()
-	if first != nil {
-		return first
-	}
-	m.gpu = g
-	return nil
+	return first
 }
 
 func grow[T any](s []T, n int) []T {
@@ -863,8 +933,7 @@ func (w *gpuWorkspace) release() {
 	}
 }
 
-// Release frees the model's GPU buffers; the Weights are unusable after.
-func (m *Weights) Release() {
+func (m *Weights) releaseGPU() {
 	g := m.gpu
 	if g == nil {
 		return
@@ -872,12 +941,10 @@ func (m *Weights) Release() {
 	for i := range g.layers {
 		g.layers[i].buf.Release()
 	}
-	if g.lm != nil {
-		g.lm.Release()
+	for _, b := range []*metal.Buffer{g.lm, g.norms, g.signs, g.rope} {
+		b.Release()
 	}
-	g.norms.Release()
-	g.signs.Release()
-	g.rope.Release()
+	g.cache.Close()
 	g.dev.Close()
 	m.gpu = nil
 }

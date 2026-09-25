@@ -6,7 +6,6 @@ package httpserver
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/internal/testmodels"
+	"github.com/thesyncim/vibejson"
 )
 
 func multipartRequest(t *testing.T, filename string, audio []byte, fields map[string]string) *http.Request {
@@ -85,17 +85,29 @@ func TestReadUploadValidatesAPIFields(t *testing.T) {
 	}
 }
 
+// newTestServer serves the models at paths from a fresh pool.
+func newTestServer(t *testing.T, maxSeconds int, paths ...string) *Server {
+	t.Helper()
+	pool := gophonic.NewPool(gophonic.Options{}, 0)
+	t.Cleanup(func() { pool.Close() })
+	var models []Model
+	for _, path := range paths {
+		f, ok := gophonic.Detect(path)
+		if !ok {
+			t.Fatalf("%s is not a model", path)
+		}
+		models = append(models, Model{Name: strings.TrimSuffix(filepath.Base(path), ".gophonic"), Path: path, Format: f})
+	}
+	server, err := NewServer(Config{Pool: pool, Models: models, Workers: 1, MaxSeconds: maxSeconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	return server
+}
+
 func TestServerOfficialJFK(t *testing.T) {
-	modelPath := testmodels.Path(t, testmodels.WhisperTinyEN)
-	model, err := gophonic.Open(modelPath, gophonic.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := NewServer(model.NewTranscriber, 1, 120)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
+	server := newTestServer(t, 120, testmodels.Path(t, testmodels.WhisperTinyEN))
 
 	pcm, err := os.ReadFile(filepath.Join("..", "..", "testdata", "whisper_jfk.pcm.f32le"))
 	if err != nil {
@@ -117,7 +129,7 @@ func TestServerOfficialJFK(t *testing.T) {
 	_, _ = wav.Write(pcm)
 
 	for _, tc := range []struct{ format, wantType string }{{"json", "application/json"}, {"text", "text/plain"}} {
-		request := multipartRequest(t, "jfk.wav", wav.Bytes(), map[string]string{"model": "gophonic-whisper", "response_format": tc.format})
+		request := multipartRequest(t, "jfk.wav", wav.Bytes(), map[string]string{"model": "tiny.en", "response_format": tc.format})
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), tc.wantType) {
@@ -128,7 +140,7 @@ func TestServerOfficialJFK(t *testing.T) {
 			var result struct {
 				Text string `json:"text"`
 			}
-			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			if err := vibejson.Unmarshal(response.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
 			transcript = result.Text
@@ -158,7 +170,7 @@ func TestServerOfficialJFK(t *testing.T) {
 			Word       string
 		} `json:"words"`
 	}
-	if err := json.Unmarshal(verboseResponse.Body.Bytes(), &verbose); err != nil {
+	if err := vibejson.Unmarshal(verboseResponse.Body.Bytes(), &verbose); err != nil {
 		t.Fatalf("%v: %s", err, verboseResponse.Body.Bytes())
 	}
 	if verbose.Text != "And so my fellow Americans ask not what your country can do for you ask what you can do for your country." || len(verbose.Segments) != 1 || len(verbose.Words) < 10 || verbose.Segments[0].Start != 0 {
@@ -218,16 +230,7 @@ func TestMultipartParserZeroAlloc(t *testing.T) {
 }
 
 func TestWarmedWAVHandlerAllocations(t *testing.T) {
-	modelPath := testmodels.Path(t, testmodels.WhisperTinyEN)
-	model, err := gophonic.Open(modelPath, gophonic.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := NewServer(model.NewTranscriber, 1, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
+	server := newTestServer(t, 5, testmodels.Path(t, testmodels.WhisperTinyEN))
 	pcm, err := os.ReadFile(filepath.Join("..", "..", "testdata", "whisper_jfk.pcm.f32le"))
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +250,7 @@ func TestWarmedWAVHandlerAllocations(t *testing.T) {
 	copy(wav[36:], "data")
 	binary.LittleEndian.PutUint32(wav[40:], uint32(len(pcm)))
 	copy(wav[44:], pcm)
-	request := multipartRequest(t, "jfk.wav", wav, nil)
+	request := multipartRequest(t, "jfk.wav", wav, map[string]string{"model": "whisper-1"})
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		t.Fatal(err)

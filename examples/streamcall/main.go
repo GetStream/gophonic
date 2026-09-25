@@ -16,7 +16,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -40,6 +39,7 @@ import (
 
 	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/speech"
+	"github.com/thesyncim/vibejson"
 )
 
 const (
@@ -265,9 +265,15 @@ func prontoToken(pronto, user string) (apiKey, token string, err error) {
 		return "", "", err
 	}
 	defer resp.Body.Close()
-	var v struct{ APIKey, Token string }
-	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || v.Token == "" {
-		return "", "", fmt.Errorf("pronto token: %s: %v", resp.Status, err)
+	type credentials struct{ APIKey, Token string }
+	var v credentials
+	dec, err := vibejson.CompileDecoder[credentials](vibejson.DecoderOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	r := vibejson.NewReader(resp.Body)
+	if !vibejson.DecodeNext(r, dec, &v) || v.Token == "" {
+		return "", "", fmt.Errorf("pronto token: %s: %v", resp.Status, r.Err())
 	}
 	return v.APIKey, v.Token, nil
 }
@@ -284,7 +290,10 @@ func (c *chatChannel) send(text string) error {
 }
 
 func (c *chatChannel) post(endpoint string, body any) error {
-	payload, _ := json.Marshal(body)
+	payload, err := vibejson.Marshal(&body)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequest(http.MethodPost,
 		"https://chat.stream-io-api.com"+c.path+endpoint+"?api_key="+url.QueryEscape(c.apiKey), bytes.NewReader(payload))
 	if err != nil {

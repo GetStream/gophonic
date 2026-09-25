@@ -6,12 +6,13 @@ package whisper
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/thesyncim/vibejson"
 )
 
 func TestPinnedOracleFixtureIntegrity(t *testing.T) {
@@ -26,7 +27,7 @@ func TestPinnedOracleFixtureIntegrity(t *testing.T) {
 		PCMSHA256        string            `json:"pcm_sha256"`
 		FilesSHA256      map[string]string `json:"files_sha256"`
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := vibejson.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	if manifest.SourceCommit != "86098128c0b4f24f0e2aa2994de830614b474227" ||

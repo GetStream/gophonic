@@ -7,13 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/testmodels"
+	"github.com/thesyncim/vibejson"
 )
 
 func TestTranscriberOfficialJFK(t *testing.T) {
@@ -42,7 +42,7 @@ func TestTranscriberOfficialJFK(t *testing.T) {
 	var oracle struct {
 		Transcript string `json:"transcript"`
 	}
-	if err := json.Unmarshal(manifest, &oracle); err != nil {
+	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	buf := make([]byte, 0, 2048)
@@ -70,7 +70,7 @@ func TestTranscriberOfficialJFK(t *testing.T) {
 			Transcript string `json:"transcript"`
 		} `json:"cases"`
 	}
-	if err := json.Unmarshal(fullOracleData, &fullOracle); err != nil {
+	if err := vibejson.Unmarshal(fullOracleData, &fullOracle); err != nil {
 		t.Fatal(err)
 	}
 	if fullOracle.SourceCommit != "86098128c0b4f24f0e2aa2994de830614b474227" ||

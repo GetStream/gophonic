@@ -136,6 +136,10 @@ type Format struct {
 	Match func(path string) bool
 	// Open loads the model at path.
 	Open func(path string, opts Options) (*Model, error)
+	// Provides lists the lane types the format's models provide, so a
+	// server can choose a model for a task without loading it; nil means
+	// they are known only once a model is open.
+	Provides []reflect.Type
 }
 
 // ErrUnknownFormat is returned by Open for a path no format matches.
@@ -172,13 +176,21 @@ func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("gophonic: invalid thread count %d", opts.Threads)
 	}
-	for _, f := range Formats() {
-		if f.Match(path) {
-			return f.Open(path, opts)
-		}
+	if f, ok := Detect(path); ok {
+		return f.Open(path, opts)
 	}
 	if err := exists(path); err != nil {
 		return nil, err
 	}
 	return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, path)
+}
+
+// Detect returns the format Open would load path with, without loading it.
+func Detect(path string) (Format, bool) {
+	for _, f := range Formats() {
+		if f.Match(path) {
+			return f, true
+		}
+	}
+	return Format{}, false
 }

@@ -6,6 +6,7 @@ package gophonic
 import (
 	"io"
 	"os"
+	"reflect"
 
 	"github.com/GetStream/gophonic/qwen3"
 	"github.com/GetStream/gophonic/qwen3asr"
@@ -18,12 +19,14 @@ import (
 // builtinFormats are the models gophonic ships, in the order Open tries
 // them.
 func builtinFormats() []Format {
+	transcriber := []reflect.Type{reflect.TypeFor[speech.Transcriber]()}
+	turns := []reflect.Type{reflect.TypeFor[speech.TurnDetector](), reflect.TypeFor[speech.AudioClassifier]()}
 	return []Format{
-		{Name: "qwen3-asr", Match: qwen3asr.IsModelDir, Open: openQwen3ASR},
-		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3},
-		{Name: "whisper", Match: signature(whisper.BundleMagic), Open: openWhisper},
-		{Name: "smart-turn", Match: signature(smartturn.BundleMagic), Open: openSmartTurn},
-		{Name: "tinymel", Match: signature(tinymel.BundleMagic), Open: openTinyMel},
+		{Name: "qwen3-asr", Match: qwen3asr.IsModelDir, Open: openQwen3ASR, Provides: transcriber},
+		{Name: "qwen3", Match: qwen3.IsModelDir, Open: openQwen3, Provides: []reflect.Type{reflect.TypeFor[speech.ZeroShot]()}},
+		{Name: "whisper", Match: signature(whisper.BundleMagic), Open: openWhisper, Provides: transcriber},
+		{Name: "smart-turn", Match: signature(smartturn.BundleMagic), Open: openSmartTurn, Provides: turns},
+		{Name: "tinymel", Match: signature(tinymel.BundleMagic), Open: openTinyMel, Provides: turns},
 	}
 }
 

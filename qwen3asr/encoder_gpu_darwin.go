@@ -18,10 +18,15 @@ import (
 	"github.com/GetStream/gophonic/internal/nn"
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/safetensors"
+	"github.com/GetStream/gophonic/internal/wcache"
 )
 
 //go:embed encoder.metal
 var encoderSource string
+
+// gpuEncoderCacheVersion names the layout of the prepared encoder weights
+// in the cache; change it with anything that changes their bytes.
+const gpuEncoderCacheVersion = "qwen3asr-encoder-gpu-1"
 
 // convBatch bounds the chunks whose first two convolution outputs are held
 // at once (about 6 MiB per chunk).
@@ -53,6 +58,7 @@ type gpuEncoder struct {
 	convOut, proj1, proj2        gpuMatrix
 	layers                       []gpuLayer
 	buffers                      []*metal.Buffer
+	cache                        *wcache.File // memory of the weight buffers
 	convArgs                     convArgs
 }
 
@@ -69,7 +75,7 @@ type attnArgs struct {
 
 // loadGPUEncoder reads the encoder's weights into GPU memory. It supports
 // 64-wide attention heads and channel counts divisible by 16.
-func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpuEncoder, error) {
+func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (_ *gpuEncoder, err error) {
 	if e.headDim != 64 || e.ch%16 != 0 || e.d%64 != 0 || e.ffn%32 != 0 || (9*e.ch)%32 != 0 {
 		return nil, errors.New("qwen3asr: the GPU encoder needs 64-wide heads and 16-aligned channels")
 	}
@@ -78,6 +84,11 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 		return nil, err
 	}
 	g := &gpuEncoder{e: e, dev: dev, layers: make([]gpuLayer, e.layerCount)}
+	defer func() {
+		if err != nil {
+			g.release()
+		}
+	}()
 	lib, err := dev.Compile(encoderSource)
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: compile encoder kernels: %w", err)
@@ -94,16 +105,27 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 			return nil, err
 		}
 	}
+	// Tables computed here live in ordinary buffers; the weights live in a
+	// cache entry, prepared on the first load and mapped afterwards. Weight
+	// buffers are placeholders until the entry is committed. Jobs, which run
+	// for a fresh entry alone, write each placeholder's region of it.
+	var (
+		weights []*metal.Buffer
+		sizes   []int
+		regions [][]byte // while preparing: the writable regions
+		index   = map[*metal.Buffer]int{}
+	)
 	buffer := func(n int) (*metal.Buffer, error) {
-		b, err := dev.Buffer(n)
+		b := new(metal.Buffer)
+		index[b] = len(weights)
+		weights, sizes = append(weights, b), append(sizes, n)
+		return b, nil
+	}
+	region := func(b *metal.Buffer) []byte { return regions[index[b]] }
+	floatsBuffer := func(v []float32) (*metal.Buffer, error) {
+		b, err := dev.Buffer(4 * len(v))
 		if err == nil {
 			g.buffers = append(g.buffers, b)
-		}
-		return b, err
-	}
-	floatsBuffer := func(v []float32) (*metal.Buffer, error) {
-		b, err := buffer(4 * len(v))
-		if err == nil {
 			copy(floats(b.Bytes()), v)
 		}
 		return b, err
@@ -111,7 +133,7 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 	if g.positions, err = floatsBuffer(e.positions); err != nil {
 		return nil, err
 	}
-	if g.zero, err = buffer(4 * max(3*e.d, e.ffn, e.out, e.ch)); err != nil {
+	if g.zero, err = floatsBuffer(make([]float32, max(3*e.d, e.ffn, e.out, e.ch))); err != nil {
 		return nil, err
 	}
 	table := nn.GELUTable()
@@ -119,26 +141,7 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 		return nil, err
 	}
 
-	var (
-		mu    sync.Mutex
-		first error
-		wg    sync.WaitGroup
-		jobs  = make(chan func() error)
-	)
-	for range min(runtime.GOMAXPROCS(0), 8) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobs {
-				if err := job(); err != nil {
-					mu.Lock()
-					first = cmp(first, err)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-	// Buffers are allocated before the jobs run, so jobs only fill them.
+	// Jobs only fill buffers declared before they run.
 	var sends []func() error
 	vector := func(name string, n int, dst **metal.Buffer) error {
 		b, err := buffer(4 * n)
@@ -148,7 +151,7 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 		}
 		sends = append(sends, func() error {
 			v, err := st.Float32(prefix+name, n)
-			copy(floats(b.Bytes()), v)
+			copy(floats(region(b)), v)
 			return err
 		})
 		return nil
@@ -193,11 +196,11 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 						perm(raw[r*k:(r+1)*k], tmp)
 					}
 				}
-				halves := unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(dst.w.Bytes()))), rows*k)[i*n*k : (i+1)*n*k]
-				halfRows(raw, n, k, halves, floats(dst.scale.Bytes())[i*n:(i+1)*n])
+				halves := unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(region(dst.w)))), rows*k)[i*n*k : (i+1)*n*k]
+				halfRows(raw, n, k, halves, floats(region(dst.scale))[i*n:(i+1)*n])
 				if bias != nil {
 					b, err := st.Float32(prefix+bias[i], n)
-					copy(floats(dst.bias.Bytes())[i*n:], b)
+					copy(floats(region(dst.bias))[i*n:], b)
 					return err
 				}
 				return nil
@@ -253,7 +256,7 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 	}
 	sends = append(sends, func() error {
 		w, err := st.Float32(prefix+"conv2d1.weight", e.ch, 1, 3, 3)
-		dst := floats(g.conv1W.Bytes())
+		dst := floats(region(g.conv1W))
 		for c := range e.ch {
 			for fi := range 3 {
 				for tj := range 3 {
@@ -277,16 +280,68 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (*gpu
 			return nil, err
 		}
 	}
-	for _, job := range sends {
-		jobs <- job
+	cut := func(l *wcache.Layout) [][]byte {
+		regions := make([][]byte, len(sizes))
+		for i, n := range sizes {
+			regions[i] = l.Take(n)
+		}
+		return regions
 	}
-	close(jobs)
-	wg.Wait()
-	if first != nil {
-		g.release()
-		return nil, fmt.Errorf("qwen3asr: audio encoder: %w", first)
+	size := wcache.NewLayout(nil)
+	cut(size)
+	key, err := wcache.Key(st.Dir(), "encoder-gpu", gpuEncoderCacheVersion, prefix)
+	if err == nil {
+		g.cache, err = wcache.Open(key, size.Size())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("qwen3asr: audio encoder: %w", err)
+	}
+	if g.cache.Fresh() {
+		regions = cut(wcache.NewLayout(g.cache.Payload()))
+		if err := run(sends); err != nil {
+			return nil, fmt.Errorf("qwen3asr: audio encoder: %w", err)
+		}
+		g.cache.Commit()
+	}
+	// The GPU reads the committed, read-only entry in place.
+	for i, mem := range cut(wcache.NewLayout(g.cache.Payload())) {
+		b, err := dev.Wrap(mem)
+		if err != nil {
+			return nil, err
+		}
+		*weights[i] = *b // the placeholder takes over the buffer
+		g.buffers = append(g.buffers, weights[i])
 	}
 	return g, nil
+}
+
+// run runs jobs on up to eight workers and returns the first error.
+func run(jobs []func() error) error {
+	var (
+		mu    sync.Mutex
+		first error
+		wg    sync.WaitGroup
+		next  = make(chan func() error)
+	)
+	for range min(runtime.GOMAXPROCS(0), 8) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range next {
+				if err := job(); err != nil {
+					mu.Lock()
+					first = cmp(first, err)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	for _, job := range jobs {
+		next <- job
+	}
+	close(next)
+	wg.Wait()
+	return first
 }
 
 // halfRows stores each BF16 row times the power of two that puts its
@@ -321,6 +376,7 @@ func (g *gpuEncoder) release() {
 		b.Release()
 	}
 	g.buffers = nil
+	g.cache.Close()
 	g.dev.Close()
 }
 

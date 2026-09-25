@@ -10,10 +10,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/GetStream/gophonic/internal/whispergemm"
+	"github.com/thesyncim/vibejson"
 	"io"
 	"math"
 	"os"
@@ -150,7 +150,7 @@ func ReadWeights(r io.Reader) (*HeadPair, error) {
 		return nil, fmt.Errorf("clm: read manifest: %w", err)
 	}
 	var manifest bundleManifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+	if err := vibejson.Unmarshal(manifestBytes, &manifest); err != nil {
 		return nil, fmt.Errorf("clm: decode manifest: %w", err)
 	}
 	if err := validateManifest(manifest); err != nil {
@@ -660,7 +660,7 @@ func writeBundle(w io.Writer, m bundleManifest, tensors map[string][]float32) er
 	if err := validateManifest(m); err != nil {
 		return err
 	}
-	manifestBytes, err := json.Marshal(m)
+	manifestBytes, err := vibejson.Marshal(&m)
 	if err != nil {
 		return err
 	}

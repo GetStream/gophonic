@@ -4,11 +4,12 @@
 package whisper
 
 import (
-	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/thesyncim/vibejson"
 )
 
 func TestFullFeatureFrames(t *testing.T) {
@@ -62,7 +63,7 @@ func TestFullFeaturesIntoMatchesPinnedOpenAIOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &oracle); err != nil {
+	if err := vibejson.Unmarshal(data, &oracle); err != nil {
 		t.Fatal(err)
 	}
 	if oracle.SourceCommit != "86098128c0b4f24f0e2aa2994de830614b474227" || oracle.PaddingSample != featureSamples || oracle.SampleRate != featureSampleRate {
