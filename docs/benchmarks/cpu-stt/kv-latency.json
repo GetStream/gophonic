@@ -1,0 +1,162 @@
+{
+  "benchmark": "Benchmark(Transcribe/f16|Decoder/f16|DecoderPrefixLength)",
+  "iterations": 16,
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/stt-qwen-kv-reference.test",
+      "sha256": "b1ac8bdc1c06a4a46840116784bae067bbd6e1ec826f7f722d12d7e6657044b9"
+    },
+    "after": {
+      "path": "/private/tmp/stt-qwen-kv.test",
+      "sha256": "a351f14710c48aae2ba1d93ec93884e3ac63ea1086d44e36016d54f2830d4066"
+    }
+  },
+  "samples": [
+    {
+      "block": 0,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14765753.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15552036.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20844854.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14765753 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15552036 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20844854 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 0,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 15522909.0,
+        "BenchmarkDecoderPrefixLength/512-16": 16121930.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20513302.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  15522909 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  16121930 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20513302 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14991734.0,
+        "BenchmarkDecoderPrefixLength/512-16": 17317409.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20476458.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14991734 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  17317409 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20476458 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 1,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14821539.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15465953.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20419060.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14821539 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15465953 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20419060 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 15299391.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15594362.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20873875.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  15299391 ns/op\t      22 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15594362 ns/op\t       8 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20873875 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 2,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14630750.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15473664.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20362768.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14630750 ns/op\t      12 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15473664 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20362768 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14702919.0,
+        "BenchmarkDecoderPrefixLength/512-16": 16819544.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20190367.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14702919 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  16819544 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20190367 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 3,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14700576.0,
+        "BenchmarkDecoderPrefixLength/512-16": 16154284.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20502805.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14700576 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  16154284 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20502805 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14891794.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15472727.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20601786.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14891794 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15472727 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20601786 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 4,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14947427.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15725195.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 21243581.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14947427 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15725195 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  21243581 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "after",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14808544.0,
+        "BenchmarkDecoderPrefixLength/512-16": 15504729.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 20255862.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14808544 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  15504729 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  20255862 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    },
+    {
+      "block": 5,
+      "variant": "before",
+      "ns_per_op": {
+        "BenchmarkDecoderPrefixLength/256-16": 14672273.0,
+        "BenchmarkDecoderPrefixLength/512-16": 17871799.0,
+        "BenchmarkDecoderPrefixLength/2048-16": 32211284.0
+      },
+      "raw": "goos: darwin\ngoarch: arm64\npkg: github.com/GetStream/gophonic/qwen3asr\ncpu: Apple M4 Max\nBenchmarkDecoderPrefixLength/256-16         \t      16\t  14672273 ns/op\t       8 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/512-16         \t      16\t  17871799 ns/op\t       0 B/op\t       0 allocs/op\nBenchmarkDecoderPrefixLength/2048-16        \t      16\t  32211284 ns/op\t       0 B/op\t       0 allocs/op\nPASS\n"
+    }
+  ],
+  "summary": {
+    "BenchmarkDecoderPrefixLength/256-16": {
+      "before_median_ms": 14.793646,
+      "after_median_ms": 14.8779855,
+      "after_over_before_95pct": [
+        0.973863323609198,
+        1.033291123046688
+      ]
+    },
+    "BenchmarkDecoderPrefixLength/512-16": {
+      "before_median_ms": 15.573199,
+      "after_median_ms": 15.9235625,
+      "after_over_before_95pct": [
+        0.917823071200996,
+        1.100553391775334
+      ]
+    },
+    "BenchmarkDecoderPrefixLength/2048-16": {
+      "before_median_ms": 20.72332,
+      "after_median_ms": 20.419613,
+      "after_over_before_95pct": [
+        0.7635633788497761,
+        1.013428714384277
+      ]
+    }
+  }
+}

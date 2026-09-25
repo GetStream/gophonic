@@ -5,6 +5,7 @@
 //   x0 = A row pointer, x1 = lda bytes, x2 = rows (1..32), x3 = K (>=1)
 //   x4 = packed B panels, x5 = N (>=1), x6 = C pointer, x7 = ldc bytes
 //   x8 = scratch [roundup(K,16)][32] float32
+//   x15 = physical K pitch between packed panels (>= K)
 // Output:
 //   x0 = number of tiles recomputed after an asynchronous signal.
 //
@@ -56,7 +57,7 @@
 	b.lt 1b
 
 	// ---- Column panel pairs. ----
-	lsl x15, x3, #6             // panel bytes = K*16*4
+	lsl x15, x15, #6            // panel bytes = physical pitch*16*4
 	mov x14, #0                 // first column of this pair
 5:
 	mov x11, x4                 // b0

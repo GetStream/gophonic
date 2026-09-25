@@ -1,0 +1,52 @@
+{
+  "baseline_commit": "af8387c",
+  "forced_os_scavenge": true,
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/stt-qwen-kv-reference.test",
+      "sha256": "e24c6b2a0b10686577b2b2798d3934a6712a4399773ea614c0f11e2ffa9493a4"
+    },
+    "after": {
+      "path": "/private/tmp/stt-qwen-kv.test",
+      "sha256": "8639d7c3aafb513fab828983441f39250eb53e9f9bcb20c6e30c6e6054615717"
+    }
+  },
+  "samples": [
+    {
+      "block": 0,
+      "variant": "before",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=100.307\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4369440\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=187.536\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4458000\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.305\n--- PASS: TestCPUMemoryFootprint (4.23s)\nPASS\n",
+      "rusage": "        4.70 real        29.16 user         2.24 sys\n          4564992000  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              288740  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1879  signals received\n                2017  voluntary context switches\n               97148  involuntary context switches\n        243235192972  instructions retired\n         67178604384  cycles elapsed\n          4476047440  peak memory footprint\n"
+    },
+    {
+      "block": 0,
+      "variant": "after",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=37.361\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4404880\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=61.643\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4501376\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.310\n--- PASS: TestCPUMemoryFootprint (4.13s)\nPASS\n",
+      "rusage": "        4.57 real        28.35 user         2.27 sys\n          4609409024  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              286760  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1785  signals received\n                1902  voluntary context switches\n              111428  involuntary context switches\n        230113683547  instructions retired\n         65666015712  cycles elapsed\n          4402876064  peak memory footprint\n"
+    },
+    {
+      "block": 1,
+      "variant": "after",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=37.363\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4396464\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=61.644\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4493024\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.311\n--- PASS: TestCPUMemoryFootprint (4.06s)\nPASS\n",
+      "rusage": "        4.07 real        27.76 user         2.28 sys\n          4600856576  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              286393  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1731  signals received\n                1776  voluntary context switches\n              107593  involuntary context switches\n        220476184413  instructions retired\n         62947271603  cycles elapsed\n          4398468744  peak memory footprint\n"
+    },
+    {
+      "block": 1,
+      "variant": "before",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=100.312\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4369440\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=187.543\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4457968\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.311\n--- PASS: TestCPUMemoryFootprint (4.27s)\nPASS\n",
+      "rusage": "        4.28 real        29.58 user         2.25 sys\n          4564959232  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              288843  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1876  signals received\n                1947  voluntary context switches\n              113103  involuntary context switches\n        224309644132  instructions retired\n         65265204895  cycles elapsed\n          4476276840  peak memory footprint\n"
+    },
+    {
+      "block": 2,
+      "variant": "before",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=100.311\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4386784\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=187.542\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4475328\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.310\n--- PASS: TestCPUMemoryFootprint (4.70s)\nPASS\n",
+      "rusage": "        4.71 real        29.67 user         2.39 sys\n          4582735872  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              289534  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                2056  signals received\n                1984  voluntary context switches\n              123813  involuntary context switches\n        228690283899  instructions retired\n         65993158440  cycles elapsed\n          4476489808  peak memory footprint\n"
+    },
+    {
+      "block": 2,
+      "variant": "after",
+      "raw": "=== RUN   TestCPUMemoryFootprint\n    cpu_memory_test.go:55: lanes=1 live_heap_mib=37.362\n    cpu_memory_test.go:62: lanes=1 live_rss_kib=4403264\n    cpu_memory_test.go:55: lanes=2 live_heap_mib=61.642\n    cpu_memory_test.go:62: lanes=2 live_rss_kib=4499776\n    cpu_memory_test.go:65: loaded_model_heap_mib=12.310\n--- PASS: TestCPUMemoryFootprint (4.45s)\nPASS\n",
+      "rusage": "        4.45 real        29.43 user         2.27 sys\n          4607770624  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              286961  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                1910  signals received\n                1822  voluntary context switches\n              125899  involuntary context switches\n        220379342137  instructions retired\n         66732348465  cycles elapsed\n          4388392560  peak memory footprint\n"
+    }
+  ]
+}

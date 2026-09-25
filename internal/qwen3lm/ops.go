@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
-	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
 type opKind uint8
@@ -21,7 +20,7 @@ const (
 	opQKRope
 	opAttention
 	opAttentionGEMM
-	opPackPrefix
+	opStorePrefix
 	opAttentionPrefix
 	opSwiGLU
 )
@@ -78,8 +77,8 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 		o.attention(start, end)
 	case opAttentionGEMM:
 		o.attentionGEMM(worker, start, end)
-	case opPackPrefix:
-		o.packPrefix(start, end)
+	case opStorePrefix:
+		o.storePrefix(start, end)
 	case opAttentionPrefix:
 		o.attentionPrefix(worker, start, end)
 	case opSwiGLU:
@@ -322,51 +321,28 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 	}
 }
 
-// packPrefix brings one KV group's packed copy of the stored prefix up to
-// ws.past positions for the current layer: it appends newly stored tokens,
-// truncates after a branch, and grows storage by doubling (repacking from the
-// raw store).
-func (o *layerOp) packPrefix(start, end int) {
+// storePrefix appends this layer's new rows directly to the canonical packed
+// cache. Each participant owns distinct KV groups. Fixed-pitch value pages
+// append without moving existing values, including the unfinished tail.
+func (o *layerOp) storePrefix(start, end int) {
 	ws, c := o.ws, &o.ws.owner.m.cfg
-	kv, hd, past := ws.prefix, c.headDim, ws.past
-	pk := &kv.packs[o.layerIndex] // prepared by Workspace.preparePrefixPack
-	keys, values := kv.keys[o.layerIndex], kv.values[o.layerIndex]
+	pk, hd, past := &ws.prefix.packs[o.layerIndex], c.headDim, ws.past
 	for g := start; g < end; g++ {
-		n := pk.n[g]
 		kt := pk.keysT[g]
-		if kt == nil || kt.ColumnCapacity() < past {
-			capN := max(64, 2*past)
-			var err error
-			kt, err = whispergemm.NewPackedB(hd, min(capN, kv.capacity))
-			must(err)
-			pk.keysT[g], n = kt, 0
+		must(kt.Reshape(hd, past+o.rows))
+		must(kt.PackColumns(ws.keys[g*hd:], c.kvDim, past))
+		for row := 0; row < o.rows; {
+			position := past + row
+			chunk, first := position/prefixChunk, position%prefixChunk
+			n := min(o.rows-row, prefixChunk-first)
+			must(pk.values[g][chunk].PackRows(ws.values[row*c.kvDim+g*hd:], c.kvDim, first, n))
+			row += n
 		}
-		n = min(n, past)
-		must(kt.Reshape(hd, past))
-		var src []float32 // no new columns: PackColumns only re-pads
-		if n < past {
-			src = keys[n*c.kvDim+g*hd:]
-		}
-		must(kt.PackColumns(src, c.kvDim, n))
-		// Repack value chunks from the first one that changed.
-		chunks := (past + prefixChunk - 1) / prefixChunk
-		for len(pk.values[g]) < chunks {
-			v, err := whispergemm.NewPackedB(prefixChunk, hd)
-			must(err)
-			pk.values[g] = append(pk.values[g], v)
-		}
-		for ch := n / prefixChunk; ch < chunks; ch++ {
-			rows := min(prefixChunk, past-ch*prefixChunk)
-			v := pk.values[g][ch]
-			must(v.Reshape(rows, hd))
-			must(v.Pack(values[ch*prefixChunk*c.kvDim+g*hd:], c.kvDim, false))
-		}
-		pk.n[g] = past
 	}
 }
 
 // attentionPrefix handles one query block and one query head attending to a
-// stored prefix (packed once by packPrefix) plus the sequence's own rows. The
+// stored prefix plus the sequence's own rows. The
 // prefix and own scores share one row buffer and one softmax; P·V sums the
 // packed value chunks and the own rows.
 func (o *layerOp) attentionPrefix(worker, start, end int) {

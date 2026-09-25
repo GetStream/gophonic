@@ -17,12 +17,15 @@ var (
 )
 
 // PackedB stores a K-by-N right matrix in panels of sixteen output columns.
-// It owns one FP32 copy, with at most fifteen padding columns. Concurrent Mul
+// It stores one FP32 copy, with at most fifteen padding columns. Concurrent Mul
 // calls are safe when their output buffers do not overlap. Pack must not run
 // concurrently with either Pack or Mul on the same PackedB.
 type PackedB struct {
-	k, n int
-	data []float32 // [ceil(N/16)][K][16]
+	k, n      int
+	data      []float32 // [ceil(N/16)][panelRows()][16]
+	pitch     int       // physical K between panels when fixedRows is set
+	fixedRows bool
+	borrowed  bool // fixed-capacity view into caller-owned storage
 }
 
 // NewPackedB allocates a zero-filled K-by-N matrix. Pack can replace its values
@@ -55,7 +58,17 @@ func (b *PackedB) Reshape(k, n int) error {
 	if columns != 0 && k > (maxInt/4)/columns {
 		return ErrShape
 	}
+	if b.fixedRows {
+		if k > b.pitch || n != b.n {
+			return ErrShape
+		}
+		b.k = k
+		return nil
+	}
 	if need := k * columns; need > cap(b.data) {
+		if b.borrowed {
+			return ErrShape
+		}
 		b.data = make([]float32, need)
 	} else {
 		b.data = b.data[:need]
@@ -77,7 +90,13 @@ func (b *PackedB) PackColumns(src []float32, stride, c0 int) error {
 		return ErrShape
 	}
 	for col := c0; col < b.n; col++ {
-		panel := b.data[(col/panelColumns)*panelColumns*b.k:]
+		// Complete column panels transpose through the existing SME kernel.
+		// The partial first panel remains scalar so earlier columns survive.
+		if smeEnabled && b.k > 0 && !b.fixedRows && col%panelColumns == 0 && b.n-col >= panelColumns {
+			smeTransposePack(&src[(col-c0)*stride], stride*4, b.n-col, b.k, &b.data[col*b.k])
+			return nil
+		}
+		panel := b.data[(col/panelColumns)*panelColumns*b.panelRows():]
 		row := src[(col-c0)*stride:]
 		j := col % panelColumns
 		for k := 0; k < b.k; k++ {
@@ -85,7 +104,7 @@ func (b *PackedB) PackColumns(src []float32, stride, c0 int) error {
 		}
 	}
 	if pad := b.n % panelColumns; pad != 0 {
-		panel := b.data[(b.n/panelColumns)*panelColumns*b.k:]
+		panel := b.data[(b.n/panelColumns)*panelColumns*b.panelRows():]
 		for k := 0; k < b.k; k++ {
 			clear(panel[k*panelColumns+pad : (k+1)*panelColumns])
 		}
@@ -128,14 +147,14 @@ func (b *PackedB) Pack(src []float32, stride int, transposed bool) error {
 	if b.k == 0 || b.n == 0 {
 		return nil
 	}
-	if transposed && smeEnabled {
+	if transposed && smeEnabled && !b.fixedRows {
 		// ZA transposes 16x16 blocks; padding columns come out zero.
 		smeTransposePack(&src[0], stride*4, b.n, b.k, &b.data[0])
 		return nil
 	}
 	for n := 0; n < b.n; n += panelColumns {
 		width := min(panelColumns, b.n-n)
-		panel := b.data[n*b.k : (n+panelColumns)*b.k]
+		panel := b.data[n*b.panelRows() : n*b.panelRows()+panelColumns*b.k]
 		for k := 0; k < b.k; k++ {
 			row := panel[k*panelColumns : (k+1)*panelColumns]
 			if transposed {
@@ -196,10 +215,10 @@ func (b *PackedB) MulScratch(dst []float32, dstStride int, a []float32, aStride 
 		}
 		return nil
 	}
-	if mulSMEScratch(dst, dstStride, a, aStride, b.data, m, b.k, b.n, scratch) {
+	if mulSMEScratch(dst, dstStride, a, aStride, b.data, m, b.k, b.n, b.panelRows(), scratch) {
 		return nil
 	}
-	mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)
+	b.mulPortable(dst, dstStride, a, aStride, m)
 	return nil
 }
 
@@ -214,10 +233,10 @@ func (b *PackedB) mul(dst []float32, dstStride int, a []float32, aStride int, m 
 		}
 		return
 	}
-	if mulSME(dst, dstStride, a, aStride, b.data, m, b.k, b.n) {
+	if mulSME(dst, dstStride, a, aStride, b.data, m, b.k, b.n, b.panelRows()) {
 		return
 	}
-	mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)
+	b.mulPortable(dst, dstStride, a, aStride, m)
 }
 
 // validInput accepts read-only matrices whose rows may overlap.
@@ -246,4 +265,24 @@ func validMatrix(values []float32, rows, cols, stride int) bool {
 	}
 	// Division avoids overflow for hostile dimensions and strides.
 	return rows-1 <= (len(values)-cols)/stride
+}
+
+// panelRows separates logical K from the physical pitch of a KV value page.
+func (b *PackedB) panelRows() int {
+	if b.fixedRows {
+		return b.pitch
+	}
+	return b.k
+}
+
+func (b *PackedB) mulPortable(dst []float32, dstStride int, a []float32, aStride, m int) {
+	if b.panelRows() == b.k {
+		mulPacked(dst, dstStride, a, aStride, b.data, m, b.k, b.n)
+		return
+	}
+	// Existing NEON/scalar tiles consume one panel at a time when pages have
+	// unused row capacity. They never read those unused rows.
+	for col := 0; col < b.n; col += panelColumns {
+		mulPacked(dst[col:], dstStride, a, aStride, b.data[col*b.pitch:], m, b.k, min(panelColumns, b.n-col))
+	}
 }

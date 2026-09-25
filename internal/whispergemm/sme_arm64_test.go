@@ -237,3 +237,8 @@ func TestSMETransposePackMatchesScalar(t *testing.T) {
 		}
 	}
 }
+
+func TestFixedPitchPagesPortable(t *testing.T) {
+	disableSME(t)
+	testFixedPitchPages(t)
+}
