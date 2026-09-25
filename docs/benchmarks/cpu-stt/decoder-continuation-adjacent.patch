@@ -1,0 +1,164 @@
+diff --git a/qwen3asr/decoder_adjacent_experiment_test.go b/qwen3asr/decoder_adjacent_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/decoder_adjacent_experiment_test.go
+@@ -0,0 +1,159 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"encoding/hex"
++	"encoding/json"
++	"os"
++	"runtime"
++	"slices"
++	"strconv"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/speech"
++)
++
++type adjacentContinuationSample struct {
++	Pair    int     `json:"pair"`
++	Variant string  `json:"variant"`
++	NS      int64   `json:"ns"`
++	Steps   []int64 `json:"steps_ns"`
++}
++
++func TestDecoderAdjacentExperiment(t *testing.T) {
++	path := os.Getenv("STT_ADJACENT_OUTPUT")
++	if path == "" {
++		t.Skip("set STT_ADJACENT_OUTPUT")
++	}
++	pairs := 24
++	if s := os.Getenv("STT_ADJACENT_PAIRS"); s != "" {
++		var err error
++		pairs, err = strconv.Atoi(s)
++		if err != nil || pairs < 1 {
++			t.Fatal("invalid pairs")
++		}
++	}
++	m := loadModel(t, FormatF16)
++	var lanes [2]cpuStreamTrace
++	for i := range lanes {
++		var err error
++		lanes[i].tr, err = NewTranscriber(m, 0)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer lanes[i].tr.Close()
++	}
++	pcm, frames := cpuGrowingAudio(t, m.enc)
++	names := [2]string{"recompute", "reuse"}
++	want := make([][32]byte, len(frames))
++	text := make([][]byte, len(frames))
++	languages := make([]string, len(frames))
++	reused := make([]int, len(frames))
++	call := func(v, step int, capture, check bool) int64 {
++		s := &lanes[v]
++		tr := s.tr
++		if v == 0 {
++			tr.decoderPrefix.reset()
++		}
++		before := tr.decoderPrefix
++		if capture || check {
++			clear(tr.vlogits[:cap(tr.vlogits)])
++		}
++		start := time.Now()
++		if err := tr.Transcribe(context.Background(), pcm[:frames[step]*160], speech.Options{Partial: &s.prev}, &s.cur); err != nil {
++			t.Fatal(err)
++		}
++		ns := time.Since(start).Nanoseconds()
++		if v == 1 {
++			reused[step] = before.reusable(tr.decoderPrefix.anchor, tr.reusedAudioRows, tr.audioRevision) / 128 * 128
++		}
++		if capture {
++			want[step] = continuationFingerprint(tr, &s.cur)
++			text[step] = slices.Clone(s.cur.Text)
++			languages[step] = s.cur.Language
++		} else {
++			if !bytes.Equal(text[step], s.cur.Text) || languages[step] != s.cur.Language {
++				t.Fatalf("%s step%d text/language changed", names[v], step)
++			}
++			if check && continuationFingerprint(tr, &s.cur) != want[step] {
++				t.Fatalf("%s step%d state differs", names[v], step)
++			}
++		}
++		s.prev, s.cur = s.cur, s.prev
++		return ns
++	}
++	run := func(v int, capture, check bool) {
++		lanes[v].prev.Reset()
++		lanes[v].cur.Reset()
++		for i := range frames {
++			call(v, i, capture, check)
++		}
++	}
++	started := time.Now().UTC().Format(time.RFC3339)
++	// Both lanes follow the same complete warm history. Baseline captures
++	// replace the initial cold references before reproducibility is checked.
++	run(0, true, false)
++	run(1, true, false)
++	run(0, true, false)
++	run(0, false, true)
++	run(1, false, true)
++	if slices.Max(reused) == 0 {
++		t.Fatal("no decoder reuse")
++	}
++	t.Logf("warmed baseline reproduces; both lanes exact; reused rows=%v", reused)
++	var samples []adjacentContinuationSample
++	var pairMallocs, pairBytes []uint64
++	for pair := range pairs {
++		for i := range lanes {
++			lanes[i].prev.Reset()
++			lanes[i].cur.Reset()
++		}
++		steps := [2][]int64{make([]int64, len(frames)), make([]int64, len(frames))}
++		var before, after runtime.MemStats
++		runtime.ReadMemStats(&before)
++		for step := range frames {
++			for order := range 2 {
++				v := (pair + step + order) % 2
++				steps[v][step] = call(v, step, false, false)
++			}
++		}
++		runtime.ReadMemStats(&after)
++		pairMallocs = append(pairMallocs, after.Mallocs-before.Mallocs)
++		pairBytes = append(pairBytes, after.TotalAlloc-before.TotalAlloc)
++		for v := range lanes {
++			var total int64
++			for _, ns := range steps[v] {
++				total += ns
++			}
++			samples = append(samples, adjacentContinuationSample{pair, names[v], total, steps[v]})
++		}
++		t.Logf("completed %d/%d adjacent trace pairs", pair+1, pairs)
++	}
++	hashes := make([]string, len(want))
++	for i := range want {
++		hashes[i] = hex.EncodeToString(want[i][:])
++	}
++	report := struct {
++		Baseline    string                       `json:"baseline"`
++		Pairing     string                       `json:"pairing"`
++		Go          string                       `json:"go"`
++		Procs       int                          `json:"gomaxprocs"`
++		Start       string                       `json:"start_utc"`
++		End         string                       `json:"end_utc"`
++		Frames      []int                        `json:"frames"`
++		Hashes      []string                     `json:"hashes"`
++		Reused      []int                        `json:"reused_decoder_rows"`
++		Samples     []adjacentContinuationSample `json:"samples"`
++		PairMallocs []uint64                     `json:"pair_mallocs"`
++		PairBytes   []uint64                     `json:"pair_bytes"`
++	}{"14f4aa9: merged exact encoder/head reuse; decoder recomputed at original anchor", "two private warmed lanes, shared immutable weights, adjacent input steps, order (pair+step)%2", runtime.Version(), runtime.GOMAXPROCS(0), started, time.Now().UTC().Format(time.RFC3339), frames, hashes, reused, samples, pairMallocs, pairBytes}
++	data, err := json.MarshalIndent(report, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

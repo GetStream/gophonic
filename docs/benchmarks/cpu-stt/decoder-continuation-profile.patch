@@ -1,0 +1,245 @@
+diff --git a/qwen3asr/decoder_continuation_experiment_test.go b/qwen3asr/decoder_continuation_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/decoder_continuation_experiment_test.go
+@@ -0,0 +1,240 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"math"
++	"os"
++	"path/filepath"
++	"runtime"
++	"runtime/pprof"
++	"slices"
++	"strconv"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/speech"
++)
++
++type continuationSample struct {
++	Pair    int     `json:"pair"`
++	Variant string  `json:"variant"`
++	NS      int64   `json:"ns"`
++	Steps   []int64 `json:"steps_ns"`
++	Mallocs uint64  `json:"mallocs"`
++	Bytes   uint64  `json:"bytes"`
++}
++
++func TestDecoderContinuationWarmProfile(t *testing.T) {
++	dir := os.Getenv("STT_CONTINUATION_PROFILE")
++	if dir == "" {
++		t.Skip("set STT_CONTINUATION_PROFILE")
++	}
++	m := loadModel(t, FormatF16)
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	pcm, frames := cpuGrowingAudio(t, m.enc)
++	var prev, cur speech.Transcript
++	want := make([][32]byte, len(frames))
++	reusedCalls, reusedRows := 0, 0
++	run := func(reuse, capture, check bool) {
++		prev.Reset()
++		cur.Reset()
++		for i, f := range frames {
++			if !reuse {
++				tr.decoderPrefix.reset()
++			}
++			before := tr.decoderPrefix
++			clear(tr.vlogits[:cap(tr.vlogits)])
++			if err := tr.Transcribe(context.Background(), pcm[:f*160], speech.Options{Partial: &prev}, &cur); err != nil {
++				t.Fatal(err)
++			}
++			if n := before.reusable(tr.decoderPrefix.anchor, tr.reusedAudioRows, tr.audioRevision) / 128 * 128; n > 0 {
++				reusedCalls++
++				reusedRows += n
++			}
++			if capture {
++				want[i] = continuationFingerprint(tr, &cur)
++			}
++			if check && continuationFingerprint(tr, &cur) != want[i] {
++				t.Fatalf("profiled step%d changed exact state", i)
++			}
++			prev, cur = cur, prev
++		}
++	}
++	run(false, false, false)
++	run(false, true, false)
++	for _, variant := range []string{"recompute", "reuse"} {
++		reusedCalls, reusedRows = 0, 0
++		f, err := os.Create(filepath.Join(dir, "decoder-continuation-"+variant+".pprof"))
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := pprof.StartCPUProfile(f); err != nil {
++			f.Close()
++			t.Fatal(err)
++		}
++		for range 3 {
++			run(variant == "reuse", false, true)
++		}
++		pprof.StopCPUProfile()
++		if err := f.Close(); err != nil {
++			t.Fatal(err)
++		}
++		if variant == "reuse" && (reusedCalls != 12 || reusedRows != 2304) {
++			t.Fatalf("profile reuse counts %d/%d", reusedCalls, reusedRows)
++		}
++		t.Logf("%s: 21 public calls exact; reused calls=%d rows=%d", variant, reusedCalls, reusedRows)
++	}
++}
++
++func TestDecoderContinuationExperiment(t *testing.T) {
++	path := os.Getenv("STT_CONTINUATION_OUTPUT")
++	if path == "" {
++		t.Skip("set STT_CONTINUATION_OUTPUT")
++	}
++	pairs := 4
++	if s := os.Getenv("STT_CONTINUATION_PAIRS"); s != "" {
++		var err error
++		pairs, err = strconv.Atoi(s)
++		if err != nil || pairs < 1 {
++			t.Fatal("invalid pairs")
++		}
++	}
++	m := loadModel(t, FormatF16)
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	pcm, frames := cpuGrowingAudio(t, m.enc)
++	var prev, cur speech.Transcript
++	names := []string{"recompute", "reuse"}
++	elapsed := make([]int64, len(frames))
++	reused := make([]int, len(frames))
++	expectedText := make([][]byte, len(frames))
++	expectedLanguage := make([]string, len(frames))
++	hashes := make([]string, len(frames))
++	groups := make([][5]string, len(frames))
++	var variant int
++	hashFloats := func(v []float32) string {
++		h := sha256.New()
++		var bits [4]byte
++		for _, x := range v {
++			binary.LittleEndian.PutUint32(bits[:], math.Float32bits(x))
++			h.Write(bits[:])
++		}
++		return hex.EncodeToString(h.Sum(nil))
++	}
++	run := func(capture, first bool) {
++		prev.Reset()
++		cur.Reset()
++		for step, f := range frames {
++			if variant == 0 {
++				tr.decoderPrefix.reset()
++			}
++			before := tr.decoderPrefix
++			if capture && cap(tr.vlogits) > 0 {
++				clear(tr.vlogits[:cap(tr.vlogits)])
++			}
++			begin := time.Now()
++			if err := tr.Transcribe(context.Background(), pcm[:f*160], speech.Options{Partial: &prev}, &cur); err != nil {
++				t.Fatal(err)
++			}
++			elapsed[step] = time.Since(begin).Nanoseconds()
++			reused[step] = before.reusable(tr.decoderPrefix.anchor, tr.reusedAudioRows, tr.audioRevision) / 128 * 128
++			if first {
++				expectedText[step] = slices.Clone(cur.Text)
++				expectedLanguage[step] = cur.Language
++			} else if !bytes.Equal(cur.Text, expectedText[step]) || cur.Language != expectedLanguage[step] {
++				t.Fatalf("%s step%d text/language changed: %q", names[variant], step, cur.Text)
++			}
++			if capture {
++				h := sha256.New()
++				var bits [8]byte
++				add := func(values []float32) {
++					for _, v := range values {
++						binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++						h.Write(bits[:4])
++					}
++				}
++				add(tr.embeds)
++				add(tr.hidden)
++				add(tr.logits)
++				if len(tr.draft) > 0 {
++					add(tr.tail)
++					add(tr.vlogits[:cap(tr.vlogits)])
++				}
++				for _, id := range tr.gen {
++					binary.LittleEndian.PutUint64(bits[:], uint64(id))
++					h.Write(bits[:])
++				}
++				h.Write(cur.Text)
++				h.Write([]byte(cur.Language))
++				got := hex.EncodeToString(h.Sum(nil))
++				detail := [5]string{hashFloats(tr.embeds), hashFloats(tr.hidden), hashFloats(tr.logits), hashFloats(tr.tail), hashFloats(tr.vlogits[:cap(tr.vlogits)])}
++				if first {
++					hashes[step], groups[step] = got, detail
++				} else if got != hashes[step] {
++					t.Fatalf("%s step%d hash %s != %s; groups got=%v want=%v", names[variant], step, got, hashes[step], detail, groups[step])
++				}
++			}
++			prev, cur = cur, prev
++		}
++	}
++	started := time.Now().UTC().Format(time.RFC3339)
++	run(false, true)
++	run(true, true)
++	run(true, false)
++	t.Log("warmed recompute baseline reproduced exact state")
++	variant = 1
++	run(true, false)
++	if slices.Max(reused) == 0 {
++		t.Fatal("candidate did not reuse decoder rows")
++	}
++	reusedRows := slices.Clone(reused)
++	t.Logf("reuse exact, decoder rows=%v", reusedRows)
++	var samples []continuationSample
++	for pair := range pairs {
++		for order := range 2 {
++			variant = (pair + order) % 2
++			var before, after runtime.MemStats
++			runtime.ReadMemStats(&before)
++			run(false, false)
++			runtime.ReadMemStats(&after)
++			var total int64
++			for _, ns := range elapsed {
++				total += ns
++			}
++			samples = append(samples, continuationSample{pair, names[variant], total, slices.Clone(elapsed), after.Mallocs - before.Mallocs, after.TotalAlloc - before.TotalAlloc})
++		}
++		t.Logf("completed %d/%d pairs", pair+1, pairs)
++	}
++	report := struct {
++		Baseline string               `json:"baseline"`
++		Go       string               `json:"go"`
++		Procs    int                  `json:"gomaxprocs"`
++		Start    string               `json:"start_utc"`
++		End      string               `json:"end_utc"`
++		Frames   []int                `json:"frames"`
++		Hashes   []string             `json:"hashes"`
++		Groups   [][5]string          `json:"groups"`
++		Reused   []int                `json:"reused_decoder_rows"`
++		Text     [][]byte             `json:"text"`
++		Samples  []continuationSample `json:"samples"`
++	}{"14f4aa9: merged exact encoder/head reuse; decoder recomputed at original anchor", runtime.Version(), runtime.GOMAXPROCS(0), started, time.Now().UTC().Format(time.RFC3339), frames, hashes, groups, reusedRows, expectedText, samples}
++	data, err := json.MarshalIndent(report, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

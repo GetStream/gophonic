@@ -1,0 +1,225 @@
+--- a/whisper/decoder.go
++++ b/whisper/decoder.go
+@@ -176,6 +176,8 @@
+ // vocabularyShards bounds concurrent streaming-matrix work on the vocabulary.
+ var vocabularyShards = 8
+ 
++var decoderAttentionParallel = true
++
+ type decoderAttentionOperation struct {
+ 	dst, scaledQuery, keys, values, scores []float32
+ 	frames, valueStride, heads             int
+@@ -813,10 +815,7 @@
+ 	}
+ 	s.attention = decoderAttentionOperation{keyVec: s.layerKeys, valueVec: s.layerValues, heads: heads, dst: s.context, scaledQuery: s.scaledQuery, keys: keys, values: values, scores: s.scores, frames: frames, valueStride: valueStride}
+ 	var err error
+-	// Small packed heads finish sooner on the caller than after a worker
+-	// handoff. Larger and unpacked attention still uses the bounded pool.
+-	parallel := s.layerKeys == nil || heads > 6 || headSize > 64
+-	if s.gemm != nil && frames >= 128 && parallel {
++	if s.gemm != nil && frames >= 128 && (decoderAttentionParallel || s.layerKeys == nil || heads > 6 || headSize > 64) {
+ 		err = s.gemm.Rows(&s.attention, heads, 1)
+ 	} else {
+ 		s.attention.ApplyRows(0, heads)
+--- /dev/null
++++ b/whisper/cpu_next_profile_experiment_test.go
+@@ -0,0 +1,199 @@
++package whisper
++
++import (
++	"bytes"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"math"
++	"os"
++	"runtime"
++	"runtime/pprof"
++	"slices"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/internal/testmodels"
++)
++
++func TestCPUWarmNextProfile(t *testing.T) {
++	path := os.Getenv("STT_WHISPER_PROFILE")
++	if path == "" {
++		t.Skip("set STT_WHISPER_PROFILE")
++	}
++	m, err := Load(testmodels.Path(t, testmodels.WhisperTinyEN))
++	if err != nil {
++		t.Fatal(err)
++	}
++	tr, err := NewTranscriber(m)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	data, err := os.ReadFile("../testdata/whisper_jfk.pcm.f32le")
++	if err != nil {
++		t.Fatal(err)
++	}
++	pcm := make([]float32, len(data)/4)
++	for i := range pcm {
++		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
++	}
++	dst := make([]byte, 0, 8192)
++	run := func() []byte {
++		got, err := tr.TranscribeInto(pcm, dst)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return got
++	}
++	var want []byte
++	for range 3 {
++		want = slices.Clone(run())
++	}
++	state := func() string {
++		h := sha256.New()
++		var bits [8]byte
++		for _, group := range [][]float32{tr.audio, tr.logits, tr.decoder.x} {
++			for _, v := range group {
++				binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++				h.Write(bits[:4])
++			}
++		}
++		for _, id := range tr.tokens {
++			binary.LittleEndian.PutUint64(bits[:], uint64(id))
++			h.Write(bits[:])
++		}
++		return hex.EncodeToString(h.Sum(nil))
++	}
++	expected := state()
++	f, err := os.Create(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	if err := pprof.StartCPUProfile(f); err != nil {
++		t.Fatal(err)
++	}
++	for range 100 {
++		if !bytes.Equal(run(), want) {
++			t.Fatal("text changed")
++		}
++	}
++	pprof.StopCPUProfile()
++	if got := state(); got != expected {
++		t.Fatalf("state %s != %s", got, expected)
++	}
++	t.Logf("exact final state %s; text=%q", expected, want)
++}
++
++func TestCPUNextAttentionDispatch(t *testing.T) {
++	path := os.Getenv("STT_WHISPER_DISPATCH")
++	if path == "" {
++		t.Skip("set STT_WHISPER_DISPATCH")
++	}
++	m, err := Load(testmodels.Path(t, testmodels.WhisperTinyEN))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer m.Close()
++	data, err := os.ReadFile("../testdata/whisper_jfk.pcm.f32le")
++	if err != nil {
++		t.Fatal(err)
++	}
++	pcm := make([]float32, len(data)/4)
++	for i := range pcm {
++		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
++	}
++	long := make([]float32, 0, len(pcm)*3)
++	for range 3 {
++		long = append(long, pcm...)
++	}
++	type sample struct {
++		Case          string
++		Pair, Variant int
++		NS            int64
++		Allocs, Bytes uint64
++	}
++	type output struct {
++		Baseline, Toolchain string
++		Procs               int
++		Samples             []sample
++		State               map[string]string
++	}
++	report := output{Baseline: "14f4aa9", Toolchain: runtime.Version(), Procs: runtime.GOMAXPROCS(0), State: make(map[string]string)}
++	cases := []struct {
++		name           string
++		workers, pairs int
++		pcm            []float32
++	}{{"jfk-w8", 8, 64, pcm}, {"long-w8", 8, 32, long}, {"jfk-w2", 2, 24, pcm}, {"jfk-w4", 4, 24, pcm}, {"jfk-w16", 16, 24, pcm}}
++	for _, tc := range cases {
++		tr, err := NewTranscriberWithWorkers(m, tc.workers)
++		if err != nil {
++			t.Fatal(err)
++		}
++		dst := make([]byte, 0, 16384)
++		run := func() []byte {
++			got, err := tr.TranscribeInto(tc.pcm, dst)
++			if err != nil {
++				t.Fatal(err)
++			}
++			return got
++		}
++		state := func() string {
++			h := sha256.New()
++			var bits [8]byte
++			for _, group := range [][]float32{tr.audio, tr.logits, tr.decoder.x, tr.decoder.selfKey, tr.decoder.selfValue} {
++				for _, v := range group {
++					binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++					h.Write(bits[:4])
++				}
++			}
++			for _, id := range tr.tokens {
++				binary.LittleEndian.PutUint64(bits[:], uint64(id))
++				h.Write(bits[:])
++			}
++			return hex.EncodeToString(h.Sum(nil))
++		}
++		decoderAttentionParallel = true
++		var want []byte
++		for range 3 {
++			want = slices.Clone(run())
++		}
++		expected := state()
++		report.State[tc.name] = expected
++		decoderAttentionParallel = false
++		if got := run(); !bytes.Equal(got, want) || state() != expected {
++			t.Fatalf("%s candidate changes state", tc.name)
++		}
++		for pair := 0; pair < tc.pairs; pair++ {
++			for order := 0; order < 2; order++ {
++				variant := (pair + order) % 2
++				decoderAttentionParallel = variant == 0
++				var before, after runtime.MemStats
++				runtime.ReadMemStats(&before)
++				start := time.Now()
++				got := run()
++				elapsed := time.Since(start)
++				runtime.ReadMemStats(&after)
++				if !bytes.Equal(got, want) || state() != expected {
++					t.Fatalf("%s pair%d variant%d state changed", tc.name, pair, variant)
++				}
++				report.Samples = append(report.Samples, sample{tc.name, pair, variant, elapsed.Nanoseconds(), after.Mallocs - before.Mallocs, after.TotalAlloc - before.TotalAlloc})
++			}
++		}
++		tr.Close()
++		t.Logf("complete %s state=%s", tc.name, expected)
++	}
++	decoderAttentionParallel = true
++	f, err := os.Create(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	if err := json.NewEncoder(f).Encode(report); err != nil {
++		t.Fatal(err)
++	}
++	fmt.Println("report", path)
++}

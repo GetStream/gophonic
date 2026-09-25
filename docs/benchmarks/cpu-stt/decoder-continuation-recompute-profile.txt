@@ -1,0 +1,210 @@
+File: stt-decoder-adjacent.test
+Type: cpu
+Time: 2026-09-25 23:02:35 WEST
+Duration: 14.51s, Total samples = 91.54s (630.91%)
+Showing nodes accounting for 91.54s, 100% of 91.54s total
+      flat  flat%   sum%        cum   cum%
+    32.55s 35.56% 35.56%     32.55s 35.56%  github.com/GetStream/gophonic/internal/q8gemm.smeMulF16W
+    28.56s 31.20% 66.76%     28.56s 31.20%  github.com/GetStream/gophonic/internal/q8gemm.smeRowF16
+     7.18s  7.84% 74.60%     69.58s 76.01%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).loop
+     3.04s  3.32% 77.92%      3.04s  3.32%  github.com/GetStream/gophonic/internal/whispergemm.smeMulBlock
+     2.90s  3.17% 81.09%      2.90s  3.17%  runtime.pthread_cond_wait
+     2.13s  2.33% 83.42%      2.13s  2.33%  runtime.pthread_cond_signal
+     1.95s  2.13% 85.55%      1.95s  2.13%  github.com/GetStream/gophonic/internal/q8gemm.smeRows2F16
+     1.91s  2.09% 87.63%      1.91s  2.09%  runtime.kevent
+     1.70s  1.86% 89.49%      1.81s  1.98%  sync/atomic.(*Bool).Load (inline)
+     0.99s  1.08% 90.57%      0.99s  1.08%  github.com/GetStream/gophonic/internal/q8gemm.packPairsNEON
+     0.87s  0.95% 91.52%      0.87s  0.95%  runtime.asyncPreempt
+     0.82s   0.9% 92.42%      8.21s  8.97%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).runEach
+     0.62s  0.68% 93.10%      0.62s  0.68%  runtime.usleep
+     0.61s  0.67% 93.76%      0.61s  0.67%  github.com/GetStream/gophonic/internal/qwen3lm.exp4 (inline)
+     0.47s  0.51% 94.28%      0.47s  0.51%  github.com/GetStream/gophonic/internal/qwen3lm.store4 (inline)
+     0.47s  0.51% 94.79%      2.72s  2.97%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).run
+     0.41s  0.45% 95.24%      0.41s  0.45%  sync/atomic.(*Uint64).CompareAndSwap (inline)
+     0.40s  0.44% 95.67%      1.27s  1.39%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).execute
+     0.32s  0.35% 96.02%      0.32s  0.35%  github.com/GetStream/gophonic/internal/qwen3lm.load4 (inline)
+     0.30s  0.33% 96.35%      0.30s  0.33%  github.com/GetStream/gophonic/internal/nn.geluNEON
+     0.26s  0.28% 96.64%      0.38s  0.42%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.26s  0.28% 96.92%      1.34s  1.46%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).runN
+     0.24s  0.26% 97.18%      0.24s  0.26%  sync/atomic.(*Int64).Add (inline)
+     0.18s   0.2% 97.38%      0.18s   0.2%  github.com/GetStream/gophonic/internal/q8gemm.maxAbsNEON
+     0.17s  0.19% 97.56%      0.17s  0.19%  runtime.walltime
+     0.16s  0.17% 97.74%      0.16s  0.17%  github.com/GetStream/gophonic/internal/whispergemm.smeTransposePack
+     0.15s  0.16% 97.90%      0.16s  0.17%  github.com/GetStream/gophonic/qwen3asr.argmax (inline)
+     0.15s  0.16% 98.07%      0.15s  0.16%  runtime.nanotime1
+     0.13s  0.14% 98.21%      0.13s  0.14%  runtime.memmove
+     0.12s  0.13% 98.34%      0.28s  0.31%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedB).Pack
+     0.11s  0.12% 98.46%      0.11s  0.12%  crypto/internal/fips140/sha256.blockSHA2
+     0.08s 0.087% 98.55%      0.76s  0.83%  github.com/GetStream/gophonic/internal/qwen3lm.swigluInto
+     0.07s 0.076% 98.62%      0.11s  0.12%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedB).PackRows
+     0.06s 0.066% 98.69%      1.11s  1.21%  github.com/GetStream/gophonic/internal/q8gemm.(*Workspace).PackRange
+     0.05s 0.055% 98.74%      1.04s  1.14%  github.com/GetStream/gophonic/internal/q8gemm.packRowPairs
+     0.05s 0.055% 98.80%      0.71s  0.78%  runtime.lock2
+     0.04s 0.044% 98.84%      0.04s 0.044%  github.com/GetStream/gophonic/internal/mel.fftRadix2[go.shape.float32]
+     0.04s 0.044% 98.89%      0.04s 0.044%  github.com/GetStream/gophonic/internal/mel.fftRadix5[go.shape.float32]
+     0.04s 0.044% 98.93%      3.69s  4.03%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).attentionPrefix
+     0.04s 0.044% 98.97%      0.04s 0.044%  github.com/GetStream/gophonic/internal/qwen3lm.newExpConsts
+     0.04s 0.044% 99.02%      0.24s  0.26%  github.com/GetStream/gophonic/internal/qwen3lm.scaleMulInto
+     0.04s 0.044% 99.06%      0.07s 0.076%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedB).PackColumns
+     0.04s 0.044% 99.10%      0.04s 0.044%  sync/atomic.(*Bool).CompareAndSwap
+     0.03s 0.033% 99.14%      0.36s  0.39%  github.com/GetStream/gophonic/internal/qwen3lm.softmaxScaled
+     0.03s 0.033% 99.17%      0.04s 0.044%  github.com/GetStream/gophonic/internal/qwen3lm.sumSquares
+     0.03s 0.033% 99.20%      0.41s  0.45%  github.com/GetStream/gophonic/qwen3asr.continuationFingerprint.func1 (inline)
+     0.03s 0.033% 99.24%      0.03s 0.033%  runtime.globrunqgetbatch
+     0.03s 0.033% 99.27%      0.16s  0.17%  runtime.stealWork
+     0.03s 0.033% 99.30%      0.03s 0.033%  sync/atomic.(*Int32).Add
+     0.03s 0.033% 99.33%      0.03s 0.033%  sync/atomic.(*Uint64).Add
+     0.03s 0.033% 99.37%      0.03s 0.033%  sync/atomic.(*Uint64).Load
+     0.03s 0.033% 99.40%      0.09s 0.098%  time.Since
+     0.02s 0.022% 99.42%      0.14s  0.15%  github.com/GetStream/gophonic/internal/mel.(*Spectrogram).Into
+     0.02s 0.022% 99.44%      0.10s  0.11%  github.com/GetStream/gophonic/internal/mel.powerFrame[go.shape.float32]
+     0.02s 0.022% 99.46%      0.02s 0.022%  github.com/GetStream/gophonic/internal/nn.softmaxExpNEON
+     0.02s 0.022% 99.49%      8.39s  9.17%  github.com/GetStream/gophonic/internal/qwen3lm.(*Workspace).project
+     0.02s 0.022% 99.51%      6.40s  6.99%  github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).claim
+     0.02s 0.022% 99.53%      0.07s 0.076%  github.com/GetStream/gophonic/internal/qwen3lm.scaleVector
+     0.02s 0.022% 99.55%      0.19s  0.21%  github.com/GetStream/gophonic/qwen3asr.(*linearOp).epilogue
+     0.02s 0.022% 99.57%      0.02s 0.022%  math.log
+     0.02s 0.022% 99.60%      0.02s 0.022%  runtime.memclrNoHeapPointers
+     0.02s 0.022% 99.62%      0.02s 0.022%  runtime.unlock2
+     0.02s 0.022% 99.64%      0.02s 0.022%  sync/atomic.(*Int32).Load
+     0.01s 0.011% 99.65%      0.01s 0.011%  github.com/GetStream/gophonic/internal/nn.residualNormNEON
+     0.01s 0.011% 99.66%      0.01s 0.011%  github.com/GetStream/gophonic/internal/q8gemm.(*Workspace).SetRowScale
+     0.01s 0.011% 99.67%      0.19s  0.21%  github.com/GetStream/gophonic/internal/q8gemm.MaxAbs
+     0.01s 0.011% 99.68%     63.07s 68.90%  github.com/GetStream/gophonic/internal/q8gemm.MulPanels
+     0.01s 0.011% 99.69%      0.21s  0.23%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).qkRope
+     0.01s 0.011% 99.71%      0.20s  0.22%  github.com/GetStream/gophonic/internal/qwen3lm.addInto (inline)
+     0.01s 0.011% 99.72%      0.01s 0.011%  github.com/GetStream/gophonic/internal/qwen3lm.packChunks
+     0.01s 0.011% 99.73%      0.29s  0.32%  github.com/GetStream/gophonic/internal/qwen3lm.rmsNorm32
+     0.01s 0.011% 99.74%      0.06s 0.066%  github.com/GetStream/gophonic/internal/qwen3lm.rotateHalves
+     0.01s 0.011% 99.75%      3.06s  3.34%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedB).MulScratch
+     0.01s 0.011% 99.76%      0.01s 0.011%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedB).panelRows
+     0.01s 0.011% 99.77%      0.01s 0.011%  github.com/GetStream/gophonic/internal/whispergemm.validMatrix
+     0.01s 0.011% 99.78%      0.07s 0.076%  github.com/GetStream/gophonic/qwen3asr.(*encoderRows).attend
+     0.01s 0.011% 99.79%      0.01s 0.011%  internal/runtime/atomic.(*Bool).Load
+     0.01s 0.011% 99.80%      0.01s 0.011%  internal/runtime/atomic.(*Int64).Add
+     0.01s 0.011% 99.81%      0.01s 0.011%  internal/runtime/atomic.(*Uint64).Load
+     0.01s 0.011% 99.83%      0.01s 0.011%  math.IsInf
+     0.01s 0.011% 99.84%      0.01s 0.011%  runtime.(*_panic).start
+     0.01s 0.011% 99.85%      0.01s 0.011%  runtime.(*guintptr).set
+     0.01s 0.011% 99.86%      0.01s 0.011%  runtime.(*randomEnum).done
+     0.01s 0.011% 99.87%      0.19s  0.21%  runtime.(*timers).check
+     0.01s 0.011% 99.88%      0.01s 0.011%  runtime.(*timers).cleanHead
+     0.01s 0.011% 99.89%      0.01s 0.011%  runtime.(*timers).deleteMin
+     0.01s 0.011% 99.90%      0.03s 0.033%  runtime.casgstatus
+     0.01s 0.011% 99.91%      4.83s  5.28%  runtime.findRunnable
+     0.01s 0.011% 99.92%      1.31s  1.43%  runtime.goschedImpl
+     0.01s 0.011% 99.93%      1.31s  1.43%  runtime.newstack
+     0.01s 0.011% 99.95%      6.29s  6.87%  runtime.park_m
+     0.01s 0.011%   100%      0.01s 0.011%  runtime.procyieldAsm
+     0.01s 0.011%   100%      0.01s 0.011%  runtime.pthread_mutex_lock
+     0.01s 0.011%   100%      0.01s 0.011%  runtime.pthread_mutex_unlock
+     0.01s 0.011%   100%      0.01s 0.011%  runtime.runqget
+     0.01s 0.011%   100%      5.82s  6.36%  runtime.schedule
+         0     0%   100%      0.12s  0.13%  _.goready.func1
+         0     0%   100%      0.11s  0.12%  crypto/internal/fips140/sha256.block
+         0     0%   100%      0.08s 0.087%  github.com/GetStream/gophonic/internal/mel.fft400[go.shape.float32]
+         0     0%   100%      0.30s  0.33%  github.com/GetStream/gophonic/internal/nn.BiasGELU
+         0     0%   100%      0.01s 0.011%  github.com/GetStream/gophonic/internal/nn.ResidualNorm
+         0     0%   100%      0.02s 0.022%  github.com/GetStream/gophonic/internal/nn.SoftmaxExp
+         0     0%   100%      0.18s   0.2%  github.com/GetStream/gophonic/internal/q8gemm.maxAbsPrefix
+         0     0%   100%     32.55s 35.56%  github.com/GetStream/gophonic/internal/q8gemm.mulPanelsSME
+         0     0%   100%     28.50s 31.13%  github.com/GetStream/gophonic/internal/q8gemm.mulRowF16SME
+         0     0%   100%      2.01s  2.20%  github.com/GetStream/gophonic/internal/q8gemm.mulRowsF16SME
+         0     0%   100%      8.59s  9.38%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).HiddenLastBatchInto
+         0     0%   100%      0.18s   0.2%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).HiddenLastContinueEmbedInto (inline)
+         0     0%   100%      3.91s  4.27%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).HiddenLastExtendEmbedInto (inline)
+         0     0%   100%      3.91s  4.27%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).HiddenLastExtendInto (inline)
+         0     0%   100%      4.50s  4.92%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).HiddenTailContinueEmbedInto
+         0     0%   100%      0.75s  0.82%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).LogitsInto
+         0     0%   100%      0.26s  0.28%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).LogitsRowsInto
+         0     0%   100%      8.59s  9.38%  github.com/GetStream/gophonic/internal/qwen3lm.(*Evaluator).hiddenLastContinueEmbedInto
+         0     0%   100%      0.07s 0.076%  github.com/GetStream/gophonic/internal/qwen3lm.(*Workspace).addNorm
+         0     0%   100%      1.34s  1.46%  github.com/GetStream/gophonic/internal/qwen3lm.(*Workspace).run
+         0     0%   100%      8.21s  8.97%  github.com/GetStream/gophonic/internal/qwen3lm.(*Workspace).runEach
+         0     0%   100%     67.56s 73.80%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).ApplyRows
+         0     0%   100%      0.38s  0.42%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).addNorm
+         0     0%   100%      0.85s  0.93%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).pack
+         0     0%   100%     61.36s 67.03%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).projectClaims
+         0     0%   100%     60.94s 66.57%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).projectPanel
+         0     0%   100%      0.13s  0.14%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).rowScale
+         0     0%   100%      0.18s   0.2%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).scaleRow
+         0     0%   100%      0.18s   0.2%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).storePrefix
+         0     0%   100%      0.76s  0.83%  github.com/GetStream/gophonic/internal/qwen3lm.(*layerOp).swiglu
+         0     0%   100%      0.01s 0.011%  github.com/GetStream/gophonic/internal/qwen3lm.finite32
+         0     0%   100%      0.02s 0.022%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).Mul
+         0     0%   100%      1.26s  1.38%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).Rows
+         0     0%   100%      0.04s 0.044%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).mulShard
+         0     0%   100%      2.90s  3.17%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).runShard
+         0     0%   100%      3.04s  3.32%  github.com/GetStream/gophonic/internal/whispergemm.mulSMEScratch
+         0     0%   100%     11.20s 12.24%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).Transcribe
+         0     0%   100%      1.30s  1.42%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).encodeContinuation
+         0     0%   100%      9.76s 10.66%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).generate
+         0     0%   100%     11.20s 12.24%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).transcribe
+         0     0%   100%      5.10s  5.57%  github.com/GetStream/gophonic/qwen3asr.(*Transcriber).verify
+         0     0%   100%      1.28s  1.40%  github.com/GetStream/gophonic/qwen3asr.(*encoder).encodeSuffix
+         0     0%   100%      0.02s 0.022%  github.com/GetStream/gophonic/qwen3asr.(*encoderPrefix).remember
+         0     0%   100%      0.24s  0.26%  github.com/GetStream/gophonic/qwen3asr.(*encoderRows).ApplyRows
+         0     0%   100%      0.03s 0.033%  github.com/GetStream/gophonic/qwen3asr.(*encoderWorkspace).attention
+         0     0%   100%      0.04s 0.044%  github.com/GetStream/gophonic/qwen3asr.(*encoderWorkspace).gelu
+         0     0%   100%      1.02s  1.11%  github.com/GetStream/gophonic/qwen3asr.(*encoderWorkspace).linear
+         0     0%   100%      0.21s  0.23%  github.com/GetStream/gophonic/qwen3asr.(*encoderWorkspace).rows
+         0     0%   100%      2.63s  2.87%  github.com/GetStream/gophonic/qwen3asr.(*linearOp).ApplyRows
+         0     0%   100%     11.61s 12.68%  github.com/GetStream/gophonic/qwen3asr.TestDecoderContinuationWarmProfile
+         0     0%   100%     11.61s 12.68%  github.com/GetStream/gophonic/qwen3asr.TestDecoderContinuationWarmProfile.func1
+         0     0%   100%      0.41s  0.45%  github.com/GetStream/gophonic/qwen3asr.continuationFingerprint
+         0     0%   100%      0.02s 0.022%  math.Log
+         0     0%   100%      0.02s 0.022%  math.Log10
+         0     0%   100%      0.02s 0.022%  math.log10
+         0     0%   100%      0.01s 0.011%  runtime.(*cleanupQueue).needsWake
+         0     0%   100%      0.01s 0.011%  runtime.(*gQueue).pushBack
+         0     0%   100%      0.01s 0.011%  runtime.(*gcCPULimiterState).addIdleTime
+         0     0%   100%      0.01s 0.011%  runtime.(*limiterEvent).stop
+         0     0%   100%      0.58s  0.63%  runtime.(*timer).maybeAdd
+         0     0%   100%      0.58s  0.63%  runtime.(*timer).modify
+         0     0%   100%      0.58s  0.63%  runtime.(*timer).reset (inline)
+         0     0%   100%      0.10s  0.11%  runtime.(*timer).unlockAndRun
+         0     0%   100%      0.01s 0.011%  runtime.(*timer).updateHeap
+         0     0%   100%      0.09s 0.098%  runtime.(*timers).lock
+         0     0%   100%      0.10s  0.11%  runtime.(*timers).run
+         0     0%   100%      0.28s  0.31%  runtime.GOMAXPROCS
+         0     0%   100%      0.01s 0.011%  runtime.asyncPreempt2.func1
+         0     0%   100%      0.01s 0.011%  runtime.execute
+         0     0%   100%      0.01s 0.011%  runtime.globrunqput
+         0     0%   100%      1.31s  1.43%  runtime.gopreempt_m (inline)
+         0     0%   100%      0.07s 0.076%  runtime.goready
+         0     0%   100%      0.07s 0.076%  runtime.goroutineReady
+         0     0%   100%      0.71s  0.78%  runtime.lock (inline)
+         0     0%   100%      0.71s  0.78%  runtime.lockWithRank (inline)
+         0     0%   100%      2.84s  3.10%  runtime.mPark (inline)
+         0     0%   100%      6.30s  6.88%  runtime.mcall
+         0     0%   100%      1.28s  1.40%  runtime.morestack
+         0     0%   100%      0.15s  0.16%  runtime.nanotime
+         0     0%   100%      1.35s  1.47%  runtime.netpoll
+         0     0%   100%      0.56s  0.61%  runtime.netpollBreak (inline)
+         0     0%   100%      2.84s  3.10%  runtime.notesleep
+         0     0%   100%      2.15s  2.35%  runtime.notewakeup
+         0     0%   100%      0.59s  0.64%  runtime.osyield (inline)
+         0     0%   100%      0.04s 0.044%  runtime.pidleget
+         0     0%   100%      0.04s 0.044%  runtime.pidlegetSpinning
+         0     0%   100%      0.01s 0.011%  runtime.procyield
+         0     0%   100%      0.12s  0.13%  runtime.ready
+         0     0%   100%      0.58s  0.63%  runtime.resetForSleep
+         0     0%   100%      0.97s  1.06%  runtime.resetspinning
+         0     0%   100%      0.03s 0.033%  runtime.runqgrab
+         0     0%   100%      0.03s 0.033%  runtime.runqsteal
+         0     0%   100%      2.90s  3.17%  runtime.semasleep
+         0     0%   100%      2.15s  2.35%  runtime.semawakeup
+         0     0%   100%      2.17s  2.37%  runtime.startm
+         0     0%   100%      2.90s  3.17%  runtime.stopm
+         0     0%   100%      0.05s 0.055%  runtime.systemstack
+         0     0%   100%      0.02s 0.022%  runtime.unlock
+         0     0%   100%      0.02s 0.022%  runtime.unlockWithRank
+         0     0%   100%      0.57s  0.62%  runtime.wakeNetPoller
+         0     0%   100%      0.56s  0.61%  runtime.wakeNetpoll
+         0     0%   100%      2.22s  2.43%  runtime.wakep
+         0     0%   100%     11.61s 12.68%  testing.tRunner
+         0     0%   100%      0.18s   0.2%  time.Now
+         0     0%   100%      0.01s 0.011%  time.Sleep
+         0     0%   100%      0.18s   0.2%  time.now
+         0     0%   100%      0.06s 0.066%  time.runtimeNano
+         0     0%   100%      0.18s   0.2%  time.runtimeNow

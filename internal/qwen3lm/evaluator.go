@@ -160,6 +160,24 @@ type Embeds struct {
 // rows of embeds. kv records each replaced token as -1, so CommonPrefix never
 // matches a later sequence across different embeddings.
 func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
+	return e.hiddenLastContinueEmbedInto(kv, keep, 0, ids, embeds, dst, ws)
+}
+
+// HiddenLastContinueEmbedInto recomputes an embedded sequence at the same
+// arithmetic anchor keep, reusing up to reuse leading rows of ids from kv.
+// The caller must establish that those input rows and the kept prefix are
+// unchanged, and that their cached states were computed with this same keep.
+// Only complete attention blocks are reused; their projection tile shapes,
+// attention bounds and FP32 reduction order remain identical to recomputing.
+// The GPU path currently recomputes every row.
+func (e *Evaluator) HiddenLastContinueEmbedInto(kv *PrefixKV, keep, reuse int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
+	return e.hiddenLastContinueEmbedInto(kv, keep, reuse, ids, embeds, dst, ws)
+}
+
+func (e *Evaluator) hiddenLastContinueEmbedInto(kv *PrefixKV, keep, reuse int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
+	if e == nil || e.m == nil {
+		return errors.New("qwen3: nil evaluator")
+	}
 	if kv == nil || kv.owner != e {
 		return errors.New("qwen3: prefix store belongs to another evaluator")
 	}
@@ -169,8 +187,17 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	if keep+len(ids) > kv.capacity {
 		return fmt.Errorf("qwen3: %d tokens exceed prefix capacity %d", keep+len(ids), kv.capacity)
 	}
-	if ws == nil {
-		return errors.New("qwen3: nil workspace")
+	if ws == nil || ws.owner != e {
+		return errors.New("qwen3: nil or foreign workspace")
+	}
+	if reuse < 0 || reuse > len(kv.tokens)-keep || reuse > len(ids) {
+		return fmt.Errorf("qwen3: cannot reuse %d rows at anchor %d", reuse, keep)
+	}
+	// Every requested output row still runs. A complete block also aligns
+	// both the 16-row projection tiles and 32-row attention GEMM tiles.
+	reuse = min(reuse, len(ids)-max(1, len(ws.tail)/e.m.cfg.hidden)) / attentionBlock * attentionBlock
+	if kv.gpu != nil {
+		reuse = 0
 	}
 	if len(embeds.Rows) != 0 || e.m.embed == nil {
 		n := 0
@@ -187,15 +214,16 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 		}
 		ws.embeds = embeds
 	}
-	if kv.gpu == nil && keep != len(kv.tokens) {
+	if kv.gpu == nil && reuse == 0 && keep != len(kv.tokens) {
 		kv.copyPackedPrefix(kv, keep)
 	}
 	kv.tokens = kv.tokens[:keep] // the stored suffix is overwritten below
-	ws.prefix, ws.past = kv, keep
+	ws.prefix, ws.past, ws.reuse = kv, keep, reuse
 	ws.oneSeq[0], ws.oneDst[0] = ids, dst
 	err := e.HiddenLastBatchInto(ws.oneSeq[:], ws.oneDst[:], ws)
 	ws.oneSeq[0], ws.oneDst[0] = nil, nil
-	ws.prefix, ws.past, ws.embeds = nil, 0, Embeds{}
+	ws.prefix, ws.past, ws.reuse, ws.embeds = nil, 0, 0, Embeds{}
+	ws.op.firstRow = 0
 	if err != nil {
 		return err
 	}
@@ -217,6 +245,12 @@ const maxTail = 256
 // order. With LogitsRowsInto it checks a draft continuation in one pass: the
 // state at each position predicts the token after it.
 func (e *Evaluator) HiddenTailExtendEmbedInto(kv *PrefixKV, keep int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
+	return e.HiddenTailContinueEmbedInto(kv, keep, 0, ids, embeds, dst, ws)
+}
+
+// HiddenTailContinueEmbedInto combines HiddenTailExtendEmbedInto with the
+// exact leading-row reuse contract of HiddenLastContinueEmbedInto.
+func (e *Evaluator) HiddenTailContinueEmbedInto(kv *PrefixKV, keep, reuse int, ids []int, embeds Embeds, dst []float32, ws *Workspace) error {
 	if e == nil || e.m == nil || ws == nil {
 		return errors.New("qwen3: nil evaluator or workspace")
 	}
@@ -227,7 +261,7 @@ func (e *Evaluator) HiddenTailExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	}
 	ws.tail = dst
 	defer func() { ws.tail = nil }()
-	return e.HiddenLastExtendEmbedInto(kv, keep, ids, embeds, dst[(k-1)*h:], ws)
+	return e.hiddenLastContinueEmbedInto(kv, keep, reuse, ids, embeds, dst[(k-1)*h:], ws)
 }
 
 // LogitsRowsInto is LogitsInto for several states: hidden holds whole
@@ -359,6 +393,7 @@ type Workspace struct {
 	shared                          bool               // prefix is read-only and shared by every sequence
 	attnPerHead                     bool               // prefix attention items are per query head, not per group
 	past                            int
+	reuse                           int // leading own rows restored at the original arithmetic anchor
 	ropeCos, ropeSin                []float32
 	ropePositions                   int // positions whose RoPE values are filled
 	positions                       int // position capacity of RoPE and attention scratch
@@ -521,7 +556,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if len(ids) >= gemmAttentionMin || ws.prefix != nil {
 			// Later query blocks attend to more keys; queue them first so the
 			// dynamic scheduler finishes with the cheapest items.
-			for q0 := (len(ids) - 1) / attentionBlock * attentionBlock; q0 >= 0; q0 -= attentionBlock {
+			for q0 := (len(ids) - 1) / attentionBlock * attentionBlock; q0 >= ws.reuse; q0 -= attentionBlock {
 				for g := range c.kvHeads {
 					ws.attnItems = append(ws.attnItems, attentionItem{start, int32(q0), int32(min(q0+attentionBlock, len(ids))), int32(g), int32(ws.past)})
 				}
@@ -532,8 +567,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 	// With a prefix and few items (one long prefix, few new rows), split
 	// items per query head so every worker gets work; with many items the
 	// per-group form shares each group's packed rows across its heads.
+	// Select from the original shape: skipping cached blocks must not grow
+	// descriptor storage by switching a warmed group dispatch to more heads.
 	ws.attnPerHead = false
-	if ws.prefix != nil && len(ws.attnItems) < 4*ws.pool.size() {
+	originalItems := len(ws.attnItems) + ws.reuse/attentionBlock*c.kvHeads
+	if ws.prefix != nil && originalItems < 4*ws.pool.size() {
 		ws.attnPerHead = true
 		group := c.heads / c.kvHeads
 		n := len(ws.attnItems)
@@ -549,7 +587,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 	}
 
 	op := &ws.op
-	op.rows = rows
+	op.rows, op.firstRow = rows, ws.reuse
 	for layer := range m.layers {
 		l := &m.layers[layer]
 		op.layer, op.layerIndex = l, layer
@@ -562,6 +600,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		ws.addNorm(residual, l.attnNorm, &l.q)
 		ws.project(ws.norm, c.hidden, true, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
 		ws.run(opQKRope, rows, 4)
+		if ws.reuse > 0 {
+			// Restore the cached audio into the original own-row matrix,
+			// then cut only this layer's prefix back to the arithmetic anchor.
+			ws.run(opRestorePrefix, c.kvHeads, 1)
+		}
 
 		ws.run(opAttention, rows*c.kvHeads, 4)
 		if len(ws.attnItems) > 0 {
@@ -632,7 +675,7 @@ func (ws *Workspace) keepLastRows(seqs [][]int, c *modelConfig) {
 			copy(ws.ctx[s*qdim:(s+1)*qdim], ws.ctx[last*qdim:(last+1)*qdim])
 		}
 	}
-	ws.op.rows = len(seqs)
+	ws.op.rows, ws.op.firstRow = len(seqs), 0
 }
 
 // keepTailRows moves the last k of rows rows of h and ctx to the front and
@@ -641,7 +684,7 @@ func (ws *Workspace) keepTailRows(rows, k int, c *modelConfig) {
 	qdim := c.heads * c.headDim
 	copy(ws.h[:k*c.hidden], ws.h[(rows-k)*c.hidden:rows*c.hidden])
 	copy(ws.ctx[:k*qdim], ws.ctx[(rows-k)*qdim:rows*qdim])
-	ws.op.rows = k
+	ws.op.rows, ws.op.firstRow = k, 0
 }
 
 // Reserve allocates storage for batches of up to rows tokens and sequences
@@ -818,7 +861,7 @@ func (ws *Workspace) addNorm(residual, weight []float32, next *linear) {
 func (ws *Workspace) prepareTiles(cols int) {
 	rows := ws.op.rows
 	tiles := (rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
-	for t := range tiles {
+	for t := ws.op.firstRow / q8gemm.ActivationRows; t < tiles; t++ {
 		n := min(q8gemm.ActivationRows, rows-t*q8gemm.ActivationRows)
 		var err error
 		if ws.op.rot != nil {

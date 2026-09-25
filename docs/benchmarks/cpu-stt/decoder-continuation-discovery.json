@@ -1,0 +1,236 @@
+{
+  "baseline": "14f4aa9: merged exact encoder/head reuse; decoder recomputed at original anchor",
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "start_utc": "2026-09-25T21:44:59Z",
+  "end_utc": "2026-09-25T21:47:04Z",
+  "frames": [
+    400,
+    800,
+    1602,
+    1700,
+    2400,
+    3202,
+    3300
+  ],
+  "hashes": [
+    "ed11268feb80289f1b2ac7487823a67a6fc1155d2671ea916ea72dc0e692a4b9",
+    "b811138fb8dfbfcc2a4436d4db76456042f7de5a211a84636b7709da3a0f1ba1",
+    "593ef59e02cdfb40dbd5b4ec08b036bacfc9f762e33beaf8f452245f912b69a4",
+    "8b7cd1b62e03760ba46676ef5037fb505a89a15696b4d846c19d4167395f3fd3",
+    "87c5e631a309778a80ac3fea5b007560cbc466ca4d84b972c1f93a758229d78e",
+    "cd291d73f2dd5627da9e1a2fc9cf759acd673b4cd6e688a013363c6a8cf26ac0",
+    "5f424009cdd1e6b80fe8c46882cfb7a2a2a833cd6b48be91295a2b6887b0f04f"
+  ],
+  "groups": [
+    [
+      "bd63fdf54829dad0297c56db80ecec1640f2a688ba15e3ed756db13ed5094fb3",
+      "40cba5accd1db2fef04073b468a765c5c9cf98c4d4ec4e517760ce85fb328e9e",
+      "e79bafe0d21fa405e25c5c4f7d05b129819d3bdcf78fc3149c1ebeed5e3d0bf6",
+      "c9052c9a0451c43bbb3813e4cd52122a7098d95edaf9e7f18ece92fb2c79589b",
+      "549163613b4f3ad111cf6fe611f5ee8985ae41f407b492b73d75e358fe567a2e"
+    ],
+    [
+      "adf4a56067ed6832e916230e9d0ab47d0a597a09149543f18e361a25728886dd",
+      "de9a03d2d3d9a461db1101fc76b66c32bddc7729e75b07433a14d64702197fb1",
+      "751900b172d2c026ac3d63e2252175bea5e345fdc86bc7eb5efb08dc48e47837",
+      "6e8b558679a83a0558f7fdc29d4901b05f46d65de7e9de61000ba52cac5cde82",
+      "e9ec0d1be9a1e87c29230adc06c500d963a9c642ee65ea3072b8dea781057a0c"
+    ],
+    [
+      "1452cb305b29fbc3b2eb2c0d574c6d918bba3c2b1256630730d971f36fbf45ba",
+      "7e405807d29117cf4a7fa3af1e90268e1748a91c85cb9c7d62fbc62329f85773",
+      "8d3a69d45d0d45c66daecd05e1b612df3e00382a967f5aca3b1faf12de32daa2",
+      "b2dd9359d9f20f2e1eb4325024f4ce53d0ad8f84c928fb685b887684206b7382",
+      "9f2ea3b3add3d38841d96ad267c46695e68aa2b7f1422e7f5c64b49927b771f8"
+    ],
+    [
+      "16ed71453fa3a3ba7b68fab79fdc29cb598fc911b788da3d84a819e6a3049e3b",
+      "75962c27b1a64a34224901e33d247a449b0f0732f7c6acd804496a050b7a8b4a",
+      "cdcca6acba78dcc6285e07a09f74b93d439285427e12c02b5ff24942095d8c2f",
+      "4cf6c7d3146273722dbb94c4c35dc31b74a81de41216b2ded482ee7e82113b5c",
+      "349e77a39d5002bc949f6ae5f90db54a0bcc68c344332aa8bcde3920f9eaf07d"
+    ],
+    [
+      "ffd139a89f7f071d4405e8fb95cc0f456eba983ba5044c43a0d9c7be87ad129c",
+      "01c58680b031f9f2f2412503f94b5612c40bbad991595ae64754f52c130bc9a2",
+      "3cc2387ec8821810d11037a6c39917a131eea9ce6ba72bc97d8f61cb34c4d97c",
+      "519d6c1055b3c1ecfb2f363ea7c29ad92efbcf7c468c8b94fdf95f9f977a58a4",
+      "e009da652b8c69cf20a495a76a94f31a498a4817253f389eae987a36c051183a"
+    ],
+    [
+      "e16c3fa57452995f637484aa762478ddccc13c882809ee1e097328c0db7bf307",
+      "c473baaa1d1b44e2778973235dce2e24b608bf057991655b29591f82ddb53fa9",
+      "687bce79b65c22dbcd4377aa9fd275d32bf5cc7cd200697d6fd8a94a7a96350b",
+      "ff7ab24309727ceaad6ebe587d2cc9a780ee58e52a13e9eeb334575215c5c129",
+      "643c0edb1c6dae4f1b01f248b727c0bf01f2f2f210c36dd4374bb141f9a7b220"
+    ],
+    [
+      "edef0066e6741603be1637304d0c3557a4e4a62f52aca40844bd7022e6d8e4a8",
+      "ea3c9c1fc83bdbaa9610000c077079dc6096f03a13a28e5c0cacb7c44b7f7ba3",
+      "bde445df32f98a5cc55e2400ff96edf4d71c0e03d04692a364bc929403810f6c",
+      "5d8db7f26cdda2566ca57bfa0d51d13669a4eeb009523160a9e1a0216bf056b1",
+      "6c0e180691eada5d7ac9ae191fa933b5a5077ce2e2629833957580152c547b2f"
+    ]
+  ],
+  "reused_decoder_rows": [
+    0,
+    0,
+    0,
+    128,
+    128,
+    128,
+    384
+  ],
+  "text": [
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2su",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91Lg==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91LiBBc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdC4=",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeQ==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaQ==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaWNhbnMsIGFzayBub3Qgd2hhdCB5b3VyIGNvdW50cnkgY2FuIGRvIGZvciB5b3U7IGFzayB3aGF0IHlvdSBjYW4gZG8gZm9yIHlvdXIu",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaWNhbnMsIGFzayBub3Qgd2hhdCB5b3VyIGNvdW50cnkgY2FuIGRvIGZvciB5b3U7IGFzayB3aGF0IHlvdSBjYW4gZG8gZm9yIHlvdXIgY291bnRyeS4="
+  ],
+  "samples": [
+    {
+      "pair": 0,
+      "variant": "recompute",
+      "ns": 4311364584,
+      "steps_ns": [
+        306424000,
+        332819334,
+        639995750,
+        655099250,
+        797495667,
+        970346666,
+        609183917
+      ],
+      "mallocs": 9,
+      "bytes": 800
+    },
+    {
+      "pair": 0,
+      "variant": "reuse",
+      "ns": 4019940458,
+      "steps_ns": [
+        344204375,
+        428201584,
+        760696750,
+        557948208,
+        746343458,
+        889073875,
+        293472208
+      ],
+      "mallocs": 9,
+      "bytes": 1008
+    },
+    {
+      "pair": 1,
+      "variant": "reuse",
+      "ns": 6269840916,
+      "steps_ns": [
+        293804083,
+        332478375,
+        649929583,
+        560951750,
+        790788167,
+        2626302458,
+        1015586500
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 1,
+      "variant": "recompute",
+      "ns": 19468282626,
+      "steps_ns": [
+        1421360084,
+        1319229333,
+        3409865917,
+        3222153084,
+        5229750833,
+        4104370917,
+        761552458
+      ],
+      "mallocs": 9,
+      "bytes": 1008
+    },
+    {
+      "pair": 2,
+      "variant": "recompute",
+      "ns": 16738356125,
+      "steps_ns": [
+        318410291,
+        359155250,
+        755632042,
+        1068729333,
+        1611472042,
+        7049946375,
+        5575010792
+      ],
+      "mallocs": 5,
+      "bytes": 352
+    },
+    {
+      "pair": 2,
+      "variant": "reuse",
+      "ns": 41534342958,
+      "steps_ns": [
+        9837943666,
+        10195630750,
+        18195570334,
+        979100958,
+        927777875,
+        1040049250,
+        358270125
+      ],
+      "mallocs": 4,
+      "bytes": 448
+    },
+    {
+      "pair": 3,
+      "variant": "reuse",
+      "ns": 4766840375,
+      "steps_ns": [
+        378113667,
+        428898750,
+        845357125,
+        735122041,
+        922189167,
+        1107846291,
+        349313334
+      ],
+      "mallocs": 5,
+      "bytes": 448
+    },
+    {
+      "pair": 3,
+      "variant": "recompute",
+      "ns": 5452628667,
+      "steps_ns": [
+        361179125,
+        443280250,
+        826096750,
+        830789542,
+        1011849833,
+        1220229125,
+        759204042
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    }
+  ],
+  "binary_sha256": "4f6022ba39fb6b4c0df961f63f77de747c27cb43f1ede9e5d38f7ffb62f63612",
+  "environment": {
+    "cpu": "Apple M4 Max",
+    "memory_gib": 64,
+    "model": "Qwen/Qwen3-ASR-1.7B",
+    "GOEXPERIMENT": "simd",
+    "CGO_ENABLED": "0",
+    "GOMAXPROCS": "16"
+  },
+  "allocation_method": "Process Mallocs/TotalAlloc counters around each complete seven-call public trace at GOMAXPROCS=16; includes runtime worker scheduling metadata. No universal zero-allocation claim.",
+  "harness": "decoder-continuation-experiment.patch",
+  "baseline_commit": "14f4aa9a8fd5fccfc26865b9b7c38c5d67d95609"
+}

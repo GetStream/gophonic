@@ -1,5 +1,9 @@
 # Exact CPU streaming improvements
 
+The follow-up [decoder continuation work](cpu-continuation-exact.md) reuses
+exact audio KV blocks while preserving the original attention reductions, and
+reduces small Whisper decoder dispatches.
+
 This follow-up to the one-row packing change targets work repeated across
 Qwen streaming partials. It preserves the existing F16 weight representation,
 FP32 accumulation order, token verification, and public transcript semantics.

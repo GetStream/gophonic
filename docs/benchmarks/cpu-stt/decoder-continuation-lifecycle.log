@@ -1,0 +1,5 @@
+=== RUN   TestDecoderContinuationGrowingPCMExact
+--- PASS: TestDecoderContinuationGrowingPCMExact (15.40s)
+=== RUN   TestDecoderPrefixProvenance
+--- PASS: TestDecoderPrefixProvenance (0.00s)
+PASS
