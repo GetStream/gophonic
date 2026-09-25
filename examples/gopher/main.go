@@ -35,8 +35,8 @@ import (
 	rtc "github.com/GetStream/getstream-go-webrtc"
 	webaudio "github.com/GetStream/getstream-go-webrtc/audio"
 	"github.com/GetStream/getstream-go-webrtc/audio/opus"
-	"github.com/GetStream/getstream-go-webrtc/logger"
 	audiortc "github.com/GetStream/getstream-go-webrtc/audio/rtc"
+	"github.com/GetStream/getstream-go-webrtc/logger"
 	"github.com/GetStream/getstream-go-webrtc/track"
 	sfu_events "github.com/GetStream/protocol/protobuf/video/sfu/event"
 	sfu_models "github.com/GetStream/protocol/protobuf/video/sfu/models"
@@ -168,7 +168,6 @@ func main() {
 		MuteStates: []*signal_rpc.TrackMuteState{{TrackType: sfu_models.TrackType_TRACK_TYPE_AUDIO, Muted: false}}}); err != nil {
 		log.Printf("unmute: %v", err)
 	}
-
 
 	// Hear every microphone: those already live, then each that starts.
 	var mics []*signal_rpc.TrackSubscriptionDetails
