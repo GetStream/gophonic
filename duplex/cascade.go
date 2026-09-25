@@ -1138,12 +1138,25 @@ func (c *Cascade) respond() {
 		// not while it might still be superseded or continued, and the
 		// answer's captions follow it.
 		userShown := false
+		captioned := 0 // bytes of the answer captioned as heard
 		showUser := func() {
 			if !userShown && j.audio != nil && c.cfg.OnText != nil &&
 				c.played.Load() >= int64(resumeWindow)*int64(c.outRate)/int64(time.Second) {
 				userShown = true
 				c.cfg.OnText(chat.User, text, true)
-				c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
+			}
+			if !userShown {
+				return
+			}
+			// The answer's captions follow the voice, a word at a time.
+			said := speakable(reply.String())
+			n := min(len(said), int(c.played.Load()*charsPerSecond/int64(c.outRate)))
+			if n < len(said) {
+				n = max(0, strings.LastIndexFunc(said[:n], unicode.IsSpace))
+			}
+			if n > captioned {
+				captioned = n
+				c.cfg.OnText(chat.Assistant, said[:n], false)
 			}
 		}
 		var (
@@ -1194,9 +1207,6 @@ func (c *Cascade) respond() {
 				c.saying = reply.String()
 				c.mu.Unlock()
 				showUser()
-				if userShown && strings.ContainsAny(string(p), " .,!?;:") {
-					c.cfg.OnText(chat.Assistant, speakable(reply.String()), false)
-				}
 				if spoken == "" {
 					return nil
 				}

@@ -45,7 +45,28 @@ func (c *chatChannel) open() error {
 
 // send posts text as a message from c's user.
 func (c *chatChannel) send(text string) error {
-	_, err := c.post("/message", map[string]any{"message": map[string]any{"text": text}}, "")
+	_, err := c.say(text)
+	return err
+}
+
+// say posts text as a message from c's user and returns its ID.
+func (c *chatChannel) say(text string) (string, error) {
+	data, err := c.post("/message", map[string]any{"message": map[string]any{"text": text}}, "")
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Message wsMessage `json:"message"`
+	}
+	if err := vibejson.Unmarshal(data, &resp); err != nil {
+		return "", err
+	}
+	return resp.Message.ID, nil
+}
+
+// edit replaces the text of c's user's message id.
+func (c *chatChannel) edit(id, text string) error {
+	_, err := c.request(restBase+"/messages/"+url.PathEscape(id), map[string]any{"message": map[string]any{"text": text}}, "")
 	return err
 }
 
@@ -53,11 +74,16 @@ func (c *chatChannel) send(text string) error {
 // connectionID, when not empty, ties the request to a websocket connection
 // that is watching the channel.
 func (c *chatChannel) post(endpoint string, body any, connectionID string) ([]byte, error) {
+	return c.request(restBase+c.path+endpoint, body, connectionID)
+}
+
+// request posts body as JSON to the API URL u and returns the response body.
+func (c *chatChannel) request(u string, body any, connectionID string) ([]byte, error) {
 	payload, err := vibejson.Marshal(&body)
 	if err != nil {
 		return nil, err
 	}
-	u := restBase + c.path + endpoint + "?api_key=" + url.QueryEscape(c.apiKey)
+	u += "?api_key=" + url.QueryEscape(c.apiKey)
 	if connectionID != "" {
 		u += "&connection_id=" + url.QueryEscape(connectionID)
 	}
@@ -329,5 +355,86 @@ func (c *chatChannel) pump(ctx context.Context, conn *wsConn, connectionID strin
 			seen[m.ID] = true
 		}
 		onMessage(m.User.ID, strings.TrimSpace(m.User.Name), m.Text)
+	}
+}
+
+// liveCaptions writes the call's captions into its chat when closed
+// captions are off: what people say as messages, and each of Gopher's
+// answers as one message that grows as the voice speaks it. Writes go out
+// in order; while one is under way, only the latest text of an answer
+// waits to follow.
+type liveCaptions struct {
+	room *chatChannel
+	mu   sync.Mutex
+	wake chan struct{}
+	said []string // messages to post, in order
+	next string   // the answer's newest text, when it changed
+	done bool     // the answer is final
+}
+
+func newLiveCaptions(room *chatChannel) *liveCaptions {
+	l := &liveCaptions{room: room, wake: make(chan struct{}, 1)}
+	go l.run()
+	return l
+}
+
+// say posts a message.
+func (l *liveCaptions) say(text string) {
+	l.mu.Lock()
+	l.said = append(l.said, text)
+	l.mu.Unlock()
+	l.signal()
+}
+
+// answer shows the answer's text so far; final ends it.
+func (l *liveCaptions) answer(text string, final bool) {
+	l.mu.Lock()
+	l.next, l.done = text, l.done || final
+	l.mu.Unlock()
+	l.signal()
+}
+
+func (l *liveCaptions) signal() {
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (l *liveCaptions) run() {
+	id := "" // the answer's message
+	for range l.wake {
+		for {
+			l.mu.Lock()
+			said, next, done := l.said, l.next, l.done
+			l.said, l.next = nil, ""
+			if done && next == "" {
+				l.done = false
+			}
+			l.mu.Unlock()
+			if len(said) == 0 && next == "" {
+				if done {
+					id = ""
+				}
+				break
+			}
+			for _, text := range said {
+				if _, err := l.room.say(text); err != nil {
+					log.Printf("chat: %v", err)
+				}
+			}
+			if next == "" {
+				continue
+			}
+			var err error
+			if id == "" {
+				id, err = l.room.say(next)
+			} else {
+				err = l.room.edit(id, next)
+			}
+			if err != nil {
+				log.Printf("chat: %v", err)
+			}
+		}
 	}
 }

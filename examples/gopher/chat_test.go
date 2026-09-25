@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,5 +162,42 @@ func TestChatChannelWatch(t *testing.T) {
 	}
 	if got[1] != (delivery{"alice", "Alice", "hello from alice"}) {
 		t.Fatalf("live delivery: got %+v", got[1])
+	}
+}
+
+// Captions in the chat: what people say is posted; an answer is one
+// message, edited as it grows.
+func TestLiveCaptions(t *testing.T) {
+	var mu sync.Mutex
+	var log []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Message struct {
+				Text string `json:"text"`
+			} `json:"message"`
+		}
+		if err := vibejson.Unmarshal(mustBody(t, r), &body); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		mu.Lock()
+		log = append(log, r.URL.Path+" "+body.Message.Text)
+		mu.Unlock()
+		w.Write([]byte(`{"message":{"id":"m1"}}`))
+	}))
+	defer server.Close()
+	withBases(t, server.URL, "")
+	l := newLiveCaptions(&chatChannel{apiKey: "key", token: "tok", path: "/channels/videocall/test"})
+	l.say("Ana: tell me a joke")
+	time.Sleep(50 * time.Millisecond)
+	for _, s := range []string{"Gopher: Why", "Gopher: Why did the", "Gopher: Why did the chicken cross?"} {
+		l.answer(s, s == "Gopher: Why did the chicken cross?")
+		time.Sleep(50 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"/channels/videocall/test/message Ana: tell me a joke", "/channels/videocall/test/message Gopher: Why",
+		"/messages/m1 Gopher: Why did the", "/messages/m1 Gopher: Why did the chicken cross?"}
+	if strings.Join(log, "|") != strings.Join(want, "|") {
+		t.Fatalf("chat\n%q\nwant\n%q", log, want)
 	}
 }

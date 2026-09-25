@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	rtc "github.com/GetStream/getstream-go-webrtc"
@@ -108,6 +109,7 @@ func main() {
 	}
 	// The call's chat opens once Gopher has joined, which creates its user.
 	var room *chatChannel
+	var live atomic.Pointer[liveCaptions] // the chat's captions, when closed captions are off
 	humans := &roster{}
 	present := &people{}
 	mix := newMixer()
@@ -144,10 +146,15 @@ func main() {
 			return present.name(mix.loudest()) + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
 		},
 		Tools: tools(),
+		// Captions follow the voice: closed captions sentence by sentence
+		// with the app's secret; otherwise the call's chat, where each
+		// answer is one message that grows as it is spoken.
 		OnText: func(role chat.Role, text string, final bool) {
 			if role == chat.Assistant {
-				// Captions follow the voice sentence by sentence.
 				captions.assistant(text, final)
+				if l := live.Load(); l != nil {
+					l.answer("Gopher: "+text, final)
+				}
 			} else {
 				captions.show(present.name(mix.loudest()), text)
 			}
@@ -157,11 +164,10 @@ func main() {
 			who := present.name(mix.loudest()) + ":"
 			if role == chat.Assistant {
 				who = "Gopher:"
+			} else if l := live.Load(); l != nil {
+				l.say(who + " " + text)
 			}
 			fmt.Printf("%s %s\n", who, text)
-			if room != nil && captions.call == nil {
-				go room.send(who + " " + text)
-			}
 		},
 		OnError: func(err error) { log.Printf("agent: %v", err) },
 		OnStage: func(stage string, elapsed time.Duration) {
@@ -194,6 +200,9 @@ func main() {
 	if err := room.open(); err != nil {
 		log.Printf("chat is off: %v", err)
 		room = nil
+	}
+	if room != nil && captions.call == nil {
+		live.Store(newLiveCaptions(room))
 	}
 	if room != nil {
 		// The call's chat is silent context: what people type joins the
