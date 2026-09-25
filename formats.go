@@ -88,7 +88,9 @@ func (zeroShot) Close() error { return nil }
 // leaves it open.
 type generator struct{ g *qwen3.Chat }
 
-func (g generator) NewSession(system string) (chat.Session, error) { return g.g.NewSession(system) }
+func (g generator) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, error) {
+	return g.g.NewSession(system, tools...)
+}
 
 func (generator) Close() error { return nil }
 

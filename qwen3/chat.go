@@ -38,8 +38,11 @@ type Chat struct {
 	enders  []int
 	closer  []bool
 	newline []int
-	header  [3][]int // "<|im_start|>system\n" and so on, by chat.Role
+	header  [4][]int // "<|im_start|>system\n" and so on, by chat.Role
 	answer  []int    // the assistant header and the empty thinking block
+	// Tool calls: the tokens around a call, and after a tool's result.
+	callOpen, callClose int
+	resultEnd           []int
 }
 
 var _ chat.Generator = (*Chat)(nil)
@@ -137,9 +140,16 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 	c.header[chat.System] = encode("<|im_start|>system\n")
 	c.header[chat.User] = encode("<|im_start|>user\n")
 	c.header[chat.Assistant] = encode("<|im_start|>assistant\n")
+	c.header[chat.Tool] = encode("<|im_start|>user\n<tool_response>\n")
+	c.resultEnd = encode("\n</tool_response>")
 	c.answer = encode("<|im_start|>assistant\n<think>\n\n</think>\n\n")
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: chat template: %w", err)
+	}
+	c.callOpen, ok1 = tokens.AddedID("<tool_call>")
+	c.callClose, ok2 = tokens.AddedID("</tool_call>")
+	if !ok1 || !ok2 {
+		return nil, errors.New("qwen3: the tokenizer lacks <tool_call> or </tool_call>")
 	}
 	c.enders = append(c.enders, c.imEnd)
 	c.closer = make([]bool, weights.Config().Vocab)
@@ -195,9 +205,25 @@ func (c *Chat) Close() error {
 }
 
 // NewSession starts a conversation.
-func (c *Chat) NewSession(system string) (chat.Session, error) {
+func (c *Chat) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, error) {
 	cfg := c.weights.Config()
 	s := &Session{c: c, hidden: make([]float32, cfg.Hidden), logits: make([]float32, cfg.Vocab), reply: -1}
+	if len(tools) > 0 {
+		var err error
+		if system, err = toolsPrompt(system, tools); err != nil {
+			return nil, err
+		}
+		// What follows <tool_call> up to each tool's arguments, drafted
+		// whole: "\n{"name": "stay_quiet", "arguments":".
+		for _, t := range tools {
+			text := "\n{\"name\": \"" + t.Name + "\", \"arguments\":"
+			ids, err := c.tokens.EncodeInto(text, make([]int, 0, len(text)), &s.tws)
+			if err != nil {
+				return nil, err
+			}
+			s.tools = append(s.tools, toolDraft{name: t.Name, scaffold: ids})
+		}
+	}
 	if system != "" {
 		if err := s.Add(chat.System, system); err != nil {
 			return nil, err
@@ -224,6 +250,22 @@ type Session struct {
 	text     []byte // message rendering and decoded pieces
 	sample   sampler
 	closed   bool
+
+	// Tool calls: the tools offered, the calls of the last reply with
+	// their arguments' storage, and the call being written.
+	tools   []toolDraft
+	calls   []chat.Call
+	args    [][]byte
+	calling bool
+	call    []byte    // its text
+	callIDs []int     // its tokens
+	vlogits []float32 // the logits of drafted states
+}
+
+// toolDraft is a tool's name and the tokens a call to it starts with.
+type toolDraft struct {
+	name     string
+	scaffold []int
 }
 
 var _ chat.Session = (*Session)(nil)
@@ -233,14 +275,14 @@ func (s *Session) Add(role chat.Role, text string) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
-	if role > chat.Assistant {
+	if role > chat.Tool {
 		return fmt.Errorf("qwen3: unknown role %d", role)
 	}
 	c := s.c
 	s.ids = append(s.ids, c.header[role]...)
 	start := len(s.ids)
 	// A token takes at least one byte; the end marker and newline follow.
-	if need := start + len(text) + 1 + len(c.newline); cap(s.ids) < need {
+	if need := start + len(text) + len(c.resultEnd) + 1 + len(c.newline); cap(s.ids) < need {
 		s.ids = append(make([]int, 0, 2*need), s.ids...)
 	}
 	body, err := c.tokens.EncodeInto(text, s.ids[start:start], &s.tws)
@@ -249,11 +291,17 @@ func (s *Session) Add(role chat.Role, text string) error {
 		return fmt.Errorf("qwen3: tokenize message: %w", err)
 	}
 	s.ids = s.ids[:start+len(body)]
+	if role == chat.Tool {
+		s.ids = append(s.ids, c.resultEnd...)
+	}
 	s.ids = append(s.ids, c.imEnd)
 	s.ids = append(s.ids, c.newline...)
 	s.reply = -1
 	return nil
 }
+
+// Calls returns the tool calls of the last reply; see chat.Session.
+func (s *Session) Calls() []chat.Call { return s.calls }
 
 // Reply generates the assistant's next message.
 func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece []byte) error) error {
@@ -290,37 +338,166 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 	s.ready = 0
 	s.sample.reset(opts)
 	s.text = s.text[:0]
+	s.calls, s.calling = s.calls[:0], false
 	var err error
-	for n := 0; ; n++ {
-		if err = c.eval.LogitsInto(s.hidden, s.logits, c.ws); err != nil {
-			break
+	next, sampled := 0, false // sampled: next was drawn while checking a draft
+	for n := 0; n < room; n++ {
+		if !sampled {
+			if err = c.eval.LogitsInto(s.hidden, s.logits, c.ws); err != nil {
+				break
+			}
+			next = s.sample.next(s.logits, opts)
 		}
-		next := s.sample.next(s.logits, opts)
+		sampled = false
 		if next == c.imEnd || next == c.endText {
 			break
 		}
-		s.ids = append(s.ids, next)
-		if err = s.emit(c.tokens.Piece(next), sink, false); err != nil || n+1 == room {
+		if err = s.take(next, sink); err != nil || n+1 == room {
 			break
 		}
 		if err = ctx.Err(); err != nil {
 			break
 		}
-		if len(s.ids)+2 > s.kv.Capacity() {
-			if err = s.reserve(2*s.kv.Capacity(), limit); err != nil {
+		draft := s.draft(room - n - 1)
+		if need := len(s.ids) + len(draft) + 2; need > s.kv.Capacity() {
+			if err = s.reserve(max(2*s.kv.Capacity(), need), limit); err != nil {
 				break
 			}
 		}
-		if err = c.eval.HiddenLastExtendInto(s.kv, len(s.kv.Tokens()), s.ids[len(s.ids)-1:], s.hidden, c.ws); err != nil {
+		if len(draft) == 0 {
+			if err = c.eval.HiddenLastExtendInto(s.kv, len(s.ids)-1, s.ids[len(s.ids)-1:], s.hidden, c.ws); err != nil {
+				break
+			}
+			continue
+		}
+		var taken int
+		if taken, next, err = s.verify(draft, opts, sink); err != nil {
 			break
 		}
+		n += taken
+		sampled = true
 	}
 	if ferr := s.emit(nil, sink, true); err == nil {
 		err = ferr
 	}
 	s.ids = append(s.ids, c.imEnd)
 	s.ids = append(s.ids, c.newline...)
+	// Grow the store now, while the reply is being heard, rather than when
+	// the next message must be judged at once.
+	if s.kv.Capacity()-len(s.ids) < roomAhead {
+		if gerr := s.reserve(len(s.ids)+roomAhead, limit); err == nil {
+			err = gerr
+		}
+	}
 	return err
+}
+
+// roomAhead is the room a conversation keeps for its next message and the
+// reply's start, grown after a reply when it runs short.
+const roomAhead = 512
+
+// take appends a token of the reply: text goes to sink, and a tool call's
+// tokens are collected until it closes, when the call is recorded.
+func (s *Session) take(id int, sink func([]byte) error) error {
+	c := s.c
+	s.ids = append(s.ids, id)
+	switch {
+	case id == c.callOpen:
+		s.calling, s.call, s.callIDs = true, s.call[:0], s.callIDs[:0]
+	case id == c.callClose:
+		if s.calling {
+			s.calling = false
+			s.record()
+		}
+	case s.calling:
+		s.call = append(s.call, c.tokens.Piece(id)...)
+		s.callIDs = append(s.callIDs, id)
+	default:
+		return s.emit(c.tokens.Piece(id), sink, false)
+	}
+	return nil
+}
+
+// record adds the call just written to Calls, if it is well formed.
+func (s *Session) record() {
+	name, args, err := parseCall(s.call)
+	if err != nil {
+		return
+	}
+	i := len(s.calls)
+	if i == len(s.args) {
+		s.args = append(s.args, nil)
+	}
+	s.args[i] = append(s.args[i][:0], args...)
+	call := chat.Call{Arguments: s.args[i]}
+	for _, t := range s.tools {
+		if string(name) == t.name {
+			call.Name = t.name
+		}
+	}
+	if call.Name == "" {
+		call.Name = string(name)
+	}
+	s.calls = append(s.calls, call)
+}
+
+// draft returns, while a tool call is being written, the tokens it is sure
+// to go on with, up to max: the rest of the scaffold that every tool it can
+// still be calling shares.
+func (s *Session) draft(max int) []int {
+	if !s.calling || max <= 1 {
+		return nil
+	}
+	var d []int
+	some := false
+	for _, t := range s.tools {
+		n := len(s.callIDs)
+		if n >= len(t.scaffold) || !slices.Equal(t.scaffold[:n], s.callIDs) {
+			continue
+		}
+		rest := t.scaffold[n:]
+		if !some {
+			d, some = rest, true
+			continue
+		}
+		k := 0
+		for k < len(d) && k < len(rest) && d[k] == rest[k] {
+			k++
+		}
+		d = d[:k]
+	}
+	return d[:min(len(d), max-1)]
+}
+
+// verify evaluates the last token taken and a draft after it in one pass,
+// then samples each position as decoding one token at a time would, taking
+// drafted tokens while the samples agree. It returns how many it took and
+// the first sample that is not a drafted token, which comes next.
+func (s *Session) verify(draft []int, opts chat.Options, sink func([]byte) error) (taken, next int, err error) {
+	c, h, vocab := s.c, len(s.hidden), len(s.logits)
+	base := len(s.ids) - 1
+	s.probe = append(append(s.probe[:0], s.ids[base]), draft...)
+	k := len(s.probe)
+	s.tail = slices.Grow(s.tail[:0], k*h)[:k*h]
+	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, base, s.probe, Embeds{}, s.tail, c.ws); err != nil {
+		return 0, 0, err
+	}
+	s.vlogits = slices.Grow(s.vlogits[:0], k*vocab)[:k*vocab]
+	if err := c.eval.LogitsRowsInto(s.tail, s.vlogits, c.ws); err != nil {
+		return 0, 0, err
+	}
+	for i := range k {
+		x := s.sample.next(s.vlogits[i*vocab:(i+1)*vocab], opts)
+		if i == len(draft) || x != draft[i] {
+			copy(s.hidden, s.tail[i*h:(i+1)*h])
+			return taken, x, nil
+		}
+		if err := s.take(x, sink); err != nil {
+			return taken, 0, err
+		}
+		taken++
+	}
+	return taken, 0, errors.New("qwen3: unreachable")
 }
 
 // Finished evaluates the conversation followed by a message of role holding
