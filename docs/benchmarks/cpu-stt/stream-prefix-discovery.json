@@ -1,0 +1,276 @@
+{
+  "baseline": "2086220ac9534e13450e8ead26afb84c3aadc91b; serial vocabulary projection and full encoder",
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "start_utc": "2026-09-25T20:51:07Z",
+  "end_utc": "2026-09-25T20:54:14Z",
+  "frames": [
+    400,
+    800,
+    1602,
+    1700,
+    2400,
+    3202,
+    3300
+  ],
+  "hashes": [
+    "ed11268feb80289f1b2ac7487823a67a6fc1155d2671ea916ea72dc0e692a4b9",
+    "b811138fb8dfbfcc2a4436d4db76456042f7de5a211a84636b7709da3a0f1ba1",
+    "593ef59e02cdfb40dbd5b4ec08b036bacfc9f762e33beaf8f452245f912b69a4",
+    "8b7cd1b62e03760ba46676ef5037fb505a89a15696b4d846c19d4167395f3fd3",
+    "87c5e631a309778a80ac3fea5b007560cbc466ca4d84b972c1f93a758229d78e",
+    "cd291d73f2dd5627da9e1a2fc9cf759acd673b4cd6e688a013363c6a8cf26ac0",
+    "5f424009cdd1e6b80fe8c46882cfb7a2a2a833cd6b48be91295a2b6887b0f04f"
+  ],
+  "reused_frames": [
+    0,
+    0,
+    0,
+    1600,
+    1600,
+    1600,
+    3200
+  ],
+  "logits_rows_calls": {
+    "10": 1,
+    "13": 1,
+    "17": 1,
+    "21": 1,
+    "31": 1,
+    "32": 5
+  },
+  "allocs": [
+    0,
+    0,
+    0
+  ],
+  "samples": [
+    {
+      "pair": 0,
+      "variant": "serial-full",
+      "ns": 5512819625,
+      "steps_ns": [
+        314127250,
+        379248000,
+        753216667,
+        869977208,
+        1023194458,
+        1204193459,
+        968862583
+      ]
+    },
+    {
+      "pair": 0,
+      "variant": "batch-full",
+      "ns": 5049502875,
+      "steps_ns": [
+        310042042,
+        352314875,
+        688454833,
+        781975750,
+        926123375,
+        1148846125,
+        841745875
+      ]
+    },
+    {
+      "pair": 0,
+      "variant": "batch-prefix",
+      "ns": 4624528376,
+      "steps_ns": [
+        320672459,
+        361402583,
+        688246542,
+        699005709,
+        840747667,
+        1079502875,
+        634950541
+      ]
+    },
+    {
+      "pair": 1,
+      "variant": "serial-full",
+      "ns": 5482675541,
+      "steps_ns": [
+        308977459,
+        397410542,
+        720911958,
+        851164125,
+        994719833,
+        1230438166,
+        979053458
+      ]
+    },
+    {
+      "pair": 1,
+      "variant": "batch-prefix",
+      "ns": 4537384876,
+      "steps_ns": [
+        304465125,
+        348670292,
+        683360875,
+        678411542,
+        821165791,
+        1037758792,
+        663552459
+      ]
+    },
+    {
+      "pair": 1,
+      "variant": "batch-full",
+      "ns": 4979292875,
+      "steps_ns": [
+        314476292,
+        357601000,
+        684957292,
+        784439166,
+        928090250,
+        1088628083,
+        821100792
+      ]
+    }
+  ],
+  "analysis": [
+    {
+      "name": "whole trace; head only",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-full",
+      "baseline_median_ms": 5497.747583,
+      "candidate_median_ms": 5014.397875,
+      "paired_ratio": 0.9120633057015959,
+      "paired_bootstrap_95": [
+        0.9081866759694872,
+        0.9159564829767126
+      ]
+    },
+    {
+      "name": "whole trace; both improvements",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 5497.747583,
+      "candidate_median_ms": 4580.956626,
+      "paired_ratio": 0.833207881949426,
+      "paired_bootstrap_95": [
+        0.8275858824891202,
+        0.8388680730688699
+      ]
+    },
+    {
+      "name": "whole trace; incremental encoder benefit",
+      "blocks": 2,
+      "baseline": "batch-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 5014.397875,
+      "candidate_median_ms": 4580.956626,
+      "paired_ratio": 0.9135417209976326,
+      "paired_bootstrap_95": [
+        0.9112508522608243,
+        0.9158383489384586
+      ]
+    },
+    {
+      "name": "call 1; 4s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 311.5523545,
+      "candidate_median_ms": 312.568792,
+      "paired_ratio": 1.0029595153473254,
+      "paired_bootstrap_95": [
+        0.9853959120040533,
+        1.0208361706919729
+      ]
+    },
+    {
+      "name": "call 2; 8s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 388.329271,
+      "candidate_median_ms": 355.0364375,
+      "paired_ratio": 0.9143695556075525,
+      "paired_bootstrap_95": [
+        0.8773554175117981,
+        0.952945257456862
+      ]
+    },
+    {
+      "name": "call 3; 16.02s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 737.0643125,
+      "candidate_median_ms": 685.8037085,
+      "paired_ratio": 0.93067060854923,
+      "paired_bootstrap_95": [
+        0.9137431129096351,
+        0.9479116935385888
+      ]
+    },
+    {
+      "name": "call 4; 17s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 860.5706665,
+      "candidate_median_ms": 688.7086255,
+      "paired_ratio": 0.8002512895315371,
+      "paired_bootstrap_95": [
+        0.7970396332199738,
+        0.8034758871522069
+      ]
+    },
+    {
+      "name": "call 5; 24s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 1008.9571455,
+      "candidate_median_ms": 830.956729,
+      "paired_ratio": 0.8236046343167105,
+      "paired_bootstrap_95": [
+        0.821689035184356,
+        0.8255246992747957
+      ]
+    },
+    {
+      "name": "call 6; 32.02s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 1217.3158125,
+      "candidate_median_ms": 1058.6308335,
+      "paired_ratio": 0.8695250211028265,
+      "paired_bootstrap_95": [
+        0.8434058863547963,
+        0.896453029977802
+      ]
+    },
+    {
+      "name": "call 7; 33s audio",
+      "blocks": 2,
+      "baseline": "serial-full",
+      "candidate": "batch-prefix",
+      "baseline_median_ms": 973.9580205,
+      "candidate_median_ms": 649.2515,
+      "paired_ratio": 0.6664587671648917,
+      "paired_bootstrap_95": [
+        0.655356654432799,
+        0.6777489559717177
+      ]
+    }
+  ],
+  "measurement": {
+    "host": "Apple M4 Max, 64 GiB",
+    "goexperiment": "simd",
+    "cgo_enabled": 0,
+    "model": "Qwen3-ASR-1.7B, F16",
+    "binary_sha256": "82377071ee0f40c767c8a4dd18fa4eac7191b87d9685881d1b38ec1426aa5a9f",
+    "head_patch_sha256": "9de9ec4b054d8b7dba8d92c3fce62a9b083506e5c5a8a06161cdd22f31f788bf",
+    "encoder_patch_sha256": "6e9179048f4659c11fda4813d154bdacf38d7530e8207ee8c9c5c028dc1ed08d",
+    "method": "Three-way paired blocks cycling all six variant orders, warmed non-audio prompt prefix and lane capacity, all samples retained. Geometric mean of paired ratios; 10000 paired log-ratio bootstrap resamples with seed 0. Exact-state checks before timing; transcript/language checks for every timed call. No coordinating-agent tests/builds/profiling overlap timing."
+  },
+  "allocation_method": "testing.AllocsPerRun temporarily sets GOMAXPROCS=1 and integer-averages allocations across runs. The stored zeros do not establish strict zero allocation at the reported multi-P timing setting; see cpu-streaming-exact.md allocation qualification and stream-production-benchmark.txt."
+}

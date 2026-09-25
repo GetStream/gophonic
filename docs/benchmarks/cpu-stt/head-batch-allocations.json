@@ -1,0 +1,113 @@
+{
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "trials": [
+    {
+      "variant": "serial",
+      "total_mallocs": 5,
+      "total_bytes": 464,
+      "new_allocation_stacks": [
+        {
+          "objects": 2,
+          "bytes": 256,
+          "stack": [
+            "runtime.mallocgc",
+            "runtime.growslice",
+            "runtime.(*timers).addHeap",
+            "runtime.(*timer).maybeAdd",
+            "runtime.(*timer).modify",
+            "runtime.(*timer).reset",
+            "runtime.resetForSleep",
+            "runtime.park_m",
+            "runtime.mcall"
+          ]
+        },
+        {
+          "objects": 1,
+          "bytes": 32,
+          "stack": [
+            "runtime.mallocgc",
+            "runtime.growslice",
+            "runtime.(*timers).addHeap",
+            "runtime.(*timer).maybeAdd",
+            "runtime.(*timer).modify",
+            "runtime.(*timer).reset",
+            "runtime.resetForSleep",
+            "runtime.park_m",
+            "runtime.mcall"
+          ]
+        },
+        {
+          "objects": 1,
+          "bytes": 112,
+          "stack": [
+            "runtime.mallocgc",
+            "runtime.newobject",
+            "runtime.acquireSudog",
+            "runtime.chanrecv",
+            "runtime.chanrecv1",
+            "github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).loop",
+            "runtime.goexit"
+          ]
+        }
+      ]
+    },
+    {
+      "variant": "batch",
+      "total_mallocs": 1,
+      "total_bytes": 112,
+      "new_allocation_stacks": [
+        {
+          "objects": 2,
+          "bytes": 224,
+          "stack": [
+            "runtime.mallocgc",
+            "runtime.newobject",
+            "runtime.acquireSudog",
+            "runtime.chanrecv",
+            "runtime.chanrecv1",
+            "github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).loop",
+            "runtime.goexit"
+          ]
+        }
+      ]
+    },
+    {
+      "variant": "batch",
+      "total_mallocs": 2,
+      "total_bytes": 224,
+      "new_allocation_stacks": [
+        {
+          "objects": 5,
+          "bytes": 560,
+          "stack": [
+            "runtime.mallocgc",
+            "runtime.newobject",
+            "runtime.acquireSudog",
+            "runtime.chanrecv",
+            "runtime.chanrecv1",
+            "github.com/GetStream/gophonic/internal/qwen3lm.(*workerPool).loop",
+            "runtime.goexit"
+          ]
+        }
+      ]
+    },
+    {
+      "variant": "serial",
+      "total_mallocs": 0,
+      "total_bytes": 0,
+      "new_allocation_stacks": null
+    }
+  ],
+  "method": {
+    "workload": "One warmed four-call strictly growing JFK PCM/Partial trace per trial, order serial/batch/batch/serial; same process and lane, no AllocsPerRun or GOMAXPROCS changes.",
+    "baseline": "Original serial LogitsRowsInto behavior at 2086220, selected with the archived head-batch experiment switch; encoder reuse is inactive for this short clip.",
+    "counters": "runtime.ReadMemStats immediately before and after the trace, GOMAXPROCS=16; MemProfileRate=1 enabled only after loading and warming the model.",
+    "stack_scope": "Allocation profile deltas bracket the trace plus two forced GCs needed to publish profile records. Background worker/runtime allocations during profile publication may appear in stack deltas but not in the narrower measured trace totals. Stack counts are diagnostic, not exact attribution of the measured byte totals.",
+    "finding": "Both serial and batched variants allocate existing runtime channel-wait records at runtime.acquireSudog -> runtime.chanrecv -> qwen3lm.(*workerPool).loop. The serial path also shows runtime timer-heap growth. The batching change adds no numeric storage; neither variant is universally allocation-free at 16 Ps.",
+    "go_sources": "testing/benchmark.go B.loopSlowPath stops counters before returning false, excluding deferred Close. testing/allocs.go forces GOMAXPROCS=1 and integer-divides allocation totals. runtime/proc.go acquireSudog allocates on empty per-P and central caches; runtime/mgc.go clearpools clears only the central sudog cache.",
+    "binary_sha256": "883bcced4ebce6d6c876413da854313b7bbacecf36d2d2eacda22b9b4c9ca135",
+    "reproduce": "Apply head-batch-experiment.patch and then head-batch-allocation-experiment.patch to an isolated final checkout. Build qwen3asr test binary with project-env, GOEXPERIMENT=simd, CGO_ENABLED=0. Run from qwen3asr with GOMAXPROCS=16, GOPHONIC_MODELS, STT_HEAD_ALLOCS=/tmp/allocations.json and -test.run ^TestCPUHeadAllocationTrace$.",
+    "allocation_patch_sha256": "9396296457cd5fce8b887546c6f9d5c31f640475f9d6219763b9cf2bffa6a0e4"
+  }
+}

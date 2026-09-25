@@ -1,0 +1,99 @@
+diff --git a/qwen3asr/head_batch_profile_experiment_test.go b/qwen3asr/head_batch_profile_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/head_batch_profile_experiment_test.go
+@@ -0,0 +1,94 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"math"
++	"os"
++	"runtime/pprof"
++	"slices"
++	"testing"
++
++	"github.com/GetStream/gophonic/internal/q8gemm"
++	"github.com/GetStream/gophonic/speech"
++)
++
++func TestCPUHeadWarmPartialProfile(t *testing.T) {
++	path := os.Getenv("STT_HEAD_PROFILE")
++	if path == "" {
++		t.Skip("set STT_HEAD_PROFILE")
++	}
++	m := loadModel(t, FormatF16)
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	pcm := clipPCM(t, "jfk")
++	var prev, cur speech.Transcript
++	var expected [4][]byte
++	var languages [4]string
++	run := func(first bool) {
++		prev.Reset()
++		cur.Reset()
++		for step := range 4 {
++			opts := speech.Options{}
++			if step > 0 {
++				opts.Partial = &prev
++			}
++			if err := tr.Transcribe(context.Background(), pcm[:len(pcm)*(step+1)/4], opts, &cur); err != nil {
++				t.Fatal(err)
++			}
++			if first {
++				expected[step] = slices.Clone(cur.Text)
++				languages[step] = cur.Language
++			} else if !bytes.Equal(cur.Text, expected[step]) || cur.Language != languages[step] {
++				t.Fatalf("step%d text/language changed", step)
++			}
++			prev, cur = cur, prev
++		}
++	}
++	fingerprint := func() [32]byte {
++		h := sha256.New()
++		var b [8]byte
++		for _, group := range [][]float32{tr.embeds, tr.hidden, tr.logits, tr.tail, tr.vlogits[:cap(tr.vlogits)]} {
++			for _, v := range group {
++				binary.LittleEndian.PutUint32(b[:4], math.Float32bits(v))
++				h.Write(b[:4])
++			}
++		}
++		for _, id := range tr.gen {
++			binary.LittleEndian.PutUint64(b[:], uint64(id))
++			h.Write(b[:])
++		}
++		h.Write(prev.Text)
++		h.Write([]byte(prev.Language))
++		return [32]byte(h.Sum(nil))
++	}
++	run(true)
++	run(false)
++	run(false)
++	want := fingerprint()
++	f, err := os.Create(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	before := q8gemm.Retries()
++	if err := pprof.StartCPUProfile(f); err != nil {
++		f.Close()
++		t.Fatal(err)
++	}
++	for range 12 {
++		run(false)
++	}
++	pprof.StopCPUProfile()
++	if err := f.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if got := fingerprint(); got != want {
++		t.Fatalf("profiled state %x != warm state %x", got, want)
++	}
++	t.Logf("profiled 12 warm four-call public Partial traces; exact final state %x; SME signal retries %d", want, q8gemm.Retries()-before)
++}

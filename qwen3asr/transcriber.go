@@ -40,13 +40,14 @@ var _ speech.Transcriber = (*Transcriber)(nil)
 // Calls must not overlap; open one Transcriber per concurrent lane. Warm
 // calls on audio no longer than an earlier call's allocate nothing.
 type Transcriber struct {
-	m        *Model
-	frontend *mel.Spectrogram
-	enc      *encoderWorkspace    // CPU encoder
-	genc     *gpuEncoderWorkspace // GPU encoder, when the model has one
-	lm       *qwen3lm.Workspace
-	kv       *qwen3lm.PrefixKV
-	tokWS    qwen3lm.TokenizerWorkspace
+	m         *Model
+	frontend  *mel.Spectrogram
+	enc       *encoderWorkspace    // CPU encoder
+	encPrefix encoderPrefix        // exact completed-window reuse for growing audio
+	genc      *gpuEncoderWorkspace // GPU encoder, when the model has one
+	lm        *qwen3lm.Workspace
+	kv        *qwen3lm.PrefixKV
+	tokWS     qwen3lm.TokenizerWorkspace
 
 	pcm      []float32 // normalized or padded copy of the input, when needed
 	features []float32
@@ -99,6 +100,7 @@ func NewTranscriber(m *Model, workers int) (*Transcriber, error) {
 }
 
 func (t *Transcriber) closeEncoder() {
+	t.encPrefix.close()
 	if t.enc != nil {
 		t.enc.close()
 	}
@@ -251,7 +253,7 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 	if err := t.frontend.Into(pcm, t.features); err != nil {
 		return "", fmt.Errorf("qwen3asr: features: %w", err)
 	}
-	if err := t.encode(frames); err != nil {
+	if err := t.encodeContinuation(frames, partial != nil); err != nil {
 		return "", err
 	}
 	if err := t.buildPrompt(context, language, e.tokens(frames)); err != nil {
@@ -274,6 +276,11 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 // encode runs the audio encoder on the features in t.features, leaving the
 // embeddings in t.embeds.
 func (t *Transcriber) encode(frames int) error {
+	return t.encodeContinuation(frames, false)
+}
+
+func (t *Transcriber) encodeContinuation(frames int, continuing bool) error {
+	defer runtime.KeepAlive(t)
 	if t.genc != nil {
 		embeds, err := t.genc.encode(frames)
 		if err != nil {
@@ -284,8 +291,29 @@ func (t *Transcriber) encode(frames int) error {
 	}
 	e := t.m.enc
 	n := e.tokens(frames) * e.out
-	t.embeds = grow(t.embeds, n)[:n]
-	_, err := e.encode(t.features, frames, t.embeds, t.enc)
+	skip := 0
+	if continuing {
+		skip = t.encPrefix.reusable(e, t.features, frames)
+	} else {
+		t.encPrefix.reset()
+	}
+	kept := e.tokens(skip) * e.out
+	if kept > len(t.embeds) {
+		skip, kept = 0, 0
+	}
+	if cap(t.embeds) < n {
+		dst := make([]float32, n)
+		copy(dst, t.embeds[:kept])
+		t.embeds = dst
+	} else {
+		t.embeds = t.embeds[:n]
+	}
+	_, err := e.encodeSuffix(t.features, frames, skip, t.embeds[kept:], t.enc)
+	if err != nil {
+		t.encPrefix.reset()
+	} else if continuing {
+		t.encPrefix.remember(e, t.features, frames, skip > 0)
+	}
 	return err
 }
 

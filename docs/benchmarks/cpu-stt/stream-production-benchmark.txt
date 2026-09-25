@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/qwen3asr
+cpu: Apple M4 Max
+BenchmarkCPUPartialTranscribe/jfk-16         	       1	1829403833 ns/op	     672 B/op	       6 allocs/op
+BenchmarkCPUPartialTranscribe/zh-16          	       1	 828704958 ns/op	     112 B/op	       1 allocs/op
+BenchmarkCPUStreaming-16                     	       1	6327427083 ns/op	         7.000 calls/trace	     112 B/op	       1 allocs/op
+PASS
