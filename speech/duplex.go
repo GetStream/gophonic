@@ -25,8 +25,10 @@ type Duplex interface {
 	Frame() (in, out int)
 	// Step consumes one frame of the audio the agent hears and writes one
 	// frame of the audio it speaks to out, silence when it is not
-	// speaking. It reports the agent's state after the frame. Warm steps
-	// allocate nothing.
+	// speaking. It reports the agent's state after the frame. A nil in
+	// means no audio arrived for the frame, as when a packet is late: the
+	// agent keeps speaking but does not take the gap for silence. Warm
+	// steps allocate nothing.
 	Step(ctx context.Context, in, out []float32) (DuplexState, error)
 	// Say makes the agent speak text as soon as it can, as when a tool
 	// result or an announcement arrives outside the conversation.

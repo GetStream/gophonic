@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 // Package duplex builds speech.Duplex agents from gophonic's lanes. A
-// Cascade listens with a voice detector and a turn detector, understands
-// with a transcriber, thinks with a chat session, and speaks with a
-// synthesizer, all concurrently. It transcribes speech while it is spoken,
-// keeping the conversation evaluated up to what has been said, and prepares
-// its answer at the speaker's first pause, playing it the moment the turn
-// detector agrees the turn is over: almost nothing is left to compute once
-// the speaker is done. It drops the answer when the speaker goes on, stops
-// within one frame when interrupted, and remembers only what was actually
-// heard. The application sees no turns, only audio in and out:
+// Cascade listens with a voice detector, understands with a transcriber,
+// thinks with a chat session, and speaks with a synthesizer, all
+// concurrently. It transcribes speech while it is spoken, keeping the
+// conversation evaluated up to what has been said, and prepares its answer
+// at the speaker's first pause, playing it the moment the turn is over, as
+// the transcriber judges when it can (speech.Options.Turn) or else a turn
+// detector: almost nothing is left to compute once the speaker is done. It
+// drops the answer when the speaker goes on, stops within one frame when
+// interrupted, and remembers only what was actually heard. The model may
+// choose silence, now or until something happens (SilencePrompt), and act
+// with tools, Go functions it calls (Func). The application sees no turns,
+// only audio in and out:
 //
-//	agent, err := duplex.New(duplex.Config{Prompt: "You are Gopher."}, asr, turn, llm, tts)
+//	agent, err := duplex.New(duplex.Config{Prompt: "You are Gopher."}, asr, llm, tts)
 //	for each 20 ms frame { state, err := agent.Step(ctx, in, out) }
 //
 // New finds the lanes it needs among the models it is given, by what they
@@ -28,6 +31,7 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,8 +66,15 @@ const (
 	finishedWords    = -2.5
 	unfinishedWords  = -7
 	giveUpUnfinished = 3 * time.Second
-	shortest         = 300 * time.Millisecond // speech an utterance needs
-	resume           = 160 * time.Millisecond // speech that shows a speaker was not finished after all
+	// A transcriber that hears turns end judges the pause's utterance as it
+	// transcribes it: a turn it is sure of ends at once; one it is not is
+	// judged again from the pause's audio at each of rejudge, ending when
+	// it is over, and a turn it heard as unfinished (under unsure) waits
+	// up to giveUpUnfinished.
+	sure     = 0.9
+	unsure   = 0.1
+	shortest = 300 * time.Millisecond // speech an utterance needs
+	resume   = 160 * time.Millisecond // speech that shows a speaker was not finished after all
 	// Speech this soon into the agent's answer continues the speaker's
 	// turn: the answer stops and is forgotten, and the whole utterance is
 	// heard again.
@@ -90,8 +101,8 @@ type Config struct {
 	// The lanes. New opens those left nil from its models; the Cascade
 	// owns all of them and closes them in Close.
 	Transcriber  speech.Transcriber
-	TurnDetector speech.TurnDetector
-	Session      chat.Session // the conversation, its system prompt added
+	TurnDetector speech.TurnDetector // judges turns when the transcriber does not
+	Session      chat.Session        // the conversation, its system prompt added
 	Synthesizer  speech.Synthesizer
 	// Listen configures transcription, such as the language spoken.
 	Listen speech.Options
@@ -99,6 +110,17 @@ type Config struct {
 	Voice speech.SpeakOptions
 	// Reply shapes the language model's answers.
 	Reply chat.Options
+	// Wake judges, while the agent keeps a silence it chose until
+	// something happens, whether what was said ends it: given the text
+	// "Silent until: <what>\nUser: <what was said>", its second label means
+	// speak. Nil uses a zero-shot question to the models' ZeroShot lane;
+	// without one, a silence lasts a turn.
+	Wake speech.TextClassifier
+	// Tools are functions the agent may call instead of, or as well as,
+	// answering, such as staying quiet until someone says a word. New
+	// offers them to the conversation it starts; a Session given here must
+	// have been started with their specs.
+	Tools []Tool
 	// Interruptions judges speech over the agent's voice: given the text
 	// "Assistant: <what it was saying>\nUser: <what was said over it>", its
 	// first label means go on and its second means stop. Nil uses a zero-
@@ -153,6 +175,10 @@ type Cascade struct {
 	asr    sync.Mutex // the transcriber serves the scribe, listener, and responder
 	saying string     // what the agent is saying; guarded by mu
 	probs  []float32  // Interruptions' output
+	// A silence the model chose, until what it named happens; kept by the
+	// responder.
+	silentUntil string
+	wakeProbs   []float32
 
 	// The utterance being heard, written by the listener and transcribed
 	// by the scribe as it grows; partial is the scribe's latest transcript
@@ -166,9 +192,13 @@ type Cascade struct {
 	partialOf uint32 // the utterance generation partial transcribes
 	partialN  int    // its samples
 	prefill   chan struct{}
-	// The language model's judgment of the pending answer's words: the
-	// log10 probability that they end the speaker's message.
+	// Judgments of the pending answer's utterance: the transcriber's, when
+	// it hears turns end (hears), and the language model's log10
+	// probability that the words end the speaker's message.
+	hears    bool
 	wordsMu  sync.Mutex
+	turnJob  uint32
+	turn     speech.Prediction
 	wordsJob uint32
 	words    float32
 
@@ -242,8 +272,8 @@ var _ speech.Duplex = (*Cascade)(nil)
 
 // New starts a Cascade from cfg, opening each lane cfg leaves nil from the
 // first of models that provides it: a speech.Transcriber, a
-// speech.TurnDetector, a chat.Generator for the conversation, and a
-// speech.Synthesizer.
+// speech.TurnDetector unless the transcriber judges turns itself, a
+// chat.Generator for the conversation, and a speech.Synthesizer.
 func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 	var opened []interface{ Close() error }
 	defer func() {
@@ -256,19 +286,22 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 	if err := open(&cfg.Transcriber, models, &opened); err != nil {
 		return nil, err
 	}
-	if err := open(&cfg.TurnDetector, models, &opened); err != nil {
-		return nil, err
-	}
 	if err := open(&cfg.Synthesizer, models, &opened); err != nil {
 		return nil, err
 	}
-	if cfg.Interruptions == nil {
-		var z speech.ZeroShot
-		if open(&z, models, &opened) == nil {
+	var z speech.ZeroShot
+	if (cfg.Interruptions == nil || cfg.Wake == nil) && open(&z, models, &opened) == nil {
+		if cfg.Interruptions == nil {
 			if cfg.Interruptions, err = z.Classifier(interruptQuestion, interruptLabels); err != nil {
 				return nil, err
 			}
 			opened = append(opened, cfg.Interruptions)
+		}
+		if cfg.Wake == nil {
+			if cfg.Wake, err = z.Classifier(wakeQuestion, wakeLabels); err != nil {
+				return nil, err
+			}
+			opened = append(opened, cfg.Wake)
 		}
 	}
 	if cfg.Session == nil {
@@ -276,7 +309,15 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 		if err := open(&g, models, &opened); err != nil {
 			return nil, err
 		}
-		if cfg.Session, err = g.NewSession(cfg.Prompt); err != nil {
+		specs := make([]chat.ToolSpec, len(cfg.Tools))
+		for i, t := range cfg.Tools {
+			specs[i] = t.ToolSpec
+		}
+		prompt := SilencePrompt
+		if cfg.Prompt != "" {
+			prompt = cfg.Prompt + "\n" + SilencePrompt
+		}
+		if cfg.Session, err = g.NewSession(prompt, specs...); err != nil {
 			return nil, err
 		}
 		opened = append(opened, cfg.Session)
@@ -286,7 +327,8 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 		in: newRing[float32](2 * inRate), inReady: make(chan struct{}, 1),
 		play: newRing[float32](120 * out), release: make(chan struct{}, 1),
 		utt: utterance{pcm: make([]float32, 0, longest)}, uttReady: make(chan struct{}, 1), prefill: make(chan struct{}, 1),
-		jobs: make(chan job, 4), noted: make(chan struct{}, 1), stop: make(chan struct{}), probs: make([]float32, 2)}
+		jobs: make(chan job, 4), noted: make(chan struct{}, 1), stop: make(chan struct{}), probs: make([]float32, 2),
+		wakeProbs: make([]float32, 2)}
 	c.pass = passContext{Context: context.Background(), c: c}
 	vad, err := gopus.NewVAD(inRate)
 	if err != nil {
@@ -294,6 +336,11 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 	}
 	if err := c.warm(); err != nil {
 		return nil, err
+	}
+	if !c.hears {
+		if err := open(&c.cfg.TurnDetector, models, &opened); err != nil {
+			return nil, err
+		}
 	}
 	c.wg.Add(3)
 	go c.listen(vad)
@@ -326,7 +373,14 @@ func open[T interface{ Close() error }](lane *T, models []*gophonic.Model, opene
 // use in a conversation is as fast as every later one.
 func (c *Cascade) warm() error {
 	var t speech.Transcript
-	if err := c.cfg.Transcriber.Transcribe(context.Background(), make([]float32, inRate), c.cfg.Listen, &t); err != nil {
+	opts := c.cfg.Listen
+	opts.Turn = true
+	err := c.cfg.Transcriber.Transcribe(context.Background(), make([]float32, inRate), opts, &t)
+	c.hears = err == nil
+	if errors.Is(err, speech.ErrUnsupported) {
+		err = c.cfg.Transcriber.Transcribe(context.Background(), make([]float32, inRate), c.cfg.Listen, &t)
+	}
+	if err != nil {
 		return err
 	}
 	said := false
@@ -347,13 +401,15 @@ func (c *Cascade) Frame() (in, out int) { return inFrame, c.outSize }
 
 // Step hands in to the listener and writes the next 20 ms of speech.
 func (c *Cascade) Step(ctx context.Context, in, out []float32) (speech.DuplexState, error) {
-	if len(in) != inFrame || len(out) != c.outSize {
+	if in != nil && len(in) != inFrame || len(out) != c.outSize {
 		return speech.Listening, errors.New("duplex: Step takes one frame in and out")
 	}
-	c.in.write(in)
-	select {
-	case c.inReady <- struct{}{}:
-	default:
+	if in != nil {
+		c.in.write(in)
+		select {
+		case c.inReady <- struct{}{}:
+		default:
+		}
 	}
 	n := 0
 	if !c.held.Load() {
@@ -434,7 +490,11 @@ func (c *Cascade) Close() error {
 	c.mu.Unlock()
 	close(c.stop)
 	c.wg.Wait()
-	return errors.Join(c.cfg.Transcriber.Close(), c.cfg.TurnDetector.Close(), c.cfg.Session.Close(), c.cfg.Synthesizer.Close())
+	var turns error
+	if c.cfg.TurnDetector != nil {
+		turns = c.cfg.TurnDetector.Close()
+	}
+	return errors.Join(c.cfg.Transcriber.Close(), turns, c.cfg.Session.Close(), c.cfg.Synthesizer.Close())
 }
 
 // interrupt stops the current reply: its audio stops at once and the
@@ -586,24 +646,33 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 				c.pauses.Add(1)
 				pending = c.dispatch(job{audio: append([]float32(nil), utterance...), utt: c.utt.gen, held: true, at: paused})
 			}
-			if silence%check != 0 && silence < giveUp {
-				continue
-			}
-			p, err := c.cfg.TurnDetector.PredictInto(utterance, inRate, 1)
-			if err != nil {
-				c.fail(err)
-				continue
-			}
-			words, known := c.wordsOf(pending)
-			if !turnOver(silence, p, words, known) {
-				continue
-			}
-			if c.cfg.OnStage != nil && !paused.IsZero() {
-				detail := fmt.Sprintf("turn (sound %.2f)", p.Probability)
+			var detail string
+			if c.hears {
+				p, known := c.turnOf(pending)
+				if known && p.Probability < sure && slices.Contains(rejudge[:], silence) {
+					p, known = c.judgeTurn(pending, utterance)
+				}
+				if !heardOver(silence, p, known) {
+					continue
+				}
+				detail = fmt.Sprintf("turn (heard %.2f)", p.Probability)
+			} else {
+				if silence%check != 0 && silence < giveUp {
+					continue
+				}
+				p, err := c.cfg.TurnDetector.PredictInto(utterance, inRate, 1)
+				if err != nil {
+					c.fail(err)
+					continue
+				}
+				words, known := c.wordsOf(pending)
+				if !turnOver(silence, p, words, known) {
+					continue
+				}
+				detail = fmt.Sprintf("turn (sound %.2f)", p.Probability)
 				if known {
 					detail = fmt.Sprintf("turn (sound %.2f, words %.1f)", p.Probability, words)
 				}
-				c.cfg.OnStage(detail, time.Since(paused))
 			}
 			if talked < shortest {
 				reset() // a cough or a click
@@ -613,10 +682,56 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 				paused = time.Now()
 				pending = c.dispatch(job{audio: append([]float32(nil), utterance...), utt: c.utt.gen, at: paused})
 			}
+			if c.cfg.OnStage != nil {
+				c.cfg.OnStage(detail, silence) // after the speaker stopped
+			}
 			c.releaseTurn(pending)
 			pending, answered = 0, true
 		}
 	}
+}
+
+// rejudge are the pauses at which a turn the transcriber was unsure of is
+// judged again, hearing the pause itself.
+var rejudge = [...]time.Duration{240 * time.Millisecond, 600 * time.Millisecond}
+
+// heardOver decides whether a pause of silence ends the speaker's turn,
+// from the transcriber's judgment of it, when known.
+func heardOver(silence time.Duration, p speech.Prediction, known bool) bool {
+	switch {
+	case !known:
+		return silence >= giveUp
+	case p.Probability >= sure:
+		return true
+	case p.Complete && silence >= rejudge[0]:
+		return true
+	case p.Probability >= unsure:
+		return silence >= giveUp
+	default:
+		return silence >= giveUpUnfinished
+	}
+}
+
+// judgeTurn transcribes the utterance heard so far, pause included, and
+// records the transcriber's judgment of its turn for job id.
+func (c *Cascade) judgeTurn(id uint32, audio []float32) (speech.Prediction, bool) {
+	var t, partial speech.Transcript
+	opts := c.cfg.Listen
+	opts.Turn = true
+	if c.partialFor(c.utt.gen, &partial) {
+		opts.Partial = &partial
+	}
+	c.asr.Lock()
+	err := c.cfg.Transcriber.Transcribe(context.Background(), audio, opts, &t)
+	c.asr.Unlock()
+	if err != nil {
+		c.fail(err)
+		return c.turnOf(id)
+	}
+	c.wordsMu.Lock()
+	c.turnJob, c.turn = id, t.Turn
+	c.wordsMu.Unlock()
+	return t.Turn, true
 }
 
 // turnOver decides whether a pause of silence ends the speaker's turn, from
@@ -644,6 +759,14 @@ func (c *Cascade) wordsOf(id uint32) (float32, bool) {
 	c.wordsMu.Lock()
 	defer c.wordsMu.Unlock()
 	return c.words, id != 0 && c.wordsJob == id
+}
+
+// turnOf returns the transcriber's judgment of job id's turn, once the
+// responder has it.
+func (c *Cascade) turnOf(id uint32) (speech.Prediction, bool) {
+	c.wordsMu.Lock()
+	defer c.wordsMu.Unlock()
+	return c.turn, id != 0 && c.turnJob == id
 }
 
 // scribe transcribes the utterance while it is spoken, each pass
@@ -944,6 +1067,7 @@ func (c *Cascade) respond() {
 		text := j.say
 		if j.audio != nil {
 			opts := c.cfg.Listen
+			opts.Turn = c.hears
 			if c.partialFor(j.utt, &partial) {
 				opts.Partial = &partial
 			}
@@ -957,6 +1081,11 @@ func (c *Cascade) respond() {
 				c.finish(cancel, err)
 				continue
 			}
+			if c.hears {
+				c.wordsMu.Lock()
+				c.turnJob, c.turn = j.id, t.Turn
+				c.wordsMu.Unlock()
+			}
 			trace("transcribed")
 			text = strings.TrimSpace(string(t.Text))
 			if unclosed(text) == "" {
@@ -964,6 +1093,9 @@ func (c *Cascade) respond() {
 				continue
 			}
 			message, answer := c.heard(text)
+			if answer && c.silentUntil != "" {
+				answer = c.wakes(ctx, message)
+			}
 			// Whether the words are finished helps judge the turn; their
 			// evaluation is the reply's first step anyway.
 			if p, err := c.cfg.Session.Finished(ctx, chat.User, message); err == nil {
@@ -1045,8 +1177,9 @@ func (c *Cascade) respond() {
 			})
 		}()
 		var err error
+		silent, until := false, ""
 		if j.audio != nil {
-			err = c.cfg.Session.Reply(ctx, c.cfg.Reply, func(p []byte) error {
+			speak := func(p []byte) error {
 				if reply.Len() == 0 {
 					trace("first text")
 				}
@@ -1080,7 +1213,48 @@ func (c *Cascade) respond() {
 					}
 				}
 				return nil
-			})
+			}
+			// The model may choose to say nothing: a reply that begins
+			// "<silent" is held back until it is clearly one or not.
+			var lead strings.Builder
+			decided := false
+			sink := func(p []byte) error {
+				if decided && !silent {
+					return speak(p)
+				}
+				lead.Write(p)
+				if decided {
+					return nil
+				}
+				switch s := strings.TrimLeft(lead.String(), " \n"); {
+				case strings.HasPrefix(s, silentMark):
+					decided, silent = true, true
+					return nil
+				case strings.HasPrefix(silentMark, s):
+					return nil
+				}
+				decided = true
+				return speak([]byte(lead.String()))
+			}
+			// A reply may call tools; one whose result needs words has
+			// the agent answer again, on the same voice.
+			for round := 0; ; round++ {
+				err = c.cfg.Session.Reply(ctx, c.cfg.Reply, sink)
+				if err != nil || round == maxToolRounds || !c.runCalls(ctx, j, trace) {
+					break
+				}
+			}
+			switch {
+			case silent:
+				until = silenceUntil(lead.String())
+				if until == "" {
+					trace("silent")
+				} else {
+					trace("silent until " + until)
+				}
+			case !decided && strings.TrimSpace(lead.String()) != "" && err == nil:
+				err = speak([]byte(lead.String()))
+			}
 		} else {
 			reply.WriteString(text)
 			pieces <- text
@@ -1089,6 +1263,10 @@ func (c *Cascade) respond() {
 		close(pieces)
 		speakErr := <-done
 		pieces = make(chan string, ahead)
+		if silent && c.awaitTurn(ctx, j.id) && c.cfg.OnText != nil {
+			// Silence, once the turn is over, shows only what was said.
+			c.cfg.OnText(chat.User, text, true)
+		}
 		interrupted := ctx.Err() != nil
 		// Wait for the reply to be heard, or cut.
 		for !interrupted && c.play.len() > 0 {
@@ -1125,11 +1303,100 @@ func (c *Cascade) respond() {
 		if c.cfg.OnText != nil && said != "" {
 			c.cfg.OnText(chat.Assistant, said, true)
 		}
+		if j.audio != nil && !(interrupted && c.played.Load() == 0) {
+			// The turn was answered, in words or by silence: a silence the
+			// model chose until something happens lasts until then.
+			c.silentUntil = ""
+			if silent && c.cfg.Wake != nil {
+				c.silentUntil = until
+			}
+		}
 		if interrupted {
 			err, speakErr = nil, nil
 		}
 		c.finish(cancel, errors.Join(err, speakErr))
 	}
+}
+
+// SilencePrompt ends the system prompt of a conversation New starts: it
+// lets the model say nothing, now or until something it names happens.
+const SilencePrompt = `Always answer, except in two cases, when you reply with only <silent>: someone asked you to be quiet or to wait (then name what ends the silence: <silent until "...">), or what was said is clearly meant for someone else, such as a person addressed by name.`
+
+const silentMark = "<silent"
+
+// silenceUntil returns what a silent reply names as ending it: the text
+// in quotes after "until", or "being asked to speak" for a bare "until".
+func silenceUntil(reply string) string {
+	_, after, ok := strings.Cut(reply, "until")
+	if !ok {
+		return ""
+	}
+	after = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(after), ">"))
+	if q := strings.Trim(after, `"“”'`); q != "" {
+		return q
+	}
+	return "being asked to speak"
+}
+
+// The zero-shot question that judges whether a silence the agent chose is
+// over.
+const wakeQuestion = `A voice assistant chose to stay silent until something happens. Does what the user just said end its silence?`
+
+var wakeLabels = []string{
+	"No: the assistant stays silent",
+	"Yes: it happened, or the user asks the assistant to speak",
+}
+
+// wakes reports whether message ends the silence the agent keeps.
+func (c *Cascade) wakes(ctx context.Context, message string) bool {
+	if c.cfg.Wake == nil {
+		return true
+	}
+	input := "Silent until: " + c.silentUntil + "\nUser: " + message
+	if err := c.cfg.Wake.ClassifyInto(ctx, input, c.wakeProbs); err != nil {
+		if ctx.Err() == nil {
+			c.fail(err)
+		}
+		return true
+	}
+	return c.wakeProbs[1] > c.wakeProbs[0]
+}
+
+// maxToolRounds bounds the replies one utterance gets while tools ask for
+// more.
+const maxToolRounds = 4
+
+// runCalls performs the tool calls of the last reply, once the turn that
+// asked for them is over, adding their results to the conversation, and
+// reports whether a result asks the agent to answer again. A reply dropped
+// before its turn ends calls nothing.
+func (c *Cascade) runCalls(ctx context.Context, j job, trace func(string)) bool {
+	calls := c.cfg.Session.Calls()
+	if len(calls) == 0 || !c.awaitTurn(ctx, j.id) {
+		return false
+	}
+	again := false
+	for _, call := range calls {
+		result, reply, err := "", false, error(nil)
+		i := slices.IndexFunc(c.cfg.Tools, func(t Tool) bool { return t.Name == call.Name })
+		switch {
+		case i < 0:
+			result = "error: there is no tool " + call.Name
+		default:
+			if result, reply, err = c.cfg.Tools[i].Run(ctx, call.Arguments); err != nil {
+				result = "error: " + err.Error()
+			}
+		}
+		if c.cfg.OnStage != nil {
+			trace(fmt.Sprintf("called %s(%s)", call.Name, call.Arguments))
+		}
+		if err := c.cfg.Session.Add(chat.Tool, result); err != nil {
+			c.fail(err)
+			return false
+		}
+		again = again || reply
+	}
+	return again
 }
 
 // finish ends the current reply.
