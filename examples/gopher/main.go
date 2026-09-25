@@ -87,11 +87,8 @@ func main() {
 	if !ok {
 		callType, callID = "default", "gopher-"+randomHex(3)
 	}
-	room := &chatChannel{apiKey: apiKey, token: token, path: "/channels/videocall/" + url.PathEscape(callID)}
-	if err := room.open(); err != nil {
-		log.Printf("chat is off: %v", err)
-		room = nil
-	}
+	// The call's chat opens once Gopher has joined, which creates its user.
+	var room *chatChannel
 	humans := &roster{}
 	agent, err := duplex.New(duplex.Config{
 		Prompt: prompt,
@@ -129,6 +126,11 @@ func main() {
 	})))
 	check(err)
 	defer call.Leave("done")
+	room = &chatChannel{apiKey: apiKey, token: token, path: "/channels/videocall/" + url.PathEscape(callID)}
+	if err := room.open(); err != nil {
+		log.Printf("chat is off: %v", err)
+		room = nil
+	}
 
 	// Gopher's voice: the writer encodes and paces what the agent says.
 	writer, err := audiortc.NewTrackWriter(audiortc.WriterConfig{})

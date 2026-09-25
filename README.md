@@ -1,9 +1,9 @@
 # gophonic
 
-**Local speech and language models in pure Go.** Transcribe 30 languages
-with Qwen3-ASR, detect when a speaker has finished, and classify text with
-Qwen3, all inside your Go process: no cgo, no Python, no ONNX Runtime, no
-network.
+**Local speech and language models in pure Go.** Hear 30 languages with
+Qwen3-ASR, think with Qwen3, speak with Qwen3-TTS, and put them together in
+a voice agent that talks without turns, all inside your Go process: no cgo,
+no Python, no ONNX Runtime, no network.
 
 ```sh
 tools/fetch-models.sh                                   # Qwen3-ASR + turn detectors into models/
@@ -18,7 +18,10 @@ gophonic-server models/                                 # OpenAI-compatible API 
 | **Speech to text** | **Qwen3-ASR** 1.7B / 0.6B: 30 languages, 22 Chinese dialects | 11 s of audio in **226 ms** |
 | Speech to text, English | Whisper `tiny.en` / `base.en` / `small.en` | ~3× whisper.cpp on one core |
 | End of turn | Smart Turn v3.2, TinyMelNet | **3.6 ms** per prediction |
+| **Text to speech** | **Qwen3-TTS-12Hz-1.7B**, 10 languages, 9 voices, streaming | first audio **43 ms** after the text; 5× real time |
+| Generate text | Qwen3, any size: chat with streaming replies | Qwen3-8B: 19 ms per token, reply starts 52 ms after a message |
 | Classify text | Qwen3, any size: moderation, routing, intent, sentiment | one Qwen3-8B token in **15 ms** (llama.cpp: 19 ms) |
+| **Voice agent** | any of the above as a `speech.Duplex`: listens and speaks at once | stops within 300 ms when talked over |
 
 Qwen3-ASR is the state-of-the-art open speech recognizer, and the one to
 use unless you need Whisper's word timestamps or an English-only CPU model.
@@ -115,7 +118,8 @@ A model provides lanes of the interfaces it supports:
 | --- | --- |
 | `speech.Transcriber` | Qwen3-ASR, Whisper |
 | `speech.TurnDetector`, `speech.AudioClassifier` | Smart Turn, TinyMelNet |
-| `speech.ZeroShot` (text classifiers from a question and labels) | Qwen3 |
+| `speech.Synthesizer` | Qwen3-TTS |
+| `chat.Generator`, `speech.ZeroShot` (text classifiers from a question and labels) | Qwen3 |
 
 `gophonic.Lane[T](model)` opens any of them, including interfaces your own
 package defines. `gophonic.Register` adds model formats. `gophonic.Pool`
@@ -141,6 +145,23 @@ Long prompts are the exception: on a 2048-token Qwen3-8B prompt, llama.cpp's
 Metal backend is faster (3.1 s against our 3.5 s). The details:
 [Qwen3-ASR](docs/qwen3asr.md), [Qwen3](docs/clm-performance.md),
 [Whisper](docs/whisper-performance.md), [turn detection](docs/benchmarks.md).
+
+## A voice agent without turns
+
+`speech.Duplex` is an agent that listens and speaks at the same time: audio
+goes in and comes out 20 ms at a time, and the agent decides when to talk.
+`duplex.New` builds one from whatever models you give it:
+
+```go
+agent, err := duplex.New(duplex.Config{Prompt: "You are Gopher."}, asr, turns, llm, tts)
+for { // every 20 ms
+	state, err := agent.Step(ctx, micFrame, speakerFrame)
+}
+```
+
+It keeps listening while it thinks and speaks, drops an answer when you were
+not finished, stops when you talk over it, and remembers only what you
+heard. [`examples/gopher`](examples/gopher) puts it in a video call.
 
 ## Example: an AI listener on a video call
 
