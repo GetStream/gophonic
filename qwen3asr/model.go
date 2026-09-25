@@ -26,12 +26,16 @@ type Model struct {
 	tok       *qwen3lm.Tokenizer
 	ids       tokenIDs
 	languages map[string]bool // English names the model supports
+	turn      *turnHead       // judges the end of a turn, for the checkpoints it was trained on
 }
 
 // tokenIDs are the special tokens of the chat prompt and its output.
 type tokenIDs struct {
 	audioPad, asrText int
 	eos               [2]int
+	// language starts the output, "language English<asr_text>...", and
+	// none is the name it gives audio without speech.
+	language, none int
 }
 
 // Decoder weight formats for Options.Format.
@@ -195,9 +199,16 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	if err != nil {
 		return nil, err
 	}
+	var tws qwen3lm.TokenizerWorkspace
+	named, err := tok.EncodeInto("language None", make([]int, 0, 16), &tws)
+	if err != nil || len(named) != 2 {
+		return nil, fmt.Errorf("qwen3asr: tokenizer splits \"language None\" as %v: %v", named, err)
+	}
+	m.ids.language, m.ids.none = named[0], named[1]
 	if m.ids.audioPad != c.Thinker.AudioToken {
 		return nil, fmt.Errorf("qwen3asr: audio token %d in config, %d in tokenizer", c.Thinker.AudioToken, m.ids.audioPad)
 	}
+	m.turn = turnHeadFor(lm.Config())
 	return m, nil
 }
 

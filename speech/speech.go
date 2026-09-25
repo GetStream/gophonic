@@ -50,6 +50,11 @@ type Options struct {
 	// Language is the spoken language as an ISO 639-1 code ("en") or an
 	// English name ("English"). Empty lets the model detect it.
 	Language string
+	// Languages, when Language is empty, are the languages that may be
+	// spoken: the model detects the likeliest of them, as when a call is
+	// in English and Portuguese and a noise must not come out as Chinese.
+	// Transcribers that detect no language ignore it.
+	Languages []string
 	// Context is text that primes recognition, such as names or terms that
 	// occur in the audio.
 	// Transcribers do not retain Options after Transcribe returns.
@@ -64,6 +69,10 @@ type Options struct {
 	// decodes only where it differs or ends, instead of starting over; the
 	// transcript is the same either way. Others ignore it.
 	Partial *Transcript
+	// Turn requests Transcript.Turn: whether the speaker's turn ends where
+	// the audio does, judged from what was said and how. Transcribers that
+	// cannot judge it return an error wrapping ErrUnsupported.
+	Turn bool
 }
 
 // Transcript is the result of one transcription. Offsets index Text.
@@ -74,6 +83,9 @@ type Transcript struct {
 	Language string
 	Segments []Segment
 	Words    []Word
+	// Turn, when requested, is whether the speaker's turn ends where the
+	// audio does. Audio without speech has none to end.
+	Turn Prediction
 }
 
 // Reset empties t while keeping its capacity.
@@ -82,6 +94,7 @@ func (t *Transcript) Reset() {
 	t.Language = ""
 	t.Segments = t.Segments[:0]
 	t.Words = t.Words[:0]
+	t.Turn = Prediction{}
 }
 
 // Segment is a timed span of a Transcript.
