@@ -118,9 +118,9 @@ func TestChatOfficial(t *testing.T) {
 	}
 	// A transcript prefilled while it grows, then replaced by the whole
 	// one, changes nothing but how soon the reply starts.
-	var replies [3]string
-	var first [3]time.Duration
-	var finished float32
+	var replies [4]string
+	var first [4]time.Duration
+	var finished, again float32
 	for i := range replies {
 		other, err := g.NewSession("Answer in one short sentence.")
 		if err != nil {
@@ -142,12 +142,29 @@ func TestChatOfficial(t *testing.T) {
 			}
 		}
 		question := "What is the tallest mountain in Europe?"
+		if i == 3 {
+			// Judging the words as they are heard, the last time as they
+			// end, leaves nothing for the answer's judgment to evaluate.
+			for _, partial := range []string{"What is", "What is the tallest mountain", question} {
+				if finished, err = other.Finished(context.Background(), chat.User, partial); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		began := time.Now()
 		if i == 2 {
 			// Judging whether the words are finished evaluates the start of
 			// the reply as well.
 			if finished, err = other.Finished(context.Background(), chat.User, question); err != nil {
 				t.Fatal(err)
+			}
+		}
+		if i == 3 {
+			if again, err = other.Finished(context.Background(), chat.User, question); err != nil {
+				t.Fatal(err)
+			}
+			if again != finished {
+				t.Fatalf("the same words judged again: %v, then %v", finished, again)
 			}
 		}
 		other.Add(chat.User, question)
@@ -164,13 +181,13 @@ func TestChatOfficial(t *testing.T) {
 		other.Close()
 		replies[i] = b.String()
 	}
-	if replies[0] != replies[1] || replies[0] != replies[2] {
-		t.Fatalf("plain reply %q, prefilled %q, after Finished %q", replies[0], replies[1], replies[2])
+	if replies[0] != replies[1] || replies[0] != replies[2] || replies[0] != replies[3] {
+		t.Fatalf("plain reply %q, prefilled %q, after Finished %q, after judging it as heard %q", replies[0], replies[1], replies[2], replies[3])
 	}
 	if finished < 0.01 {
 		t.Fatalf("a whole question ends with probability %g", finished)
 	}
-	t.Logf("first text after %v, %v when prefilled, %v after Finished (%.3f): %q", first[0], first[1], first[2], finished, replies[1])
+	t.Logf("first text after %v, %v when prefilled, %v after Finished (%.3f), %v when judged as heard: %q", first[0], first[1], first[2], finished, first[3], replies[1])
 	s.Add(chat.User, "Say hi.")
 	allocs := testing.AllocsPerRun(3, func() {
 		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, TopK: 40, MaxTokens: 16}, func([]byte) error { return nil }); err != nil {

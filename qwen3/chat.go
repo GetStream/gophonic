@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/GetStream/gophonic/chat"
@@ -32,9 +33,13 @@ type Chat struct {
 	path    string // the snapshot, when OpenChat loaded it
 
 	imEnd, endText int
-	newline        []int
-	header         [3][]int // "<|im_start|>system\n" and so on, by chat.Role
-	answer         []int    // the assistant header and the empty thinking block
+	// enders are the end marker and the tokens of only closing
+	// punctuation (closer) or white space: text ends with any of them.
+	enders  []int
+	closer  []bool
+	newline []int
+	header  [3][]int // "<|im_start|>system\n" and so on, by chat.Role
+	answer  []int    // the assistant header and the empty thinking block
 }
 
 var _ chat.Generator = (*Chat)(nil)
@@ -136,6 +141,14 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: chat template: %w", err)
 	}
+	c.enders = append(c.enders, c.imEnd)
+	c.closer = make([]bool, weights.Config().Vocab)
+	for id := range c.closer {
+		if closes, blank := ending(tokens.Piece(id)); closes || blank {
+			c.enders = append(c.enders, id)
+			c.closer[id] = closes
+		}
+	}
 	if err := c.warm(); err != nil {
 		return nil, err
 	}
@@ -201,15 +214,16 @@ type Session struct {
 	probe []int // Finished's tokens
 	// ready is the number of stored tokens after which hidden is the model
 	// state, so that a Reply they begin samples at once.
-	ready  int
-	tail   []float32 // Finished's states
-	reply  int       // where the last reply's tokens start in ids, or -1
-	hidden []float32
-	logits []float32
-	tws    TokenizerWorkspace
-	text   []byte // message rendering and decoded pieces
-	sample sampler
-	closed bool
+	ready    int
+	finished float32   // Finished's probability for the tokens ready marks
+	tail     []float32 // Finished's states
+	reply    int       // where the last reply's tokens start in ids, or -1
+	hidden   []float32
+	logits   []float32
+	tws      TokenizerWorkspace
+	text     []byte // message rendering and decoded pieces
+	sample   sampler
+	closed   bool
 }
 
 var _ chat.Session = (*Session)(nil)
@@ -310,8 +324,11 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 }
 
 // Finished evaluates the conversation followed by a message of role holding
-// text, and returns the probability of the message's end token after the
-// text. The same pass evaluates the end and the assistant's header, as a
+// text, and returns the probability that the message ends after the text:
+// that its words end there, with its end token or closing punctuation, and
+// that the message ends after the closing punctuation it has, if any. A
+// fragment a recognizer punctuated ("Can you tell me a?") ends no words,
+// and a statement a question follows ("I'm going hiking.") ends no message. The same pass evaluates the end and the assistant's header, as a
 // reply to the message would begin, so that Add and Reply next start
 // sampling at once.
 func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (float32, error) {
@@ -341,6 +358,10 @@ func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (fl
 	}
 	probe = probe[:start+len(body)]
 	end := len(probe) // the state after the text predicts the end
+	closed := 0       // closing punctuation the text ends with
+	for closed < len(body) && c.closer[body[len(body)-1-closed]] {
+		closed++
+	}
 	probe = append(probe, c.imEnd)
 	probe = append(probe, c.newline...)
 	probe = append(probe, c.answer...)
@@ -349,12 +370,19 @@ func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (fl
 	if len(probe)+4 > limit {
 		return 0, errors.New("qwen3: the conversation fills the context")
 	}
+	// The same message judged again, as a transcript that ends as it was
+	// heard while spoken, costs nothing.
+	if s.ready == len(probe) && len(s.kv.Tokens()) == len(probe) && s.kv.CommonPrefix(probe) == len(probe) {
+		return s.finished, nil
+	}
 	if err := s.reserve(min(len(probe)+256+4, limit), limit); err != nil {
 		return 0, err
 	}
-	keep := min(s.kv.CommonPrefix(probe), end-1)
+	// The states from the last word's on: before the punctuation, after
+	// it, and the header's last, which a reply starts from.
+	keep := min(s.kv.CommonPrefix(probe), end-1-closed)
 	h := len(s.hidden)
-	k := len(probe) - end + 1
+	k := len(probe) - end + 1 + closed
 	s.tail = slices.Grow(s.tail[:0], k*h)[:k*h]
 	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, keep, probe[keep:], Embeds{}, s.tail, c.ws); err != nil {
 		s.ready = 0
@@ -362,19 +390,55 @@ func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (fl
 	}
 	copy(s.hidden, s.tail[(k-1)*h:])
 	s.ready = len(probe)
-	if err := c.eval.LogitsInto(s.tail[:h], s.logits, c.ws); err != nil {
+	p, err := s.next(s.tail[:h], c.enders)
+	if err == nil && closed > 0 {
+		var after float64
+		after, err = s.next(s.tail[closed*h:(closed+1)*h], c.enders)
+		p *= after
+	}
+	if err != nil {
 		return 0, err
 	}
-	// Softmax probability of the end token.
+	s.finished = float32(p)
+	return s.finished, nil
+}
+
+// next returns the probability that the token after state is one of ids.
+func (s *Session) next(state []float32, ids []int) (float64, error) {
+	if err := s.c.eval.LogitsInto(state, s.logits, s.c.ws); err != nil {
+		return 0, err
+	}
 	top := s.logits[0]
 	for _, v := range s.logits {
 		top = max(top, v)
 	}
-	var sum float64
+	var sum, in float64
 	for _, v := range s.logits {
 		sum += math.Exp(float64(v - top))
 	}
-	return float32(math.Exp(float64(s.logits[c.imEnd]-top)) / sum), nil
+	for _, id := range ids {
+		in += math.Exp(float64(s.logits[id] - top))
+	}
+	return in / sum, nil
+}
+
+// ending reports whether a token is only closing punctuation, perhaps with
+// closing quotes and white space, or only white space: text ending with
+// either ends.
+func ending(piece []byte) (closes, blank bool) {
+	if len(piece) == 0 {
+		return false, false
+	}
+	for _, r := range string(piece) {
+		switch {
+		case r == '.' || r == '?' || r == '!' || r == '…' || r == '。' || r == '？' || r == '！':
+			closes = true
+		case r == '”' || r == '’' || r == '»' || r == ')' || unicode.IsSpace(r):
+		default:
+			return false, false
+		}
+	}
+	return closes, !closes
 }
 
 // Prefill evaluates the conversation so far.

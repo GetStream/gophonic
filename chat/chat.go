@@ -61,9 +61,12 @@ type Session interface {
 	// nothing.
 	Reply(ctx context.Context, opts Options, sink func(piece []byte) error) error
 	// Finished returns the probability that a message of role ends after
-	// text rather than going on: the model's sense, from the words and the
-	// conversation, of whether a speaker is done. What it evaluates is
-	// kept, as by Prefill, so adding the message next costs nothing more.
+	// text rather than going on, perhaps after closing punctuation: the
+	// model's sense, from the words and the conversation, of whether a
+	// speaker is done. Speech recognizers punctuate every pause, so text
+	// judged is best without its closing punctuation. What it evaluates is
+	// kept, as by Prefill, so adding the message next costs nothing more,
+	// and judging the same message again costs nothing.
 	Finished(ctx context.Context, role Role, text string) (float32, error)
 	// Prefill evaluates the conversation as it stands, so that the next
 	// Reply starts at once. A message added speculatively, prefilled, and

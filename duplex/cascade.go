@@ -732,26 +732,18 @@ func (c *Cascade) heard(text string) (string, bool) {
 	return c.cfg.Heard(text)
 }
 
-// prefillPartial evaluates the conversation up to what the speaker has
-// said so far, so that the answer's evaluation starts from there.
+// prefillPartial judges what the speaker has said so far, as the answer
+// will: that evaluates the conversation up to it, and when the utterance
+// ends as it was heard, the answer's judgment is already made.
 func (c *Cascade) prefillPartial() {
 	c.partialMu.Lock()
 	text := strings.TrimSpace(string(c.partial.Text))
 	c.partialMu.Unlock()
-	if text == "" {
+	if unclosed(text) == "" {
 		return
 	}
 	message, _ := c.heard(text)
-	s := c.cfg.Session
-	mark := s.Checkpoint()
-	if err := s.Add(chat.User, message); err != nil {
-		c.fail(err)
-		return
-	}
-	if err := s.Prefill(context.Background()); err != nil {
-		c.fail(err)
-	}
-	if err := s.Restore(mark); err != nil {
+	if _, err := c.cfg.Session.Finished(context.Background(), chat.User, message); err != nil {
 		c.fail(err)
 	}
 }
@@ -853,6 +845,11 @@ func speakable(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// unclosed drops closing punctuation: a transcript of it alone is empty.
+func unclosed(text string) string {
+	return strings.TrimRightFunc(text, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSpace(r) })
 }
 
 // normalize lowercases text and drops punctuation.
@@ -962,7 +959,7 @@ func (c *Cascade) respond() {
 			}
 			trace("transcribed")
 			text = strings.TrimSpace(string(t.Text))
-			if text == "" {
+			if unclosed(text) == "" {
 				c.finish(cancel, nil)
 				continue
 			}
