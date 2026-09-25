@@ -808,6 +808,8 @@ func (ws *Workspace) prepareTiles(cols int) {
 		var err error
 		if ws.op.rot != nil {
 			err = ws.tilesI8[t].Prepare(n, cols)
+		} else if rows == 1 && cols > 0 && cols%16 == 0 && q8gemm.Available() {
+			err = ws.tiles[t].PrepareRowF16(cols)
 		} else {
 			err = ws.tiles[t].Prepare(n, cols)
 		}
@@ -850,7 +852,14 @@ func (ws *Workspace) project(src []float32, cols int, prepared bool, projs ...pr
 			op.src = ws.rotated
 		}
 	}
-	ws.run(opPack, tiles*packChunks(cols), 1)
+	// One compact decode row is cheaper to pack on its owner than to
+	// publish a separate packing stage. All projection workers then read
+	// that immutable row until their existing completion barrier.
+	if rows == 1 && op.rot == nil && cols > 0 && cols%16 == 0 && q8gemm.Available() {
+		op.pack(0, packChunks(cols))
+	} else {
+		ws.run(opPack, tiles*packChunks(cols), 1)
+	}
 	// SME saturates near eight streaming threads. With int8 weights and at
 	// least four tiles, four SME workers plus NEON strips on the remaining
 	// cores are faster; with fewer tiles NEON only adds contention.

@@ -1,0 +1,219 @@
+diff --git a/internal/qwen3lm/evaluator.go b/internal/qwen3lm/evaluator.go
+index f880167..3de4a1b 100644
+--- a/internal/qwen3lm/evaluator.go
++++ b/internal/qwen3lm/evaluator.go
+@@ -535,6 +535,7 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
+ 
+ 	op := &ws.op
+ 	op.rows = rows
++	astra := astraVariant.Load()
+ 	for layer := range m.layers {
+ 		l := &m.layers[layer]
+ 		op.layer, op.layerIndex = l, layer
+@@ -548,7 +549,9 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
+ 		ws.project(ws.norm, c.hidden, true, projection{&l.q, ws.q}, projection{&l.k, ws.keys}, projection{&l.v, ws.values})
+ 		ws.run(opQKRope, rows, 4)
+ 
+-		ws.run(opAttention, rows*c.kvHeads, 4)
++		if ws.prefix == nil || (astra != 3 && astra != 5 && astra != 7) {
++			ws.run(opAttention, rows*c.kvHeads, 4)
++		}
+ 		if len(ws.attnItems) > 0 {
+ 			if ws.prefix != nil {
+ 				ws.run(opAttentionPrefix, len(ws.attnItems), 1)
+@@ -559,7 +562,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
+ 		if ws.prefix != nil && !ws.shared {
+ 			// Publish this layer's new KV only after attention has consumed
+ 			// the kept prefix. The packed cache is its sole persistent copy.
+-			ws.run(opStorePrefix, c.kvHeads, 1)
++			if rows == 1 && (astra == 4 || astra == 5 || astra == 7) {
++				op.storePrefixBeforeProjection = true
++			} else {
++				ws.run(opStorePrefix, c.kvHeads, 1)
++			}
+ 		}
+ 		if layer == len(m.layers)-1 {
+ 			// Only each sequence's last row (or a tail) reaches the output,
+@@ -573,7 +580,11 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
+ 		ws.project(ws.ctx, c.heads*c.headDim, false, projection{&l.o, ws.attn})
+ 		ws.addNorm(ws.attn, l.mlpNorm, &l.gate)
+ 		ws.project(ws.norm, c.hidden, true, projection{&l.gate, ws.gate}, projection{&l.up, ws.up})
+-		ws.run(opSwiGLU, op.rows*swigluChunks(c.intermediate), 4)
++		grain := 4
++		if op.rows == 1 && (astra == 6 || astra == 7) {
++			grain = 1
++		}
++		ws.run(opSwiGLU, op.rows*swigluChunks(c.intermediate), grain)
+ 		ws.project(ws.gate, c.intermediate, false, projection{&l.down, ws.attn})
+ 	}
+ 	op.layer = nil
+@@ -875,6 +886,7 @@ func (ws *Workspace) project(src []float32, cols int, prepared bool, projs ...pr
+ 		participants = size
+ 	}
+ 	ws.runEach(opProject, participants)
++	op.storePrefixBeforeProjection = false
+ 	op.src, op.rot = nil, nil
+ 	for i := range op.proj {
+ 		op.proj[i] = projection{}
+diff --git a/internal/qwen3lm/ops.go b/internal/qwen3lm/ops.go
+index 585e541..09cfbe8 100644
+--- a/internal/qwen3lm/ops.go
++++ b/internal/qwen3lm/ops.go
+@@ -55,9 +55,10 @@ type layerOp struct {
+ 	// Projection claims: the low 32 bits hold the next panel SME workers take
+ 	// from the front, the high 32 bits the end of the strips NEON workers
+ 	// take from the back (4 strips of 16 columns per panel).
+-	claims     atomic.Uint64
+-	smeWorkers int  // participants below this index run SME panels
+-	coexec     bool // participants from smeWorkers on run NEON strips
++	claims                      atomic.Uint64
++	smeWorkers                  int  // participants below this index run SME panels
++	coexec                      bool // participants from smeWorkers on run NEON strips
++	storePrefixBeforeProjection bool // one-token KV append before the O projection
+ }
+ 
+ // ApplyRows implements rangeOp.
+@@ -152,6 +153,11 @@ const stripsPerPanel = q8gemm.OutputPanel / q8gemm.StripColumns
+ // Each claim covers every 16-row tile, so a panel's weights stay in cache
+ // across tiles. int8 results are bit-identical on both sides.
+ func (o *layerOp) projectClaims(worker int) {
++	if o.storePrefixBeforeProjection {
++		for g := worker; g < o.ws.owner.m.cfg.kvHeads; g += o.smeWorkers {
++			o.storePrefix(g, g+1)
++		}
++	}
+ 	sme := worker < o.smeWorkers
+ 	if !sme && !o.coexec {
+ 		return
+diff --git a/internal/qwen3lm/astra_candidate.go b/internal/qwen3lm/astra_candidate.go
+new file mode 100644
+index 0000000..5c8b724
+--- /dev/null
++++ b/internal/qwen3lm/astra_candidate.go
+@@ -0,0 +1,7 @@
++package qwen3lm
++
++import "sync/atomic"
++
++var astraVariant atomic.Int32
++
++func SetAstraVariant(v int) { astraVariant.Store(int32(v)) }
+diff --git a/qwen3asr/astra_crossover_test.go b/qwen3asr/astra_crossover_test.go
+new file mode 100644
+index 0000000..d1b5983
+--- /dev/null
++++ b/qwen3asr/astra_crossover_test.go
+@@ -0,0 +1,113 @@
++package qwen3asr
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"github.com/GetStream/gophonic/internal/qwen3lm"
++	"github.com/GetStream/gophonic/speech"
++	"math"
++	"os"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestAstraCounterbalancedLatency(t *testing.T) {
++	path := os.Getenv("GOPHONIC_ASTRA_REPORT")
++	if path == "" {
++		t.Skip("opt in")
++	}
++	blocks := 16
++	if s := os.Getenv("GOPHONIC_ASTRA_BLOCKS"); s != "" {
++		blocks, _ = strconv.Atoi(s)
++	}
++	variants := []int{0, 1, 2}
++	if s := os.Getenv("GOPHONIC_ASTRA_VARIANTS"); s != "" {
++		variants = nil
++		for _, v := range strings.Split(s, ",") {
++			n, _ := strconv.Atoi(v)
++			variants = append(variants, n)
++		}
++	}
++	clips := []string{"jfk", "zh"}
++	if s := os.Getenv("GOPHONIC_ASTRA_CLIPS"); s != "" {
++		clips = strings.Split(s, ",")
++	}
++	m := loadModel(t, FormatF16)
++	type sample struct {
++		Clip           string
++		Block, Variant int
++		NS             int64
++		SHA256         string
++	}
++	results := make([]sample, 0, len(clips)*blocks*len(variants))
++	for _, clip := range clips {
++		tr, err := NewTranscriber(m, 0)
++		if err != nil {
++			t.Fatal(err)
++		}
++		pcm := clipPCM(t, clip)
++		var dst speech.Transcript
++		transcribe := func() {
++			t.Helper()
++			if err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst); err != nil {
++				t.Fatal(err)
++			}
++		}
++		fingerprint := func() string {
++			h := sha256.New()
++			var bits [8]byte
++			for _, vs := range [][]float32{tr.embeds, tr.hidden, tr.logits} {
++				for _, v := range vs {
++					binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++					h.Write(bits[:4])
++				}
++			}
++			for _, v := range tr.gen {
++				binary.LittleEndian.PutUint64(bits[:], uint64(v))
++				h.Write(bits[:])
++			}
++			h.Write(dst.Text)
++			return hex.EncodeToString(h.Sum(nil))
++		}
++		qwen3lm.SetAstraVariant(0)
++		for range 3 {
++			transcribe()
++		}
++		expected := fingerprint()
++		t.Logf("%s state SHA256: %s", clip, expected)
++		for block := 0; block < blocks; block++ {
++			for index := range variants {
++				i := (index + block/2) % len(variants)
++				if block%2 != 0 {
++					i = (len(variants) - 1 - index + block/2) % len(variants)
++				}
++				variant := variants[i]
++				qwen3lm.SetAstraVariant(variant)
++				began := time.Now()
++				transcribe()
++				elapsed := time.Since(began)
++				digest := fingerprint()
++				if digest != expected {
++					t.Fatalf("%s block%d variant%d changed state: %s != %s", clip, block, variant, digest, expected)
++				}
++				results = append(results, sample{clip, block, variant, elapsed.Nanoseconds(), digest})
++			}
++			if block%4 == 3 {
++				t.Logf("%s: %d blocks", clip, block+1)
++			}
++		}
++		tr.Close()
++	}
++	raw, err := json.MarshalIndent(results, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(path, append(raw, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}
