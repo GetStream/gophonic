@@ -45,9 +45,7 @@ type Executor struct {
 // reads the shared job after observing a new generation for its own shard.
 type executorWorker struct {
 	generation atomic.Uint64
-	parked     atomic.Bool
-	wake       chan struct{}
-	_          [104]byte
+	_          [56]byte
 }
 
 type matrixJob struct {
@@ -86,10 +84,10 @@ func NewExecutor(workers int) (*Executor, error) {
 	e.stopped.Add(len(e.workers))
 	e.pending.Store(int32(len(e.workers)))
 	for i := range e.workers {
-		e.workers[i].wake = make(chan struct{}, 1)
 		go e.run(i + 1)
 	}
-	// Wait until every worker has entered its loop before publishing work.
+	// Construct every worker's reusable sleep timer before returning. It is
+	// used only after an idle backoff, never to signal an operation's completion.
 	for e.pending.Load() != 0 {
 		runtime.Gosched()
 	}
@@ -98,6 +96,7 @@ func NewExecutor(workers int) (*Executor, error) {
 
 func (e *Executor) run(index int) {
 	defer e.stopped.Done()
+	time.Sleep(50 * time.Microsecond)
 	e.pending.Add(-1)
 	worker := &e.workers[index-1]
 	var previous uint64
@@ -106,20 +105,13 @@ func (e *Executor) run(index int) {
 	for idle := 0; !e.stop.Load(); {
 		generation := worker.generation.Load()
 		if generation == previous {
-			// Brief polling serves adjacent stages. An idle worker then sleeps
-			// until its next publication, so an inactive encoder does not
-			// inject periodic timer wakeups into a decoder's critical path.
+			// Brief polling serves consecutive operations without parking.
+			// Yield periodically so a worker budget above GOMAXPROCS still
+			// makes progress, then sleep once the executor is idle. Sleep
+			// reuses the timer constructed above and bounds idle CPU usage.
 			idle++
 			if idle&255 == 0 && time.Since(lastWork) >= 50*time.Microsecond {
-				worker.parked.Store(true)
-				if e.stop.Load() || worker.generation.Load() != previous {
-					// A publisher that won the exchange owes one wake token.
-					if !worker.parked.CompareAndSwap(true, false) {
-						<-worker.wake
-					}
-				} else {
-					<-worker.wake
-				}
+				time.Sleep(50 * time.Microsecond)
 			} else if yield && idle&63 == 0 {
 				runtime.Gosched()
 			}
@@ -227,11 +219,7 @@ func (e *Executor) Rows(op RowOperation, rows, minRows int) error {
 func (e *Executor) execute(parts int) {
 	e.pending.Store(int32(parts - 1))
 	for i := 0; i < parts-1; i++ {
-		w := &e.workers[i]
-		w.generation.Add(1)
-		if w.parked.CompareAndSwap(true, false) {
-			w.wake <- struct{}{}
-		}
+		e.workers[i].generation.Add(1)
 	}
 	e.runShard(0)
 	// Balanced shards normally finish together. Poll briefly before yielding
@@ -316,12 +304,6 @@ func (e *Executor) Close() error {
 	}
 	e.closed = true
 	e.stop.Store(true)
-	for i := range e.workers {
-		w := &e.workers[i]
-		if w.parked.CompareAndSwap(true, false) {
-			w.wake <- struct{}{}
-		}
-	}
 	e.stopped.Wait()
 	err := e.memory.Close()
 	e.memory, e.scratch = nil, nil

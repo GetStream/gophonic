@@ -23,6 +23,7 @@ type Workspace struct {
 	rowScale   [ActivationRows]float32 // multiplies inputs before FP16 rounding
 	rowInverse [ActivationRows]float32 // multiplies outputs
 	k, rows    int
+	compactRow bool // only contiguous FP16 row is packed; requires the F16 SME row kernel
 }
 
 // Scratch holds one goroutine's weight-decoding buffer for the portable path
@@ -78,10 +79,25 @@ func (ws *Workspace) Prepare(rows, k int) error {
 	if ws == nil || rows < 0 || rows > ActivationRows || k < 0 || len(ws.activation) < ((k+1)/2)*2*ActivationRows {
 		return ErrDimensions
 	}
-	ws.k, ws.rows = k, rows
+	ws.k, ws.rows, ws.compactRow = k, rows, false
 	for i := range ws.rowScale {
 		ws.rowScale[i], ws.rowInverse[i] = 1, 1
 	}
+	return nil
+}
+
+// PrepareRowF16 prepares a compact one-row tile for FP16 weights on SME.
+// It omits the unused fifteen activation rows and their duplicate layout.
+// Subsequent MulPanels calls must use F16 weights with K divisible by sixteen.
+// Prepare restores the general tile layout for the next operation.
+func (ws *Workspace) PrepareRowF16(k int) error {
+	if !usingSME() || k == 0 || k%16 != 0 {
+		return ErrDimensions
+	}
+	if err := ws.Prepare(1, k); err != nil {
+		return err
+	}
+	ws.compactRow = true
 	return nil
 }
 
@@ -122,6 +138,13 @@ func (ws *Workspace) PackRange(x []float32, stride, k0, k1 int) error {
 		return ErrDimensions
 	}
 	rows := ws.rows
+	if ws.compactRow {
+		done := packContiguousRow(ws.row[k0:k1], x[k0:k1], ws.rowScale[0])
+		for i := k0 + done; i < k1; i++ {
+			ws.row[i] = f32ToF16(x[i] * ws.rowScale[0])
+		}
+		return nil
+	}
 	p0, p1 := k0/2, (k1+1)/2
 	// Rows are converted independently; each row's pairs sit 64 bytes apart.
 	for row := range rows {
@@ -180,6 +203,9 @@ func MulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int,
 		return ErrDimensions
 	}
 	rows := ws.rows
+	if ws.compactRow && (w.h == nil || w.k%16 != 0 || !usingSME()) {
+		return ErrDimensions
+	}
 	if rows == 0 || p0 == p1 {
 		return nil
 	}

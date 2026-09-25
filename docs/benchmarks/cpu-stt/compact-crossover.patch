@@ -1,0 +1,140 @@
+diff --git a/internal/qwen3lm/evaluator.go b/internal/qwen3lm/evaluator.go
+--- a/internal/qwen3lm/evaluator.go
++++ b/internal/qwen3lm/evaluator.go
+@@ -843,7 +843,7 @@
+ 		var err error
+ 		if ws.op.rot != nil {
+ 			err = ws.tilesI8[t].Prepare(n, cols)
+-		} else if rows == 1 && cols > 0 && cols%16 == 0 && q8gemm.Available() {
++		} else if crossoverVariant == 3 && rows == 1 && cols > 0 && cols%16 == 0 && q8gemm.Available() {
+ 			err = ws.tiles[t].PrepareRowF16(cols)
+ 		} else {
+ 			err = ws.tiles[t].Prepare(n, cols)
+@@ -890,7 +890,7 @@
+ 	// One compact decode row is cheaper to pack on its owner than to
+ 	// publish a separate packing stage. All projection workers then read
+ 	// that immutable row until their existing completion barrier.
+-	if rows == 1 && op.rot == nil && cols > 0 && cols%16 == 0 && q8gemm.Available() {
++	if crossoverVariant == 3 && rows == 1 && op.rot == nil && cols > 0 && cols%16 == 0 && q8gemm.Available() {
+ 		op.pack(0, packChunks(cols))
+ 	} else {
+ 		ws.run(opPack, tiles*packChunks(cols), 1)
+@@ -919,3 +919,8 @@
+ // Dot32 returns the FP32 dot product of a and b[:len(a)] with the kernel the
+ // evaluator uses.
+ func Dot32(a, b []float32) float32 { return dot32(a, b) }
++
++// Temporary instrumentation: switched only between complete calls.
++var crossoverVariant int
++
++func SetCrossoverVariant(v int) { crossoverVariant = v }
+diff --git a/qwen3asr/crossover_test.go b/qwen3asr/crossover_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/crossover_test.go
+@@ -0,0 +1,105 @@
++// Temporary instrumentation for a within-process, counterbalanced experiment.
++package qwen3asr
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"math"
++	"os"
++	"slices"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/internal/qwen3lm"
++	"github.com/GetStream/gophonic/speech"
++)
++
++func TestCPUCounterbalancedLatency(t *testing.T) {
++	path := os.Getenv("GOPHONIC_CROSSOVER_REPORT")
++	if path == "" {
++		t.Skip("opt in with GOPHONIC_CROSSOVER_REPORT")
++	}
++	m := loadModel(t, FormatF16)
++	type sample struct {
++		Clip           string
++		Block, Variant int
++		NS             int64
++		SHA256         string
++	}
++	var results []sample
++	orders := [][2]int{{0, 3}, {3, 0}}
++	for _, clip := range []string{"jfk", "zh"} {
++		tr, err := NewTranscriber(m, 0)
++		if err != nil {
++			t.Fatal(err)
++		}
++		pcm := clipPCM(t, clip)
++		var dst speech.Transcript
++		transcribe := func() {
++			t.Helper()
++			if err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst); err != nil {
++				t.Fatal(err)
++			}
++		}
++		fingerprint := func() string {
++			h := sha256.New()
++			var bits [8]byte
++			for _, values := range [][]float32{tr.embeds, tr.hidden, tr.logits} {
++				for _, v := range values {
++					binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++					h.Write(bits[:4])
++				}
++			}
++			for _, v := range tr.gen {
++				binary.LittleEndian.PutUint64(bits[:], uint64(v))
++				h.Write(bits[:])
++			}
++			h.Write(dst.Text)
++			return hex.EncodeToString(h.Sum(nil))
++		}
++		for range 3 {
++			transcribe()
++		}
++		expected := fingerprint()
++		expectedVectors := [][]float32{slices.Clone(tr.embeds), slices.Clone(tr.hidden), slices.Clone(tr.logits)}
++		for block := 0; block < 64; block++ {
++			for _, variant := range orders[block%len(orders)] {
++				qwen3lm.SetCrossoverVariant(variant)
++				began := time.Now()
++				transcribe()
++				elapsed := time.Since(began)
++				digest := fingerprint()
++				if digest != expected {
++					for j, vs := range [][]float32{tr.embeds, tr.hidden, tr.logits} {
++						count := 0
++						maxAbs := float64(0)
++						for i, v := range vs {
++							if math.Float32bits(v) != math.Float32bits(expectedVectors[j][i]) {
++								count++
++								maxAbs = max(maxAbs, math.Abs(float64(v)-float64(expectedVectors[j][i])))
++							}
++						}
++						t.Logf("state part %d: %d changes, max abs %g", j, count, maxAbs)
++					}
++					t.Logf("generated %v text %s", tr.gen, dst.Text)
++					t.Fatalf("%s block %d variant %d changed state: %s != %s", clip, block, variant, digest, expected)
++				}
++				results = append(results, sample{clip, block, variant, elapsed.Nanoseconds(), digest})
++			}
++			if block%6 == 5 {
++				t.Logf("%s: completed %d counterbalanced blocks", clip, block+1)
++			}
++		}
++		tr.Close()
++	}
++	raw, err := json.MarshalIndent(results, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(path, append(raw, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

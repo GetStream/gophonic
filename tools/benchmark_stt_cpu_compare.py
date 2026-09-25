@@ -27,6 +27,7 @@ def main():
     p.add_argument("--samples", type=int, default=6)
     p.add_argument("--iterations", type=int, default=10)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--require-state", action="store_true", help="require matching exact state fingerprints in every sample")
     args = p.parse_args()
     if min(args.samples, args.iterations) < 1:
         p.error("samples and iterations must be positive")
@@ -37,6 +38,7 @@ def main():
     for name, path in binaries.items():
         report["binaries"][name] = {"path": path, "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
     pattern = re.compile(r"^(Benchmark\S+)\s+\d+\s+([\d.]+) ns/op", re.M)
+    expected_state = {}
     for block in range(args.samples):
         for name in (("before", "after") if block % 2 == 0 else ("after", "before")):
             cmd = [binaries[name], "-test.run=^$", "-test.bench=" + args.bench,
@@ -45,7 +47,21 @@ def main():
             metrics = {m[1]: float(m[2]) for m in pattern.finditer(result.stdout)}
             if not metrics:
                 raise RuntimeError("benchmark did not execute: " + result.stdout)
-            report["samples"].append({"block": block, "variant": name, "ns_per_op": metrics, "raw": result.stdout})
+            state = {}
+            current = None
+            for line in result.stdout.splitlines():
+                if line.startswith("--- BENCH: "):
+                    current = line.removeprefix("--- BENCH: ").strip()
+                match = re.search(r"state SHA256: ([0-9a-f]{64})", line)
+                if current and match:
+                    digest = match[1]
+                    if expected_state.setdefault(current, digest) != digest:
+                        raise RuntimeError(f"state changed for {current}: {name}, block {block}")
+                    state[current] = digest
+            if args.require_state and set(state) != set(metrics):
+                raise RuntimeError("missing benchmark state fingerprint: " + result.stdout)
+            report["samples"].append({"block": block, "variant": name, "ns_per_op": metrics,
+                                      "state_sha256": state, "raw": result.stdout})
             print(block, name, metrics, flush=True)
     rng = random.Random(0)
     summary = {}

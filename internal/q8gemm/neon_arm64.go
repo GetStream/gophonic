@@ -71,3 +71,15 @@ func maxAbsPrefix(x []float32) (float32, int) {
 	}
 	return maxAbsNEON(&x[0], n), n
 }
+
+//go:noescape
+func packContiguousF16NEON(dst *uint16, src *float32, n int, scale float32)
+
+func packContiguousRow(dst []uint16, src []float32, scale float32) int {
+	n := len(src) &^ 7
+	if n > 0 {
+		_ = dst[n-1]
+		packContiguousF16NEON(&dst[0], &src[0], n, scale)
+	}
+	return n
+}

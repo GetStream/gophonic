@@ -1,0 +1,26 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/internal/q8gemm
+cpu: Apple M4 Max
+BenchmarkF16RowPacking/2048/tile-16         	   58141	      4016 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/tile-16         	   60708	      4010 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/tile-16         	   59077	      3971 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/tile-16         	   63206	      3973 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/tile-16         	   59294	      4034 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/compact-16      	 2861552	        83.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/compact-16      	 2846492	        84.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/compact-16      	 2830605	        85.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/compact-16      	 2866156	        84.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/2048/compact-16      	 2623854	       113.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/tile-16         	   17526	     13745 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/tile-16         	   13302	     18822 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/tile-16         	   17568	     13660 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/tile-16         	   17568	     13226 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/tile-16         	   18354	     13261 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/compact-16      	 1000000	       219.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/compact-16      	 1000000	       221.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/compact-16      	 1000000	       225.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/compact-16      	 1000000	       221.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF16RowPacking/6144/compact-16      	 1000000	       222.9 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/internal/q8gemm	5.286s
