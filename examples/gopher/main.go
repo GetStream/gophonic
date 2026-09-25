@@ -134,13 +134,14 @@ func main() {
 		// Alone with one person Gopher answers everything; in a meeting,
 		// only what is addressed to it, and it keeps track of who said
 		// what, for when it is asked about the meeting.
-		// In a meeting, what each person says is named; whether it is meant
-		// for Gopher, the model judges, and says nothing when it is not.
+		// Alone with one person Gopher answers everything; in a meeting,
+		// only what is addressed to it by name, and it keeps track of who
+		// said what, for when it is asked about the meeting.
 		Heard: func(text string) (string, bool) {
-			if humans.count() > 1 {
-				text = present.name(mix.loudest()) + " said: " + text
+			if humans.count() <= 1 {
+				return text, true
 			}
-			return text, true
+			return present.name(mix.loudest()) + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
 		},
 		Tools: tools(),
 		OnText: func(role chat.Role, text string, final bool) {

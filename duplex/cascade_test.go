@@ -24,13 +24,20 @@ import (
 // Fake lanes: the cascade's behavior, not the models', is under test. A
 // transcriber that hears turns judges each one over; otherwise the turn
 // detector does.
-type fakeTranscriber struct{ hears bool }
+type fakeTranscriber struct {
+	hears bool
+	text  string // what it hears; "hello gopher" if empty
+}
 
 func (f fakeTranscriber) Transcribe(_ context.Context, _ []float32, opts speech.Options, t *speech.Transcript) error {
 	if opts.Turn && !f.hears {
 		return speech.ErrUnsupported
 	}
-	t.Text = append(t.Text[:0], "hello gopher"...)
+	said := f.text
+	if said == "" {
+		said = "hello gopher"
+	}
+	t.Text = append(t.Text[:0], said...)
 	t.Turn = speech.Prediction{}
 	if opts.Turn {
 		t.Turn = speech.Prediction{Probability: 0.95, Complete: true}
@@ -376,5 +383,80 @@ func TestCascadeKeepsSilence(t *testing.T) {
 	if session.replies.Load() != 1 || !strings.HasPrefix(got, `hello gopher|<silent until "hi">|hello gopher`) ||
 		strings.Count(got, "<silent") != 1 {
 		t.Fatalf("%d replies; conversation %q", session.replies.Load(), got)
+	}
+}
+
+func TestEchoOf(t *testing.T) {
+	for _, c := range []struct {
+		reply   string
+		n       int // bytes of reply that repeat, if it does
+		holding bool
+	}{
+		{"Three, two, one. Got it.", len("Three, two, one"), false},
+		{"Cherry Judge said: How is it going? Fine.", len("Cherry Judge said: How is it going"), false},
+		{"How is it going? I'm well.", len("How is it going"), false},
+		{"How is", 0, true},
+		{"How is it g", 0, true},
+		{"How about you?", 0, false},
+		{"Sempre é só fazer tudo bem.", len("Sempre é só fazer tudo bem"), false},
+		{"So, you're heading out!", 0, false},
+	} {
+		n, holding := echoOf(c.reply, "Cherry Judge said: How is it going?", "How is it going?")
+		if c.reply[0] == 'T' {
+			n, holding = echoOf(c.reply, "Three, two, one.")
+		}
+		if c.reply[0] == 'S' {
+			n, holding = echoOf(c.reply, "sempre é só fazer tudo bem.")
+		}
+		if n != c.n || holding != c.holding {
+			t.Errorf("%q: %d, %v; want %d, %v", c.reply, n, holding, c.n, c.holding)
+		}
+	}
+}
+
+// echoSession reads the question back before answering it.
+type echoSession struct{ fakeSession }
+
+func (s *echoSession) Reply(ctx context.Context, _ chat.Options, sink func([]byte) error) error {
+	for _, p := range []string{"How is it ", "going? ", "Fine, ", "thanks."} {
+		if err := sink([]byte(p)); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.messages = append(s.messages, "How is it going? Fine, thanks.")
+	s.mu.Unlock()
+	return nil
+}
+
+// A reply that reads back what it answers says only the rest, and the
+// conversation keeps it as said.
+func TestCascadeDropsEcho(t *testing.T) {
+	session := &echoSession{}
+	var mu sync.Mutex
+	var said []string
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "How is it going?"}, Session: session, Synthesizer: fakeSynth{},
+		OnText: func(role chat.Role, text string, final bool) {
+			if final && role == chat.Assistant {
+				mu.Lock()
+				said = append(said, text)
+				mu.Unlock()
+			}
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, speechClip(t), func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking }, 5*time.Second) {
+		t.Fatal("the agent never spoke")
+	}
+	run(t, c, nil, func(s speech.DuplexState, _ []float32) bool { return s == speech.Listening }, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if len(said) == 0 || said[0] != "Fine, thanks." || session.messages[len(session.messages)-1] != "Fine, thanks." {
+		t.Fatalf("said %q; conversation %q", said, session.messages)
 	}
 }

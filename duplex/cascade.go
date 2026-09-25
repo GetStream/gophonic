@@ -1064,7 +1064,7 @@ func (c *Cascade) respond() {
 		}
 		c.played.Store(0)
 		mark := c.cfg.Session.Checkpoint()
-		text := j.say
+		text, heardAs := j.say, ""
 		if j.audio != nil {
 			opts := c.cfg.Listen
 			opts.Turn = c.hears
@@ -1093,6 +1093,7 @@ func (c *Cascade) respond() {
 				continue
 			}
 			message, answer := c.heard(text)
+			heardAs = message
 			if answer && c.silentUntil != "" {
 				answer = c.wakes(ctx, message)
 			}
@@ -1177,7 +1178,7 @@ func (c *Cascade) respond() {
 			})
 		}()
 		var err error
-		silent, until := false, ""
+		silent, until, echoed := false, "", false
 		if j.audio != nil {
 			speak := func(p []byte) error {
 				if reply.Len() == 0 {
@@ -1226,16 +1227,32 @@ func (c *Cascade) respond() {
 				if decided {
 					return nil
 				}
-				switch s := strings.TrimLeft(lead.String(), " \n"); {
+				s := strings.TrimLeft(lead.String(), " \n")
+				switch {
 				case strings.HasPrefix(s, silentMark):
 					decided, silent = true, true
 					return nil
 				case strings.HasPrefix(silentMark, s):
 					return nil
 				}
+				// Small models sometimes read back what they answer: a
+				// reply that begins with its words is held while it may,
+				// and the repetition is not said.
+				switch n, holding := echoOf(s, heardAs, text); {
+				case holding:
+					return nil
+				case n > 0:
+					decided, echoed = true, true
+					rest := strings.TrimLeftFunc(s[n:], func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSpace(r) })
+					if rest == "" {
+						return nil
+					}
+					return speak([]byte(rest))
+				}
 				decided = true
 				return speak([]byte(lead.String()))
 			}
+			replyMark := c.cfg.Session.Checkpoint()
 			// A reply may call tools; one whose result needs words has
 			// the agent answer again, on the same voice.
 			for round := 0; ; round++ {
@@ -1243,6 +1260,13 @@ func (c *Cascade) respond() {
 				if err != nil || round == maxToolRounds || !c.runCalls(ctx, j, trace) {
 					break
 				}
+			}
+			if echoed && err == nil && ctx.Err() == nil && len(c.cfg.Session.Calls()) == 0 {
+				// The conversation keeps the reply as said, so that the
+				// model never sees itself repeating.
+				c.cfg.Session.Restore(replyMark)
+				c.cfg.Session.Add(chat.Assistant, reply.String())
+				trace("dropped a repetition")
 			}
 			switch {
 			case silent:
@@ -1320,9 +1344,63 @@ func (c *Cascade) respond() {
 
 // SilencePrompt ends the system prompt of a conversation New starts: it
 // lets the model say nothing, now or until something it names happens.
-const SilencePrompt = `Always answer, except in two cases, when you reply with only <silent>: someone asked you to be quiet or to wait (then name what ends the silence: <silent until "...">), or what was said is clearly meant for someone else, such as a person addressed by name.`
+const SilencePrompt = `Never repeat or read back what someone said: everyone in the call heard it. Always answer, unless someone explicitly asks you to be quiet, to stop talking, or to wait: only then reply with nothing but <silent until "...">, naming the word or event that ends the silence.`
 
 const silentMark = "<silent"
+
+// echoOf reports how much of reply, from its start, repeats one of the
+// messages it answers word for word (0 if none), and whether reply, still
+// being written, may yet turn out to; messages of fewer than three words
+// are answered, not repeated.
+func echoOf(reply string, messages ...string) (n int, holding bool) {
+	for _, m := range messages {
+		said := strings.FieldsFunc(strings.ToLower(m), notWord)
+		if len(said) < 3 {
+			continue
+		}
+		i, matched, open := 0, 0, false // open: the reply ends inside a word
+		for matched < len(said) {
+			for i < len(reply) {
+				r, size := utf8.DecodeRuneInString(reply[i:])
+				if !notWord(r) {
+					break
+				}
+				i += size
+			}
+			if i == len(reply) {
+				break
+			}
+			j := i
+			for j < len(reply) {
+				r, size := utf8.DecodeRuneInString(reply[j:])
+				if notWord(r) {
+					break
+				}
+				j += size
+			}
+			w := strings.ToLower(reply[i:j])
+			if j == len(reply) {
+				open = strings.HasPrefix(said[matched], w)
+				break
+			}
+			if w != said[matched] {
+				matched = -1
+				break
+			}
+			matched++
+			i = j
+		}
+		switch {
+		case matched == len(said):
+			return i, false
+		case matched >= 0 && (open || i == len(reply)):
+			holding = true
+		}
+	}
+	return 0, holding
+}
+
+func notWord(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '\'' }
 
 // silenceUntil returns what a silent reply names as ending it: the text
 // in quotes after "until", or "being asked to speak" for a bare "until".
