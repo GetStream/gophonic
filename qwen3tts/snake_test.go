@@ -21,7 +21,7 @@ func TestSnakeMatchesMathSin(t *testing.T) {
 		src[i] = float32(r.NormFloat64() * 4)
 	}
 	dst := make([]float32, len(src))
-	s.apply(dst, src, n)
+	s.apply(dst, src, nil, n)
 	var worst float64
 	for i, v := range src {
 		c := i % n
@@ -32,7 +32,7 @@ func TestSnakeMatchesMathSin(t *testing.T) {
 	if worst > 1e-6 {
 		t.Fatalf("SnakeBeta relative error %g", worst)
 	}
-	if allocs := testing.AllocsPerRun(10, func() { s.apply(dst, src, n) }); allocs != 0 {
+	if allocs := testing.AllocsPerRun(10, func() { s.apply(dst, src, nil, n) }); allocs != 0 {
 		t.Fatalf("SnakeBeta allocates %v times", allocs)
 	}
 }

@@ -52,10 +52,14 @@ type codec struct {
 	cos, sin               []float32 // RoPE, [position][codecHeadD/2]
 }
 
+// codecLayer's o and down projections are packed in two halves of output
+// rows, one per decoder participant.
 type codecLayer struct {
 	inNorm, postNorm []float32
-	q, k, v, o       *whispergemm.PackedVector
-	gate, up, down   *whispergemm.PackedVector
+	q, k, v          *whispergemm.PackedVector
+	o                [2]*whispergemm.PackedVector
+	gate, up         *whispergemm.PackedVector
+	down             [2]*whispergemm.PackedVector
 	attnScale        []float32
 	mlpScale         []float32
 }
@@ -73,7 +77,7 @@ type upsampler struct {
 
 type block struct {
 	snake snake
-	trans dense // [x(t-1), x(t)] → r output rows
+	trans conv // kernel 2: [x(t-1), x(t)] → r output rows
 	rate  int
 	in    int
 	out   int
@@ -159,6 +163,19 @@ func loadCodec(dir string, threads int) (*codec, error) {
 		}
 		return whispergemm.NewPackedVector(w, k, rows, k)
 	}
+	halves := func(name string, rows, k int) ([2]*whispergemm.PackedVector, error) {
+		var h [2]*whispergemm.PackedVector
+		w, err := st.Float32(name, rows, k)
+		if err != nil {
+			return h, err
+		}
+		for i := range h {
+			if h[i], err = whispergemm.NewPackedVector(w[i*rows/2*k:], k, rows/2, k); err != nil {
+				return h, err
+			}
+		}
+		return h, nil
+	}
 	qd := codecHeads * codecHeadD
 	for i := range d.layers {
 		l, lp := &d.layers[i], fmt.Sprintf("%spre_transformer.layers.%d.", p, i)
@@ -167,12 +184,17 @@ func loadCodec(dir string, threads int) (*codec, error) {
 			name string
 			n, k int
 		}{{&l.q, "self_attn.q_proj.weight", qd, codecHidden}, {&l.k, "self_attn.k_proj.weight", qd, codecHidden},
-			{&l.v, "self_attn.v_proj.weight", qd, codecHidden}, {&l.o, "self_attn.o_proj.weight", codecHidden, qd},
-			{&l.gate, "mlp.gate_proj.weight", codecInter, codecHidden}, {&l.up, "mlp.up_proj.weight", codecInter, codecHidden},
-			{&l.down, "mlp.down_proj.weight", codecHidden, codecInter}} {
+			{&l.v, "self_attn.v_proj.weight", qd, codecHidden}, {&l.gate, "mlp.gate_proj.weight", codecInter, codecHidden},
+			{&l.up, "mlp.up_proj.weight", codecInter, codecHidden}} {
 			if *v.dst, err = vec(lp+v.name, v.n, v.k); err != nil {
 				return nil, err
 			}
+		}
+		if l.o, err = halves(lp+"self_attn.o_proj.weight", codecHidden, qd); err != nil {
+			return nil, err
+		}
+		if l.down, err = halves(lp+"mlp.down_proj.weight", codecHidden, codecInter); err != nil {
+			return nil, err
 		}
 		for _, v := range []struct {
 			dst  *[]float32
@@ -219,9 +241,10 @@ func loadCodec(dir string, threads int) (*codec, error) {
 		if b.snake, err = loadSnake(st, bp+"0", b.in); err != nil {
 			return nil, err
 		}
-		if b.trans, err = loadTransposed(st, bp+"1.conv", b.in, b.out, 2*b.rate, b.rate); err != nil {
+		if b.trans.w, err = loadTransposed(st, bp+"1.conv", b.in, b.out, 2*b.rate, b.rate); err != nil {
 			return nil, err
 		}
+		b.trans.k, b.trans.dilation, b.trans.in, b.trans.out = 2, 1, b.in, b.rate*b.out
 		for j, dilation := range []int{1, 3, 9} {
 			u, up := &b.units[j], fmt.Sprintf("%s%d.", bp, j+2)
 			if u.act1, err = loadSnake(st, up+"act1", b.out); err != nil {
@@ -275,11 +298,7 @@ func loadConv(st *safetensors.Checkpoint, name string, in, out, k, dilation int)
 		}
 	}
 	c := conv{k: k, dilation: dilation, in: in, out: out}
-	c.w = dense{in: k * in, out: out}
-	if c.w.w, err = whispergemm.NewPackedB(k*in, out); err != nil {
-		return conv{}, err
-	}
-	if err := c.w.w.Pack(t, k*in, true); err != nil {
+	if c.w, err = packDense(t, k*in, out); err != nil {
 		return conv{}, err
 	}
 	c.w.b, err = st.Float32(name+".bias", out)
@@ -309,11 +328,8 @@ func loadTransposed(st *safetensors.Checkpoint, name string, in, out, k, r int) 
 			}
 		}
 	}
-	d := dense{in: kin, out: r * out}
-	if d.w, err = whispergemm.NewPackedB(kin, r*out); err != nil {
-		return dense{}, err
-	}
-	if err := d.w.Pack(t, kin, true); err != nil {
+	d, err := packDense(t, kin, r*out)
+	if err != nil {
 		return dense{}, err
 	}
 	bias, err := st.Float32(name+".bias", out)

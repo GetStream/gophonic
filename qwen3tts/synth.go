@@ -70,6 +70,13 @@ type Synthesizer struct {
 	jobs chan decodeJob
 	done chan int
 
+	// The voice prompt: the rows before the first text token (the assistant
+	// role and the codec's control tokens) depend only on the speaker and
+	// language, and each utterance appends after them, so the talker cache
+	// keeps them across utterances and a later Speak in the same voice
+	// evaluates only the first text token's row.
+	voice, voiceLang, voiceRows int // the cached prompt's speaker, language, and rows (0: none)
+
 	onFeed func(row, hidden []float32) // tests: each talker input row and the state before it
 }
 
@@ -106,6 +113,7 @@ type decodeJob struct {
 }
 
 func (s *Synthesizer) decodeLoop() {
+	defer s.dec.exec.Close()
 	for job := range s.jobs {
 		s.dec.decode(&job.frame, s.pcm[job.buf])
 		s.done <- job.buf
@@ -174,25 +182,27 @@ func (s *Synthesizer) generate(ctx context.Context, opts speech.SpeakOptions, ne
 		return speech.ErrClosed
 	}
 	c := &s.m.cfg.Talker
-	voice := strings.ToLower(opts.Voice)
+	voice := opts.Voice
 	if voice == "" {
 		voice = defaultVoice
 	}
-	speaker, ok := c.Speakers[voice]
+	speaker, ok := lookup(c.Speakers, voice)
 	if !ok {
 		return fmt.Errorf("qwen3tts: unknown voice %q: %w", opts.Voice, speech.ErrUnsupported)
 	}
 	language := -1
 	if opts.Language != "" {
 		name, ok := speech.LanguageName(opts.Language)
-		id, known := c.Languages[strings.ToLower(name)]
+		id, known := lookup(c.Languages, name)
 		if !ok || !known {
 			return fmt.Errorf("qwen3tts: cannot speak %q: %w", opts.Language, speech.ErrUnsupported)
 		}
 		language = id
 	}
-	if dialect, ok := c.Dialects[voice].(string); ok && (language < 0 || language == c.Languages["chinese"]) {
-		language = c.Languages[dialect]
+	if dialect, ok := lookup(c.Dialects, voice); ok && (language < 0 || language == c.Languages["chinese"]) {
+		if name, ok := dialect.(string); ok {
+			language = c.Languages[name]
+		}
 	}
 	s.reset()
 	s.dec.reset()
@@ -237,6 +247,17 @@ func (s *Synthesizer) generate(ctx context.Context, opts speech.SpeakOptions, ne
 	return nil
 }
 
+// lookup finds name in m regardless of case, without allocating.
+func lookup[V any](m map[string]V, name string) (V, bool) {
+	for k, v := range m {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+	var zero V
+	return zero, false
+}
+
 // reset clears the utterance state.
 func (s *Synthesizer) reset() {
 	for _, id := range s.seenIDs {
@@ -249,6 +270,10 @@ func (s *Synthesizer) reset() {
 }
 
 // pull reads one piece of text and tokenizes what ends at a word boundary.
+// The first piece is tokenized as it stands, since the prompt waits for its
+// first token: a language model's pieces are its own tokens of the same
+// vocabulary, so a piece rarely ends mid-word, and then only that word's
+// tokens differ from the text's.
 func (s *Synthesizer) pull(next func() ([]byte, error)) error {
 	piece, err := next()
 	s.pending = append(s.pending, piece...)
@@ -262,6 +287,9 @@ func (s *Synthesizer) pull(next func() ([]byte, error)) error {
 	// Tokenize up to the last white space: Qwen's pre-tokenizer starts a
 	// word with its leading space, so the split changes no token.
 	cut := lastSpace(s.pending)
+	if len(s.text) == 0 {
+		cut = trimSpace(s.pending)
+	}
 	if cut <= 0 {
 		return nil
 	}
@@ -277,6 +305,18 @@ func lastSpace(b []byte) int {
 		i -= size
 	}
 	return -1
+}
+
+// trimSpace returns the length of b without trailing white space.
+func trimSpace(b []byte) int {
+	for i := len(b); i > 0; {
+		r, size := utf8.DecodeLastRune(b[:i])
+		if !unicode.IsSpace(r) {
+			return i
+		}
+		i -= size
+	}
+	return 0
 }
 
 // tokenize appends the tokens of s.pending[:n] and their projected rows.
@@ -301,14 +341,24 @@ func (s *Synthesizer) tokenize(n int) error {
 
 // prefill evaluates the prompt: the assistant role, the codec's control
 // tokens (language, speaker) under TTS padding, and the first text token.
+// With the voice prompt cached, only the text token's row.
 func (s *Synthesizer) prefill(speaker, language int) error {
 	m, c, h := s.m, &s.m.cfg.Talker, s.m.hidden
-	control := []int{c.NoThink, c.ThinkBOS, c.ThinkEOS}
+	var ids [7]int
+	control := append(ids[:0], c.NoThink, c.ThinkBOS, c.ThinkEOS)
 	if language >= 0 {
-		control = []int{c.Think, c.ThinkBOS, language, c.ThinkEOS}
+		control = append(ids[:0], c.Think, c.ThinkBOS, language, c.ThinkEOS)
 	}
 	control = append(control, speaker, c.CodecPad, c.CodecBOS)
 	n := 3 + len(control)
+	s.textAt = 1
+	if s.voiceRows == n-1 && s.voice == speaker && s.voiceLang == language && s.kv != nil && len(s.kv.Tokens()) >= n-1 {
+		s.rows = slices.Grow(s.rows[:0], h)[:h]
+		copy(s.rows, s.textRows[:h])
+		m.addCodec(s.rows, c.CodecBOS)
+		return s.talkerRows(1, n-1)
+	}
+	s.voiceRows = 0
 	s.rows = slices.Grow(s.rows[:0], n*h)[:n*h]
 	s.tmp = slices.Grow(s.tmp[:0], 3*h)[:3*h]
 	// "<|im_start|>assistant\n", whose ids the tokenizer shares with Qwen3.
@@ -327,8 +377,11 @@ func (s *Synthesizer) prefill(speaker, language int) error {
 	last := s.rows[(n-1)*h:]
 	copy(last, s.textRows[:h])
 	m.addCodec(last, c.CodecBOS)
-	s.textAt = 1
-	return s.talkerRows(n, 0)
+	if err := s.talkerRows(n, 0); err != nil {
+		return err
+	}
+	s.voice, s.voiceLang, s.voiceRows = speaker, language, n-1
+	return nil
 }
 
 // roleIDs is "<|im_start|>assistant\n" in the Qwen tokenizer.
@@ -378,7 +431,7 @@ func placeholders(ids []int, n int) []int {
 }
 
 func (s *Synthesizer) talkerLogits() error {
-	return s.m.tEval.LogitsInto(s.hidden, s.logits, s.tws)
+	return s.m.head.Mul(s.logits, s.hidden)
 }
 
 // predict fills the frame's codebooks 1–15 from the talker state and the

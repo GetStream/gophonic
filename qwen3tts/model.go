@@ -12,9 +12,10 @@
 // embedding plus the previous frame's codec embeddings) and predicts the
 // frame's first codebook. The code predictor, a five-layer Qwen3 decoder,
 // predicts the other fifteen codebooks from the talker's state. Both run on
-// the Apple GPU through gophonic's Qwen3 core when Metal is present. The
-// codec decoder turns the sixteen codebooks into 1920 samples on the CPU's
-// matrix unit, concurrently with the GPU.
+// the Apple GPU through gophonic's Qwen3 core when Metal is present; their
+// heads and the text projections run on the CPU. The codec decoder turns
+// the sixteen codebooks into 1920 samples on the CPU's matrix units,
+// concurrently with the GPU.
 package qwen3tts
 
 import (
@@ -87,7 +88,8 @@ type Options struct {
 	// Metal is present, and exact FP16 weights on the CPU elsewhere.
 	Format string
 	// Threads bounds the CPU workers of the codec decoder and the CPU
-	// projections; zero picks the performance cores.
+	// projections; zero picks the performance cores. The codec decoder
+	// uses one worker per matrix unit where its kernels stream.
 	Threads int
 }
 
@@ -119,7 +121,9 @@ type Model struct {
 	// codebook g's codes. proj projects the talker state.
 	cpRows [groups - 1][]float32
 	proj   dense
-	// heads are the code predictor's fifteen output heads.
+	// head is the talker's codec head, and heads the code predictor's
+	// fifteen: on the CPU, where their states arrive, exact in FP32.
+	head  *whispergemm.PackedVector
 	heads [groups - 1]*whispergemm.PackedVector
 	// Text rows of the TTS control tokens.
 	bosRow, eosRow, padRow []float32
@@ -167,8 +171,7 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	// and whose head predicts the first codebook.
 	tc := c.Talker.TextConfig
 	tc.ModelType, tc.RopeScaling = "qwen3", nil // identical positions on all MRoPE axes make it plain RoPE
-	if m.talker, err = qwen3lm.Load(dir, qwen3lm.LoadOptions{Format: format, Prefix: "talker.model.", Config: &tc,
-		Head: "talker.codec_head.weight", NoEmbed: true}); err != nil {
+	if m.talker, err = qwen3lm.Load(dir, qwen3lm.LoadOptions{Format: format, Prefix: "talker.model.", Config: &tc, NoEmbed: true}); err != nil {
 		return nil, fmt.Errorf("qwen3tts: talker: %w", err)
 	}
 	if m.tEval, err = qwen3lm.NewEvaluator(m.talker); err != nil {
@@ -226,6 +229,13 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 		return err
 	}
 	if m.proj, err = loadDense(st, "talker.code_predictor.small_to_mtp_projection", ch, h); err != nil {
+		return err
+	}
+	head, err := st.Float32("talker.codec_head.weight", c.Vocab, h)
+	if err != nil {
+		return err
+	}
+	if m.head, err = whispergemm.NewPackedVector(head, h, c.Vocab, h); err != nil {
 		return err
 	}
 	for g := range m.heads {

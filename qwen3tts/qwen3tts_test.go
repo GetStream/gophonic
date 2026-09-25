@@ -6,10 +6,13 @@ package qwen3tts
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -290,4 +293,130 @@ func top2(v []float32) (int, int) {
 		}
 	}
 	return a, b
+}
+
+// A second utterance in the same voice reuses the cached voice prompt and
+// speaks the same codes.
+func TestVoicePromptReuse(t *testing.T) {
+	ref := loadReference(t, "hello")
+	m := loadModel(t)
+	s, err := NewSynthesizer(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Greedy = true
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}
+	speak := func() [][groups]int {
+		sent := false
+		next := func() ([]byte, error) {
+			if sent {
+				return nil, io.EOF
+			}
+			sent = true
+			return []byte(ref.Text), nil
+		}
+		var got [][groups]int
+		if err := s.generate(context.Background(), opts, next, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := speak()
+	if s.voiceRows == 0 {
+		t.Fatal("no voice prompt cached")
+	}
+	rows := len(s.kv.Tokens())
+	again := speak()
+	if len(s.kv.Tokens()) != rows {
+		t.Fatalf("the prompt grew: %d rows, then %d", rows, len(s.kv.Tokens()))
+	}
+	same := 0
+	for f := range min(len(first), len(again)) {
+		if first[f] == again[f] {
+			same++
+		}
+	}
+	t.Logf("frames equal: %d of %d and %d", same, len(first), len(again))
+	if len(again) == 0 || again[0] != first[0] {
+		t.Fatalf("first frame %v, want %v", again[0], first[0])
+	}
+}
+
+// The first piece of text is tokenized as it stands, so speech starts
+// without waiting for the next piece; later pieces wait for a word boundary.
+func TestFirstPieceTokens(t *testing.T) {
+	m := loadModel(t)
+	s, err := NewSynthesizer(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.reset()
+	pieces := []string{"Sure", ",", " the", " answer", " is", " simple", "."}
+	i := 0
+	next := func() ([]byte, error) {
+		if i == len(pieces) {
+			return nil, io.EOF
+		}
+		i++
+		return []byte(pieces[i-1]), nil
+	}
+	if err := s.pull(next); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.text) != 1 {
+		t.Fatalf("after the first piece: %d tokens, want 1", len(s.text))
+	}
+	for !s.textDone {
+		if err := s.pull(next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := m.tokens.EncodeInto(strings.Join(pieces, ""), make([]int, 0, 64), &qwen3lm.TokenizerWorkspace{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(s.text, want) {
+		t.Fatalf("tokens %v, want %v", s.text, want)
+	}
+}
+
+// Warm Speak calls allocate nothing.
+func TestSpeakAllocations(t *testing.T) {
+	m := loadModel(t)
+	s, err := NewSynthesizer(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Greedy = true
+	opts := speech.SpeakOptions{Voice: "Ryan", Language: "en"}
+	text := []byte("Hello there.")
+	sent := false
+	next := func() ([]byte, error) {
+		if sent {
+			return nil, io.EOF
+		}
+		sent = true
+		return text, nil
+	}
+	frames := 0
+	out := func([]float32) error {
+		frames++
+		if frames == 4 {
+			return io.EOF
+		}
+		return nil
+	}
+	speak := func() {
+		sent, frames = false, 0
+		if err := s.Speak(context.Background(), opts, next, out); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+	}
+	speak()
+	if allocs := testing.AllocsPerRun(3, speak); allocs != 0 {
+		t.Fatalf("Speak allocates %v times", allocs)
+	}
 }

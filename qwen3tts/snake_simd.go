@@ -7,10 +7,11 @@ package qwen3tts
 
 import "simd/archsimd"
 
-// apply writes SnakeBeta of rows of n channels from src to dst.
-func (s *snake) apply(dst, src []float32, n int) {
+// apply writes SnakeBeta of rows of n channels from src, plus bias when
+// given, to dst.
+func (s *snake) apply(dst, src, bias []float32, n int) {
 	if n%4 != 0 {
-		snakeScalar(dst, src, s.a, s.invB, n)
+		snakeScalar(dst, src, bias, s.a, s.invB, n)
 		return
 	}
 	inv := archsimd.BroadcastFloat32x4(invPi)
@@ -21,6 +22,9 @@ func (s *snake) apply(dst, src []float32, n int) {
 		x, y := src[r:r+n], dst[r:r+n]
 		for i := 0; i < n; i += 4 {
 			v := archsimd.LoadFloat32x4Array((*[4]float32)(x[i : i+4]))
+			if bias != nil {
+				v = v.Add(archsimd.LoadFloat32x4Array((*[4]float32)(bias[i : i+4])))
+			}
 			a := archsimd.LoadFloat32x4Array((*[4]float32)(s.a[i : i+4]))
 			b := archsimd.LoadFloat32x4Array((*[4]float32)(s.invB[i : i+4]))
 			arg := v.Mul(a)
@@ -36,6 +40,36 @@ func (s *snake) apply(dst, src []float32, n int) {
 			sine := red.Mul(r2).MulAdd(poly, red)
 			sq := sine.Mul(sine)
 			b.MulAdd(sq, v).StoreArray((*[4]float32)(y[i : i+4]))
+		}
+	}
+}
+
+func addTo(dst, src []float32) {
+	src = src[:len(dst)]
+	i := 0
+	for ; i+4 <= len(dst); i += 4 {
+		a := archsimd.LoadFloat32x4Array((*[4]float32)(dst[i : i+4]))
+		b := archsimd.LoadFloat32x4Array((*[4]float32)(src[i : i+4]))
+		a.Add(b).StoreArray((*[4]float32)(dst[i : i+4]))
+	}
+	for ; i < len(dst); i++ {
+		dst[i] += src[i]
+	}
+}
+
+// residual writes rows of n channels of src + z + bias to dst.
+func residual(dst, src, z, bias []float32, n int) {
+	if n%4 != 0 {
+		residualScalar(dst, src, z, bias, n)
+		return
+	}
+	for r := 0; r < len(dst); r += n {
+		x, y, o := src[r:r+n], z[r:r+n], dst[r:r+n]
+		for i := 0; i < n; i += 4 {
+			a := archsimd.LoadFloat32x4Array((*[4]float32)(x[i : i+4]))
+			b := archsimd.LoadFloat32x4Array((*[4]float32)(y[i : i+4]))
+			c := archsimd.LoadFloat32x4Array((*[4]float32)(bias[i : i+4]))
+			a.Add(b).Add(c).StoreArray((*[4]float32)(o[i : i+4]))
 		}
 	}
 }

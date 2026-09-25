@@ -36,12 +36,33 @@ func roundEven(x float32) float32 {
 	return (x - shift) + shift
 }
 
-// snakeScalar writes SnakeBeta of rows of n channels from src to dst.
-func snakeScalar(dst, src, a, invB []float32, n int) {
+// snakeScalar writes SnakeBeta of rows of n channels from src, plus bias
+// when given, to dst.
+func snakeScalar(dst, src, bias, a, invB []float32, n int) {
 	for r := 0; r < len(src); r += n {
 		x, y := src[r:r+n], dst[r:r+n]
 		for i, v := range x {
+			if bias != nil {
+				v += bias[i]
+			}
 			y[i] = v + invB[i]*sin2(v*a[i])
+		}
+	}
+}
+
+func addToScalar(dst, src []float32) {
+	src = src[:len(dst)]
+	for i := range dst {
+		dst[i] += src[i]
+	}
+}
+
+// residualScalar writes rows of n channels of src + z + bias to dst.
+func residualScalar(dst, src, z, bias []float32, n int) {
+	for r := 0; r < len(dst); r += n {
+		x, y, o := src[r:r+n], z[r:r+n], dst[r:r+n]
+		for i := range o {
+			o[i] = x[i] + y[i] + bias[i]
 		}
 	}
 }
