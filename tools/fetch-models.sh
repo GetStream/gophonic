@@ -7,7 +7,7 @@
 # models/ at the repository root, or $GOPHONIC_MODELS. Files already present
 # are kept, so the script is safe to rerun.
 #
-# Usage: tools/fetch-models.sh [asr] [asr-small] [whisper] [turn] [qwen3] [tts] [clm]
+# Usage: tools/fetch-models.sh [asr] [asr-small] [whisper] [turn] [qwen3] [qwen3-moe] [qwen36] [tts] [clm]
 # (default: asr turn)
 #
 # It needs curl and Python 3; the converters' packages (NumPy, ONNX, PyTorch,
@@ -99,6 +99,21 @@ qwen3() {
 		py "torch transformers accelerate" "$repo/qwen3/tools/reference_hidden.py" "$dir/Qwen3-8B" "$dir/qwen3-8b-hello-reference.f32"
 }
 
+# The mixtures of experts: Qwen3-30B-A3B, and Qwen3.6-35B-A3B (Gopher's
+# language model), each with the float32 NumPy reference state of "The
+# capital of France is" that internal/qwen3lm's tests compare against.
+qwen3_moe() {
+	[ -e "$dir/Qwen3-30B-A3B-Instruct-2507" ] || hf Qwen/Qwen3-30B-A3B-Instruct-2507 --local-dir "$dir/Qwen3-30B-A3B-Instruct-2507"
+	[ -e "$dir/qwen3-30b-a3b-reference.f32" ] ||
+		py numpy "$repo/internal/qwen3lm/tools/moe_reference.py" "$dir/Qwen3-30B-A3B-Instruct-2507" 785,6722,315,9625,374 "$dir/qwen3-30b-a3b-reference.f32"
+}
+
+qwen36() {
+	[ -e "$dir/Qwen3.6-35B-A3B" ] || hf Qwen/Qwen3.6-35B-A3B --local-dir "$dir/Qwen3.6-35B-A3B"
+	[ -e "$dir/qwen3.6-35b-a3b-reference.f32" ] ||
+		py numpy "$repo/internal/qwen3lm/tools/qwen35_reference.py" "$dir/Qwen3.6-35B-A3B" 760,6511,314,9338,369 "$dir/qwen3.6-35b-a3b-reference.f32"
+}
+
 clm() {
 	[ -e "$dir/CLM_v0.1-8B.gclm" ] && return
 	hf Contrastive-LM/CLM-v0.1-8B CLM_v0.1-8B.pt --revision 87655cb835bd76fd66c2da78e1e3709f7fa11a94 --local-dir "$cache"
@@ -110,10 +125,11 @@ clm() {
 [ $# -gt 0 ] || set -- asr turn
 for target in "$@"; do
 	case $target in
-	asr | whisper | turn | qwen3 | tts | clm) "$target" ;;
+	asr | whisper | turn | qwen3 | qwen36 | tts | clm) "$target" ;;
 	asr-small) asr_small ;;
+	qwen3-moe) qwen3_moe ;;
 	*)
-		echo "fetch-models.sh: unknown target $target (want asr, asr-small, whisper, turn, qwen3, tts, or clm)" >&2
+		echo "fetch-models.sh: unknown target $target (want asr, asr-small, whisper, turn, qwen3, qwen3-moe, qwen36, tts, or clm)" >&2
 		exit 2
 		;;
 	esac

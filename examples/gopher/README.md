@@ -9,15 +9,15 @@ meeting it answers what is meant for it. Every model runs in this process:
 | Role | Model | On an M4 Max |
 | --- | --- | --- |
 | Hear, and know when you are done | Qwen3-ASR-1.7B | 11 s of speech in 226 ms; the end of your turn in the same pass |
-| Think, and decide whether to speak | Qwen3-8B | reply starts ~50 ms after your words reach it; 19 ms per token |
+| Think, and decide whether to speak | Qwen3.6-35B-A3B | a mixture of experts: 8 ms per token |
 | Speak | Qwen3-TTS-12Hz-1.7B | first audio 18 ms after the text; 0.21 of real time |
 
-The three models take about 15 GB and load in under 2 s from gophonic's
+The three models take about 40 GB and load in under 3 s from gophonic's
 weight cache. Audio never leaves the machine; Stream carries the call, and
 the search tool reads Wikipedia.
 
 ```sh
-tools/fetch-models.sh asr qwen3 tts   # from the repository root
+tools/fetch-models.sh asr qwen36 tts   # from the repository root
 cd examples/gopher
 GOEXPERIMENT=simd go run . -languages en,pt
 ```
@@ -44,7 +44,7 @@ agent.Note("Ana joined the call.")
 
 Inside, the cascade works while you talk:
 
-- Qwen3-ASR transcribes you as you speak, and Qwen3-8B reads along. At your
+- Qwen3-ASR transcribes you as you speak, and Qwen3.6 reads along. At your
   first pause the answer is prepared and held; Qwen3-ASR's own judgment,
   made as it finishes your transcript, releases it the moment you are done,
   and waits, judging again, when you only paused.
@@ -89,7 +89,7 @@ gopher: speaks
 ```
 
 `go test -run TestScenarios .` speaks each `user:` line with Qwen3-TTS in
-another voice, transcribes Gopher's answers with Qwen3-ASR, and has Qwen3-8B
+another voice, transcribes Gopher's answers with Qwen3-ASR, and has Qwen3.6
 judge each `says` claim, in real time with the three models (see package
 `scenario`). A script whose first line is `# expect: fail` documents a
 behavior that does not work yet.

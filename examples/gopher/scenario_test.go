@@ -43,7 +43,7 @@ func TestScenarios(t *testing.T) {
 	}
 	llmName := os.Getenv("GOPHER_LLM")
 	if llmName == "" {
-		llmName = "Qwen3-30B-A3B-Instruct-2507"
+		llmName = "Qwen3.6-35B-A3B"
 	}
 	asr, llm, tts := open("Qwen3-ASR-1.7B"), open(llmName), open("Qwen3-TTS-12Hz-1.7B-CustomVoice")
 	lane := func(t *testing.T, l interface{ Close() error }, err error) {

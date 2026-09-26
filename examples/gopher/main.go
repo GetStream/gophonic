@@ -5,7 +5,7 @@
 // agent you can just talk to. It listens to everyone, answers out loud,
 // lets you interrupt it, and knows when you have not finished, with every
 // model running in this process: Smart Turn and Qwen3-ASR to listen,
-// Qwen3-8B to think, and Qwen3-TTS to speak.
+// Qwen3.6-35B-A3B to think, and Qwen3-TTS to speak.
 //
 //	go run .   # then open the printed link and talk
 //
@@ -57,7 +57,7 @@ func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
 	asrPath := flag.String("asr", "../../models/Qwen3-ASR-1.7B", "speech recognition model")
 	turnPath := flag.String("turn", "", "turn detection model, for a speech recognizer that does not judge turns itself as Qwen3-ASR-1.7B does")
-	llmPath := flag.String("llm", "../../models/Qwen3-30B-A3B-Instruct-2507", "language model")
+	llmPath := flag.String("llm", "../../models/Qwen3.6-35B-A3B", "language model")
 	ttsPath := flag.String("tts", "../../models/Qwen3-TTS-12Hz-1.7B-CustomVoice", "speech synthesis model")
 	language := flag.String("language", "", "language spoken in the call (ISO 639-1); empty detects it, and Gopher answers in kind")
 	languages := flag.String("languages", "", "languages spoken in the call, comma-separated ISO 639-1 codes such as en,pt: what is heard is transcribed in one of them, and Gopher answers in kind")
