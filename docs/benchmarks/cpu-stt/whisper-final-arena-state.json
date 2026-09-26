@@ -1,0 +1,67 @@
+[
+  {
+    "Case": "jfk-w8",
+    "State": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "Workers": 8,
+    "AttentionBytes": 6150144,
+    "ExecutorBytes": 1572864,
+    "PoolBuffers": 0,
+    "PoolBytes": 0,
+    "ClosedAttentionBytes": 0,
+    "ClosedExecutorBytes": 0,
+    "Allocs": 4,
+    "Bytes": 240
+  },
+  {
+    "Case": "long-w8",
+    "State": "901551e1412f14751082fd03d09138e1a178b49d102970e4a8ffc21e7f4e63b8",
+    "Workers": 8,
+    "AttentionBytes": 6150144,
+    "ExecutorBytes": 1572864,
+    "PoolBuffers": 0,
+    "PoolBytes": 0,
+    "ClosedAttentionBytes": 0,
+    "ClosedExecutorBytes": 0,
+    "Allocs": 0,
+    "Bytes": 0
+  },
+  {
+    "Case": "jfk-w2",
+    "State": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "Workers": 2,
+    "AttentionBytes": 4998144,
+    "ExecutorBytes": 393216,
+    "PoolBuffers": 0,
+    "PoolBytes": 0,
+    "ClosedAttentionBytes": 0,
+    "ClosedExecutorBytes": 0,
+    "Allocs": 0,
+    "Bytes": 0
+  },
+  {
+    "Case": "jfk-w4",
+    "State": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "Workers": 4,
+    "AttentionBytes": 5382144,
+    "ExecutorBytes": 786432,
+    "PoolBuffers": 0,
+    "PoolBytes": 0,
+    "ClosedAttentionBytes": 0,
+    "ClosedExecutorBytes": 0,
+    "Allocs": 0,
+    "Bytes": 0
+  },
+  {
+    "Case": "jfk-w16",
+    "State": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "Workers": 16,
+    "AttentionBytes": 7686144,
+    "ExecutorBytes": 3145728,
+    "PoolBuffers": 0,
+    "PoolBytes": 0,
+    "ClosedAttentionBytes": 0,
+    "ClosedExecutorBytes": 0,
+    "Allocs": 0,
+    "Bytes": 0
+  }
+]

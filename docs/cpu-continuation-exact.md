@@ -5,6 +5,11 @@ merged in `14f4aa9`. It removes repeated decoder work in growing Qwen audio
 and avoids small worker handoffs in Whisper. Neither change introduces a new
 weight format, approximation, or speculative acceptance rule.
 
+A subsequent [worker scratch and attention arena change](cpu-worker-scratch.md)
+removes duplicate pooled Whisper scratch and moves attention payloads outside
+the Go heap on Unix. Its memory benefit is measured separately; it does not
+add a confirmed latency improvement to the numbers below.
+
 ## Qwen: preserve the arithmetic anchor
 
 A growing audio prefix can produce identical encoder embeddings, yet ordinary
