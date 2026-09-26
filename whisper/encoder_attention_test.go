@@ -35,7 +35,7 @@ func TestPackedAudioAttentionMatchesScalar(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { e.Close() })
+				t.Cleanup(func() { e.Close(); attention.close() })
 				got := append([]float32(nil), q...)
 				gotK := append([]float32(nil), k...)
 				if err := attention.run(got, gotK, v, got, e); err != nil {

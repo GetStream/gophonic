@@ -20,6 +20,7 @@ const (
 	opQKRope
 	opAttention
 	opAttentionGEMM
+	opRestorePrefix
 	opStorePrefix
 	opAttentionPrefix
 	opSwiGLU
@@ -40,6 +41,7 @@ type layerOp struct {
 	ws         *Workspace
 	kind       opKind
 	rows       int
+	firstRow   int  // complete leading attention blocks whose KV is restored
 	exactRows  bool // logits batches preserve the single-row FP32 reduction
 	layer      *modelLayer
 	layerIndex int
@@ -78,6 +80,8 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 		o.attention(start, end)
 	case opAttentionGEMM:
 		o.attentionGEMM(worker, start, end)
+	case opRestorePrefix:
+		o.restorePrefix(start, end)
 	case opStorePrefix:
 		o.storePrefix(start, end)
 	case opAttentionPrefix:
@@ -90,7 +94,7 @@ func (o *layerOp) ApplyRows(worker, start, end int) {
 func (o *layerOp) addNorm(start, end int) {
 	f := &o.ws.owner.m.cfg
 	width := f.hidden
-	for r := start; r < end; r++ {
+	for r := max(start, o.firstRow); r < end; r++ {
 		h := o.ws.h[r*width : (r+1)*width]
 		if o.residual != nil {
 			addInto(h, o.residual[r*width:(r+1)*width])
@@ -121,14 +125,14 @@ func (o *layerOp) scaleRow(r int, src []float32, cols int) {
 // it first writes the rotated row to ws.rotated. o.src points at the
 // unrotated input while this stage runs.
 func (o *layerOp) rowScale(start, end int) {
-	for r := start; r < end; r++ {
+	for r := max(start, o.firstRow); r < end; r++ {
 		o.scaleRow(r, o.src[r*o.cols:(r+1)*o.cols], o.cols)
 	}
 }
 
 func (o *layerOp) pack(start, end int) {
 	chunks := packChunks(o.cols)
-	for item := start; item < end; item++ {
+	for item := max(start, o.firstRow/q8gemm.ActivationRows*chunks); item < end; item++ {
 		tile, chunk := item/chunks, item%chunks
 		src := o.src[tile*q8gemm.ActivationRows*o.cols:]
 		k0 := chunk * packChunkCols
@@ -195,7 +199,7 @@ func (o *layerOp) projectPanel(worker, panel int) {
 	tiles := (o.rows + q8gemm.ActivationRows - 1) / q8gemm.ActivationRows
 	p, first := o.projection(panel)
 	_, n := p.l.dims()
-	for tile := range tiles {
+	for tile := o.firstRow / q8gemm.ActivationRows; tile < tiles; tile++ {
 		dst := p.dst[tile*q8gemm.ActivationRows*n:]
 		var err error
 		if p.l.i8 != nil {
@@ -217,7 +221,7 @@ func (o *layerOp) projectStrip(strip int) {
 		return // beyond the last column of a partial panel
 	}
 	_, n := p.l.dims()
-	for tile := range tiles {
+	for tile := o.firstRow / q8gemm.ActivationRows; tile < tiles; tile++ {
 		if err := q8gemm.MulStripsI8(p.dst[tile*q8gemm.ActivationRows*n:], n, o.ws.tilesI8[tile], p.l.i8, local, local+1); err != nil {
 			panic("qwen3: packed projection: " + err.Error())
 		}
@@ -227,7 +231,7 @@ func (o *layerOp) projectStrip(strip int) {
 func (o *layerOp) qkRope(start, end int) {
 	ws, f := o.ws, &o.ws.owner.m.cfg
 	hd, half, qdim := f.headDim, f.headDim/2, f.heads*f.headDim
-	for r := start; r < end; r++ {
+	for r := max(start, o.firstRow); r < end; r++ {
 		base := int(ws.rowPos[r]) * half
 		cos, sin := ws.ropeCos[base:base+half], ws.ropeSin[base:base+half]
 		for head := range f.heads {
@@ -322,6 +326,30 @@ func (o *layerOp) attentionGEMM(worker, start, end int) {
 	}
 }
 
+// restorePrefix borrows the existing one-layer row-major workspace to
+// reconstruct reused own rows, then restores the original prefix dimensions.
+// Consequently attention sees the same K bounds and value reduction groups
+// as a full recomputation, even across packed prefix chunk boundaries.
+func (o *layerOp) restorePrefix(start, end int) {
+	ws, c := o.ws, &o.ws.owner.m.cfg
+	pk, hd, past := &ws.prefix.packs[o.layerIndex], c.headDim, ws.past
+	for g := start; g < end; g++ {
+		must(pk.keysT[g].UnpackColumns(ws.keys[g*hd:], c.kvDim, past, ws.reuse))
+		for row := 0; row < ws.reuse; {
+			position := past + row
+			chunk, first := position/prefixChunk, position%prefixChunk
+			n := min(ws.reuse-row, prefixChunk-first)
+			must(pk.values[g][chunk].UnpackRows(ws.values[row*c.kvDim+g*hd:], c.kvDim, first, n))
+			row += n
+		}
+		must(pk.keysT[g].CopyColumnsFrom(pk.keysT[g], past))
+		for ch := 0; ch*prefixChunk < past; ch++ {
+			v := pk.values[g][ch]
+			must(v.CopyRowsFrom(v, min(prefixChunk, past-ch*prefixChunk)))
+		}
+	}
+}
+
 // storePrefix appends this layer's new rows directly to the canonical packed
 // cache. Each participant owns distinct KV groups. Fixed-pitch value pages
 // append without moving existing values, including the unfinished tail.
@@ -405,7 +433,7 @@ func must(err error) {
 func (o *layerOp) swiglu(start, end int) {
 	ws, n := o.ws, o.ws.owner.m.cfg.intermediate
 	chunks := swigluChunks(n)
-	for item := start; item < end; item++ {
+	for item := max(start, o.firstRow*chunks); item < end; item++ {
 		r, c := item/chunks, item%chunks
 		lo := r*n + c*swigluChunkCols
 		hi := r*n + min(n, (c+1)*swigluChunkCols)

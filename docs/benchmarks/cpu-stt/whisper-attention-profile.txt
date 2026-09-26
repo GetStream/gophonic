@@ -1,0 +1,4 @@
+=== RUN   TestCPUWarmNextProfile
+    cpu_next_profile_experiment_test.go:84: exact final state d3c8064f69236d01faf7521f91ae3625ef1d4d7e6286b03a9bf37110acb10a72; text=" And so my fellow Americans ask not what your country can do for you ask what you can do for your country."
+--- PASS: TestCPUWarmNextProfile (11.51s)
+PASS

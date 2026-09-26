@@ -1,0 +1,29 @@
+=== RUN   TestDecoderContinuationExperiment
+    decoder_continuation_experiment_test.go:128: warmed recompute baseline reproduced exact state
+    decoder_continuation_experiment_test.go:135: reuse exact, decoder rows=[0 0 0 128 128 128 384]
+    decoder_continuation_experiment_test.go:150: completed 1/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 2/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 3/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 4/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 5/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 6/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 7/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 8/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 9/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 10/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 11/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 12/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 13/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 14/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 15/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 16/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 17/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 18/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 19/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 20/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 21/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 22/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 23/24 pairs
+    decoder_continuation_experiment_test.go:150: completed 24/24 pairs
+--- PASS: TestDecoderContinuationExperiment (361.08s)
+PASS

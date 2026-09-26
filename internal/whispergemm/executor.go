@@ -24,9 +24,10 @@ var (
 // calling goroutine computes one shard; workers includes that goroutine.
 // Small operations run entirely on the caller to avoid worker wakeup costs.
 //
-// Mul, Rows, and Close serialize on one Executor. Independent executors can share a
-// PackedB, provided nobody calls Pack while it is in use. An Executor must not
-// be copied after first use, and must be closed to release its worker goroutines.
+// Mul, Rows, RowsWithScratch, and Close serialize on one Executor. Independent
+// executors can share a PackedB, provided nobody calls Pack while it is in use.
+// An Executor must not be copied after first use, and must be closed to release
+// its worker goroutines.
 type Executor struct {
 	memory      *arena.Arena
 	scratch     [][]float32
@@ -64,7 +65,15 @@ type RowOperation interface {
 	ApplyRows(start, end int)
 }
 
+// ScratchRowOperation receives scratch private to the executing worker.
+// The scratch is borrowed only until ApplyRowsScratch returns and must not
+// escape or be accessed by another goroutine.
+type ScratchRowOperation interface {
+	ApplyRowsScratch(scratch []float32, start, end int)
+}
+
 type rowJob struct {
+	scratchOp   ScratchRowOperation
 	op          RowOperation
 	rows, parts int
 }
@@ -148,7 +157,28 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 		return ErrShape
 	}
 	parts := e.partitions(m, b.k, b.n)
-	if need := ScratchLen(b.k); need > e.scratchSize {
+	if err := e.ensureScratch(ScratchLen(b.k)); err != nil {
+		return err
+	}
+	if parts == 1 {
+		var scratch []float32
+		if e.scratch != nil {
+			scratch = e.scratch[0]
+		}
+		return b.MulScratch(dst, dstStride, a, aStride, m, scratch)
+	}
+	e.job = matrixJob{b: b, a: a, dst: dst, aStride: aStride, dstStride: dstStride, m: m, parts: parts}
+	e.execute(parts)
+	// Release the caller's buffers and matrix while idle. The atomic completion
+	// barrier ensures workers no longer read the job before this reset.
+	e.job = matrixJob{}
+	return nil
+}
+
+// ensureScratch runs under mu before publishing any operation. The same
+// per-worker arena serves matrix products and row operations sequentially.
+func (e *Executor) ensureScratch(need int) error {
+	if need > e.scratchSize {
 		lengths := make([]int, len(e.workers)+1)
 		for i := range lengths {
 			lengths[i] = need
@@ -166,18 +196,6 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 		_ = e.memory.Close()
 		e.memory, e.scratchSize = memory, need
 	}
-	if parts == 1 {
-		var scratch []float32
-		if e.scratch != nil {
-			scratch = e.scratch[0]
-		}
-		return b.MulScratch(dst, dstStride, a, aStride, m, scratch)
-	}
-	e.job = matrixJob{b: b, a: a, dst: dst, aStride: aStride, dstStride: dstStride, m: m, parts: parts}
-	e.execute(parts)
-	// Release the caller's buffers and matrix while idle. The atomic completion
-	// barrier ensures workers no longer read the job before this reset.
-	e.job = matrixJob{}
 	return nil
 }
 
@@ -188,6 +206,20 @@ func (e *Executor) Mul(b *PackedB, dst []float32, dstStride int, a []float32, aS
 // ErrNilOperation; callers must not pass a typed nil pointer. Rows does not allocate after construction when op
 // is a reused pointer whose ApplyRows implementation does not allocate.
 func (e *Executor) Rows(op RowOperation, rows, minRows int) error {
+	return e.rows(op, nil, rows, minRows, 0)
+}
+
+// RowsWithScratch is Rows with at least scratchLen float32 values owned by
+// each executing worker. Storage is shared with that worker's sequential Mul
+// calls, stays outside the GC heap where arenas are supported, and is released
+// by Close. Warm calls allocate nothing. Input/output must not alias scratch;
+// op must not retain it or call the same Executor.
+func (e *Executor) RowsWithScratch(op ScratchRowOperation, rows, minRows, scratchLen int) error {
+	return e.rows(nil, op, rows, minRows, scratchLen)
+}
+
+func (e *Executor) rows(op RowOperation, scratchOp ScratchRowOperation, rows, minRows, scratchLen int) error {
+	defer runtime.KeepAlive(e)
 	if e == nil {
 		return ErrExecutorClosed
 	}
@@ -196,21 +228,30 @@ func (e *Executor) Rows(op RowOperation, rows, minRows int) error {
 	if e.closed {
 		return ErrExecutorClosed
 	}
-	if op == nil {
+	if op == nil && scratchOp == nil {
 		return ErrNilOperation
 	}
-	if rows < 0 || minRows < 1 {
+	if rows < 0 || minRows < 1 || scratchLen < 0 {
 		return ErrShape
 	}
 	if rows == 0 {
 		return nil
 	}
+	if scratchOp != nil {
+		if err := e.ensureScratch(scratchLen); err != nil {
+			return err
+		}
+	}
 	parts := max(1, min(len(e.workers)+1, rows/minRows))
 	if parts == 1 {
-		op.ApplyRows(0, rows)
+		if scratchOp != nil {
+			scratchOp.ApplyRowsScratch(e.workerScratch(0), 0, rows)
+		} else {
+			op.ApplyRows(0, rows)
+		}
 		return nil
 	}
-	e.rowJob = rowJob{op: op, rows: rows, parts: parts}
+	e.rowJob = rowJob{op: op, scratchOp: scratchOp, rows: rows, parts: parts}
 	e.execute(parts)
 	e.rowJob = rowJob{}
 	return nil
@@ -235,17 +276,28 @@ func (e *Executor) execute(parts int) {
 }
 
 func (e *Executor) runShard(index int) {
-	if j := &e.rowJob; j.op != nil {
+	if j := &e.rowJob; j.op != nil || j.scratchOp != nil {
 		perPart, remainder := j.rows/j.parts, j.rows%j.parts
 		start := index*perPart + min(index, remainder)
 		end := start + perPart
 		if index < remainder {
 			end++
 		}
-		j.op.ApplyRows(start, end)
+		if j.scratchOp != nil {
+			j.scratchOp.ApplyRowsScratch(e.workerScratch(index), start, end)
+		} else {
+			j.op.ApplyRows(start, end)
+		}
 		return
 	}
 	e.mulShard(index)
+}
+
+func (e *Executor) workerScratch(index int) []float32 {
+	if e.scratch == nil {
+		return nil
+	}
+	return e.scratch[index]
 }
 
 func (e *Executor) partitions(m, k, n int) int {

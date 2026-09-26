@@ -1,0 +1,77 @@
+[
+  {
+    "case": "jfk-w8",
+    "pairs": 64,
+    "baseline_median_ms": 67.020083,
+    "candidate_median_ms": 65.367542,
+    "ratio": 0.9885410869041223,
+    "ci": [
+      0.9736955808849482,
+      1.0033163984190903
+    ],
+    "allocations": {
+      "0": 0,
+      "1": 0
+    }
+  },
+  {
+    "case": "long-w8",
+    "pairs": 32,
+    "baseline_median_ms": 210.3496245,
+    "candidate_median_ms": 211.0135415,
+    "ratio": 1.0220325125390584,
+    "ci": [
+      0.9776064445997026,
+      1.0750513454288144
+    ],
+    "allocations": {
+      "0": 0,
+      "1": 0
+    }
+  },
+  {
+    "case": "jfk-w2",
+    "pairs": 24,
+    "baseline_median_ms": 94.324167,
+    "candidate_median_ms": 95.395938,
+    "ratio": 0.9647580628509069,
+    "ci": [
+      0.9161274683499341,
+      1.010476988375533
+    ],
+    "allocations": {
+      "0": 0,
+      "1": 0
+    }
+  },
+  {
+    "case": "jfk-w4",
+    "pairs": 24,
+    "baseline_median_ms": 72.9985415,
+    "candidate_median_ms": 74.4184375,
+    "ratio": 0.9938982037686681,
+    "ci": [
+      0.9558239454701282,
+      1.0351482319002383
+    ],
+    "allocations": {
+      "0": 0,
+      "1": 0
+    }
+  },
+  {
+    "case": "jfk-w16",
+    "pairs": 24,
+    "baseline_median_ms": 74.1063335,
+    "candidate_median_ms": 74.135271,
+    "ratio": 0.9910824594941473,
+    "ci": [
+      0.9691898093337048,
+      1.0102733665608055
+    ],
+    "allocations": {
+      "0": 0,
+      "1": 0
+    }
+  }
+]

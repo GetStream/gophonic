@@ -1,0 +1,28 @@
+=== RUN   TestDecoderAdjacentExperiment
+    decoder_adjacent_experiment_test.go:105: warmed baseline reproduces; both lanes exact; reused rows=[0 0 0 128 128 128 384]
+    decoder_adjacent_experiment_test.go:132: completed 1/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 2/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 3/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 4/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 5/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 6/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 7/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 8/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 9/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 10/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 11/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 12/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 13/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 14/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 15/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 16/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 17/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 18/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 19/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 20/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 21/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 22/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 23/24 adjacent trace pairs
+    decoder_adjacent_experiment_test.go:132: completed 24/24 adjacent trace pairs
+--- PASS: TestDecoderAdjacentExperiment (310.07s)
+PASS

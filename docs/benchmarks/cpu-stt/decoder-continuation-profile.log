@@ -1,0 +1,5 @@
+=== RUN   TestDecoderContinuationWarmProfile
+    decoder_continuation_experiment_test.go:94: recompute: 21 public calls exact; reused calls=0 rows=0
+    decoder_continuation_experiment_test.go:94: reuse: 21 public calls exact; reused calls=12 rows=2304
+--- PASS: TestDecoderContinuationWarmProfile (36.44s)
+PASS

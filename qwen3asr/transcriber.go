@@ -37,17 +37,21 @@ var _ speech.Transcriber = (*Transcriber)(nil)
 
 // Transcriber is one Qwen3-ASR call lane: the feature frontend, encoder and
 // decoder workers, key-value cache, and every buffer a transcription needs.
-// Calls must not overlap; open one Transcriber per concurrent lane. Warm
-// calls on audio no longer than an earlier call's allocate nothing.
+// Calls must not overlap; open one Transcriber per concurrent lane. Numeric
+// scratch and packed KV storage are reused after warming. The Go runtime may
+// still allocate worker scheduling metadata.
 type Transcriber struct {
-	m         *Model
-	frontend  *mel.Spectrogram
-	enc       *encoderWorkspace    // CPU encoder
-	encPrefix encoderPrefix        // exact completed-window reuse for growing audio
-	genc      *gpuEncoderWorkspace // GPU encoder, when the model has one
-	lm        *qwen3lm.Workspace
-	kv        *qwen3lm.PrefixKV
-	tokWS     qwen3lm.TokenizerWorkspace
+	m               *Model
+	frontend        *mel.Spectrogram
+	enc             *encoderWorkspace    // CPU encoder
+	encPrefix       encoderPrefix        // exact completed-window reuse for growing audio
+	reusedAudioRows int                  // validated embedding prefix from the current encode
+	audioRevision   uint64               // advances even when an encode or later prompt step fails
+	decoderPrefix   decoderPrefix        // provenance of audio rows in the lane's existing KV cache
+	genc            *gpuEncoderWorkspace // GPU encoder, when the model has one
+	lm              *qwen3lm.Workspace
+	kv              *qwen3lm.PrefixKV
+	tokWS           qwen3lm.TokenizerWorkspace
 
 	pcm      []float32 // normalized or padded copy of the input, when needed
 	features []float32
@@ -281,6 +285,8 @@ func (t *Transcriber) encode(frames int) error {
 
 func (t *Transcriber) encodeContinuation(frames int, continuing bool) error {
 	defer runtime.KeepAlive(t)
+	t.reusedAudioRows = 0
+	t.audioRevision++
 	if t.genc != nil {
 		embeds, err := t.genc.encode(frames)
 		if err != nil {
@@ -312,6 +318,7 @@ func (t *Transcriber) encodeContinuation(frames int, continuing bool) error {
 	if err != nil {
 		t.encPrefix.reset()
 	} else if continuing {
+		t.reusedAudioRows = kept / e.out
 		t.encPrefix.remember(e, t.features, frames, skip > 0)
 	}
 	return err
@@ -408,19 +415,35 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 		}
 		_ = t.kv.Close()
 		t.kv = kv
+		t.decoderPrefix.reset()
 	}
 	keep := min(t.kv.CommonPrefix(t.ids), prompt-1)
+	reuse := t.decoderPrefix.reusable(keep, t.reusedAudioRows, t.audioRevision)
+	if t.ids[keep] != t.m.ids.audioPad {
+		reuse = 0
+	}
+	t.decoderPrefix.reset() // a failed or partial prefill cannot advertise cached rows
 	embeds := qwen3lm.Embeds{Token: t.m.ids.audioPad, Rows: t.embeds}
 	t.gen = grow(t.gen, maxNew+maxDraft)
+	done := false
 	if len(t.draft) == 0 {
-		if err := ev.HiddenLastExtendEmbedInto(t.kv, keep, t.ids[keep:], embeds, t.hidden, t.lm); err != nil {
+		if err := ev.HiddenLastContinueEmbedInto(t.kv, keep, reuse, t.ids[keep:], embeds, t.hidden, t.lm); err != nil {
 			return fmt.Errorf("qwen3asr: prefill: %w", err)
 		}
 	} else {
-		done, err := t.verify(prompt, keep, embeds, maxNew)
-		if err != nil || done {
+		var err error
+		done, err = t.verify(prompt, keep, reuse, embeds, maxNew)
+		if err != nil {
 			return err
 		}
+	}
+	// The warm prompt anchor is the first audio placeholder. Cold prefills
+	// use a different arithmetic anchor and are deliberately not reused.
+	if t.ids[keep] == t.m.ids.audioPad {
+		t.decoderPrefix.remember(keep, len(t.embeds)/len(t.hidden), t.audioRevision)
+	}
+	if done {
+		return nil
 	}
 	for {
 		if err := ev.LogitsInto(t.hidden, t.logits, t.lm); err != nil {
@@ -447,11 +470,11 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 // draft's longest prefix the model agrees with, and appends the model's own
 // token after it. It reports whether that ends the transcript; otherwise
 // t.hidden is the state after the appended token.
-func (t *Transcriber) verify(prompt, keep int, embeds qwen3lm.Embeds, maxNew int) (bool, error) {
+func (t *Transcriber) verify(prompt, keep, reuse int, embeds qwen3lm.Embeds, maxNew int) (bool, error) {
 	ev, h, vocab := t.m.eval, len(t.hidden), len(t.logits)
 	k := len(t.draft) + 1 // the prompt's last position, then each draft token's
 	t.tail = grow(t.tail, k*h)[:k*h]
-	if err := ev.HiddenTailExtendEmbedInto(t.kv, keep, t.ids[keep:], embeds, t.tail, t.lm); err != nil {
+	if err := ev.HiddenTailContinueEmbedInto(t.kv, keep, reuse, t.ids[keep:], embeds, t.tail, t.lm); err != nil {
 		return false, fmt.Errorf("qwen3asr: prefill: %w", err)
 	}
 	t.vlogits = grow(t.vlogits, verifyRows*vocab)

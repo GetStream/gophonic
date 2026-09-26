@@ -1,0 +1,877 @@
+{
+  "baseline": "14f4aa9: merged exact encoder/head reuse; decoder recomputed at original anchor",
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "start_utc": "2026-09-25T21:52:55Z",
+  "end_utc": "2026-09-25T21:58:54Z",
+  "frames": [
+    400,
+    800,
+    1602,
+    1700,
+    2400,
+    3202,
+    3300
+  ],
+  "hashes": [
+    "ed11268feb80289f1b2ac7487823a67a6fc1155d2671ea916ea72dc0e692a4b9",
+    "b811138fb8dfbfcc2a4436d4db76456042f7de5a211a84636b7709da3a0f1ba1",
+    "593ef59e02cdfb40dbd5b4ec08b036bacfc9f762e33beaf8f452245f912b69a4",
+    "8b7cd1b62e03760ba46676ef5037fb505a89a15696b4d846c19d4167395f3fd3",
+    "87c5e631a309778a80ac3fea5b007560cbc466ca4d84b972c1f93a758229d78e",
+    "cd291d73f2dd5627da9e1a2fc9cf759acd673b4cd6e688a013363c6a8cf26ac0",
+    "5f424009cdd1e6b80fe8c46882cfb7a2a2a833cd6b48be91295a2b6887b0f04f"
+  ],
+  "groups": [
+    [
+      "bd63fdf54829dad0297c56db80ecec1640f2a688ba15e3ed756db13ed5094fb3",
+      "40cba5accd1db2fef04073b468a765c5c9cf98c4d4ec4e517760ce85fb328e9e",
+      "e79bafe0d21fa405e25c5c4f7d05b129819d3bdcf78fc3149c1ebeed5e3d0bf6",
+      "c9052c9a0451c43bbb3813e4cd52122a7098d95edaf9e7f18ece92fb2c79589b",
+      "549163613b4f3ad111cf6fe611f5ee8985ae41f407b492b73d75e358fe567a2e"
+    ],
+    [
+      "adf4a56067ed6832e916230e9d0ab47d0a597a09149543f18e361a25728886dd",
+      "de9a03d2d3d9a461db1101fc76b66c32bddc7729e75b07433a14d64702197fb1",
+      "751900b172d2c026ac3d63e2252175bea5e345fdc86bc7eb5efb08dc48e47837",
+      "6e8b558679a83a0558f7fdc29d4901b05f46d65de7e9de61000ba52cac5cde82",
+      "e9ec0d1be9a1e87c29230adc06c500d963a9c642ee65ea3072b8dea781057a0c"
+    ],
+    [
+      "1452cb305b29fbc3b2eb2c0d574c6d918bba3c2b1256630730d971f36fbf45ba",
+      "7e405807d29117cf4a7fa3af1e90268e1748a91c85cb9c7d62fbc62329f85773",
+      "8d3a69d45d0d45c66daecd05e1b612df3e00382a967f5aca3b1faf12de32daa2",
+      "b2dd9359d9f20f2e1eb4325024f4ce53d0ad8f84c928fb685b887684206b7382",
+      "9f2ea3b3add3d38841d96ad267c46695e68aa2b7f1422e7f5c64b49927b771f8"
+    ],
+    [
+      "16ed71453fa3a3ba7b68fab79fdc29cb598fc911b788da3d84a819e6a3049e3b",
+      "75962c27b1a64a34224901e33d247a449b0f0732f7c6acd804496a050b7a8b4a",
+      "cdcca6acba78dcc6285e07a09f74b93d439285427e12c02b5ff24942095d8c2f",
+      "4cf6c7d3146273722dbb94c4c35dc31b74a81de41216b2ded482ee7e82113b5c",
+      "349e77a39d5002bc949f6ae5f90db54a0bcc68c344332aa8bcde3920f9eaf07d"
+    ],
+    [
+      "ffd139a89f7f071d4405e8fb95cc0f456eba983ba5044c43a0d9c7be87ad129c",
+      "01c58680b031f9f2f2412503f94b5612c40bbad991595ae64754f52c130bc9a2",
+      "3cc2387ec8821810d11037a6c39917a131eea9ce6ba72bc97d8f61cb34c4d97c",
+      "519d6c1055b3c1ecfb2f363ea7c29ad92efbcf7c468c8b94fdf95f9f977a58a4",
+      "e009da652b8c69cf20a495a76a94f31a498a4817253f389eae987a36c051183a"
+    ],
+    [
+      "e16c3fa57452995f637484aa762478ddccc13c882809ee1e097328c0db7bf307",
+      "c473baaa1d1b44e2778973235dce2e24b608bf057991655b29591f82ddb53fa9",
+      "687bce79b65c22dbcd4377aa9fd275d32bf5cc7cd200697d6fd8a94a7a96350b",
+      "ff7ab24309727ceaad6ebe587d2cc9a780ee58e52a13e9eeb334575215c5c129",
+      "643c0edb1c6dae4f1b01f248b727c0bf01f2f2f210c36dd4374bb141f9a7b220"
+    ],
+    [
+      "edef0066e6741603be1637304d0c3557a4e4a62f52aca40844bd7022e6d8e4a8",
+      "ea3c9c1fc83bdbaa9610000c077079dc6096f03a13a28e5c0cacb7c44b7f7ba3",
+      "bde445df32f98a5cc55e2400ff96edf4d71c0e03d04692a364bc929403810f6c",
+      "5d8db7f26cdda2566ca57bfa0d51d13669a4eeb009523160a9e1a0216bf056b1",
+      "6c0e180691eada5d7ac9ae191fa933b5a5077ce2e2629833957580152c547b2f"
+    ]
+  ],
+  "reused_decoder_rows": [
+    0,
+    0,
+    0,
+    128,
+    128,
+    128,
+    384
+  ],
+  "text": [
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2su",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91Lg==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91LiBBc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdC4=",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeQ==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaQ==",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaWNhbnMsIGFzayBub3Qgd2hhdCB5b3VyIGNvdW50cnkgY2FuIGRvIGZvciB5b3U7IGFzayB3aGF0IHlvdSBjYW4gZG8gZm9yIHlvdXIu",
+    "QW5kIHNvLCBteSBmZWxsb3cgQW1lcmljYW5zLCBhc2sgbm90IHdoYXQgeW91ciBjb3VudHJ5IGNhbiBkbyBmb3IgeW91OyBhc2sgd2hhdCB5b3UgY2FuIGRvIGZvciB5b3VyIGNvdW50cnkuIEFuZCBzbywgbXkgZmVsbG93IEFtZXJpY2FucywgYXNrIG5vdCB3aGF0IHlvdXIgY291bnRyeSBjYW4gZG8gZm9yIHlvdTsgYXNrIHdoYXQgeW91IGNhbiBkbyBmb3IgeW91ciBjb3VudHJ5LiBBbmQgc28sIG15IGZlbGxvdyBBbWVyaWNhbnMsIGFzayBub3Qgd2hhdCB5b3VyIGNvdW50cnkgY2FuIGRvIGZvciB5b3U7IGFzayB3aGF0IHlvdSBjYW4gZG8gZm9yIHlvdXIgY291bnRyeS4="
+  ],
+  "samples": [
+    {
+      "pair": 0,
+      "variant": "recompute",
+      "ns": 10285409417,
+      "steps_ns": [
+        481498500,
+        631885500,
+        1072513125,
+        4020668583,
+        2106027375,
+        1268634125,
+        704182209
+      ],
+      "mallocs": 11,
+      "bytes": 1232
+    },
+    {
+      "pair": 0,
+      "variant": "reuse",
+      "ns": 10328733625,
+      "steps_ns": [
+        318754750,
+        411097375,
+        1010051750,
+        1066248208,
+        3017924375,
+        3734166833,
+        770490334
+      ],
+      "mallocs": 10,
+      "bytes": 1120
+    },
+    {
+      "pair": 1,
+      "variant": "reuse",
+      "ns": 32625698749,
+      "steps_ns": [
+        2394966958,
+        7769837334,
+        8359268791,
+        9340096208,
+        1336580959,
+        2933307583,
+        491640916
+      ],
+      "mallocs": 10,
+      "bytes": 1120
+    },
+    {
+      "pair": 1,
+      "variant": "recompute",
+      "ns": 5655739332,
+      "steps_ns": [
+        415046125,
+        443091750,
+        832451291,
+        818027625,
+        991180583,
+        1241889500,
+        914052458
+      ],
+      "mallocs": 5,
+      "bytes": 560
+    },
+    {
+      "pair": 2,
+      "variant": "recompute",
+      "ns": 9001553543,
+      "steps_ns": [
+        405888042,
+        464303084,
+        2320319042,
+        2445393375,
+        1300748458,
+        1279573625,
+        785327917
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 2,
+      "variant": "reuse",
+      "ns": 18147972873,
+      "steps_ns": [
+        342708167,
+        436093333,
+        971393416,
+        2052783833,
+        2808619417,
+        10406662291,
+        1129712416
+      ],
+      "mallocs": 2,
+      "bytes": 368
+    },
+    {
+      "pair": 3,
+      "variant": "reuse",
+      "ns": 16227980334,
+      "steps_ns": [
+        2154627792,
+        4634305833,
+        4765511833,
+        1798013042,
+        1325783875,
+        1179208542,
+        370529417
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 3,
+      "variant": "recompute",
+      "ns": 9534078331,
+      "steps_ns": [
+        427470083,
+        461649417,
+        1083306541,
+        2133691041,
+        2888238041,
+        1515132750,
+        1024590458
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 4,
+      "variant": "recompute",
+      "ns": 14719902333,
+      "steps_ns": [
+        458597208,
+        1794224792,
+        1287834208,
+        1419261917,
+        4561872916,
+        3740155417,
+        1457955875
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 4,
+      "variant": "reuse",
+      "ns": 11867110374,
+      "steps_ns": [
+        627897708,
+        616296042,
+        6666050625,
+        1248573042,
+        1131246375,
+        1218771416,
+        358275166
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 5,
+      "variant": "reuse",
+      "ns": 5733044210,
+      "steps_ns": [
+        374772042,
+        459846084,
+        1877982375,
+        761917000,
+        850861417,
+        1071410709,
+        336254583
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 5,
+      "variant": "recompute",
+      "ns": 5393350835,
+      "steps_ns": [
+        352800792,
+        407968834,
+        806965875,
+        816910042,
+        1009903708,
+        1206046417,
+        792755167
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 6,
+      "variant": "recompute",
+      "ns": 5499834250,
+      "steps_ns": [
+        342322583,
+        393246125,
+        814940167,
+        827398083,
+        1067016583,
+        1268937875,
+        785972834
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 6,
+      "variant": "reuse",
+      "ns": 4539356959,
+      "steps_ns": [
+        351769041,
+        406979208,
+        823232334,
+        691910125,
+        859549042,
+        1083125417,
+        322791792
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 7,
+      "variant": "reuse",
+      "ns": 4435878667,
+      "steps_ns": [
+        338577167,
+        396631875,
+        794366458,
+        656440083,
+        840869125,
+        1047722167,
+        361271792
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 7,
+      "variant": "recompute",
+      "ns": 5426775083,
+      "steps_ns": [
+        372635500,
+        424137333,
+        823515250,
+        837460958,
+        1032074875,
+        1189162542,
+        747788625
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 8,
+      "variant": "recompute",
+      "ns": 5165001208,
+      "steps_ns": [
+        341978500,
+        393580875,
+        769791333,
+        775965333,
+        955252042,
+        1178708083,
+        749725042
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 8,
+      "variant": "reuse",
+      "ns": 4821899124,
+      "steps_ns": [
+        339018458,
+        394532833,
+        791863208,
+        659885917,
+        1054379375,
+        1222350417,
+        359868916
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 9,
+      "variant": "reuse",
+      "ns": 4452908584,
+      "steps_ns": [
+        368952750,
+        423569333,
+        802277417,
+        669419459,
+        836914208,
+        1025965417,
+        325810000
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 9,
+      "variant": "recompute",
+      "ns": 5384705542,
+      "steps_ns": [
+        341476500,
+        401932625,
+        794425792,
+        777068125,
+        967227666,
+        1351328709,
+        751246125
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 10,
+      "variant": "recompute",
+      "ns": 5097513292,
+      "steps_ns": [
+        325231500,
+        376520250,
+        763211583,
+        769768166,
+        943422084,
+        1165382625,
+        753977084
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 10,
+      "variant": "reuse",
+      "ns": 4419520917,
+      "steps_ns": [
+        349886667,
+        401242417,
+        794125750,
+        646029083,
+        841040333,
+        1054146042,
+        333050625
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 11,
+      "variant": "reuse",
+      "ns": 4482288914,
+      "steps_ns": [
+        341512708,
+        400242791,
+        798281250,
+        676318791,
+        857342708,
+        1066681875,
+        341908791
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 11,
+      "variant": "recompute",
+      "ns": 5238823375,
+      "steps_ns": [
+        353631875,
+        401887875,
+        795272208,
+        795764875,
+        955362875,
+        1187566125,
+        749337542
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 12,
+      "variant": "recompute",
+      "ns": 5078809750,
+      "steps_ns": [
+        337946250,
+        372841708,
+        749026000,
+        752579667,
+        947010209,
+        1164244166,
+        755161750
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 12,
+      "variant": "reuse",
+      "ns": 4362886542,
+      "steps_ns": [
+        344449458,
+        373745959,
+        767463208,
+        652745459,
+        832351625,
+        1054327791,
+        337803042
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 13,
+      "variant": "reuse",
+      "ns": 4343743791,
+      "steps_ns": [
+        340488125,
+        403797333,
+        789564541,
+        644317125,
+        810671167,
+        1024822250,
+        330083250
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 13,
+      "variant": "recompute",
+      "ns": 5147165915,
+      "steps_ns": [
+        343534833,
+        397330166,
+        788888792,
+        774357417,
+        941283833,
+        1162886708,
+        738884166
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 14,
+      "variant": "recompute",
+      "ns": 5074387290,
+      "steps_ns": [
+        333298583,
+        406922208,
+        765283958,
+        756730000,
+        941916958,
+        1146340208,
+        723895375
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 14,
+      "variant": "reuse",
+      "ns": 4239567040,
+      "steps_ns": [
+        325003750,
+        375646708,
+        742058166,
+        621194083,
+        794643958,
+        1019492167,
+        361528208
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 15,
+      "variant": "reuse",
+      "ns": 4346195000,
+      "steps_ns": [
+        348552041,
+        393904042,
+        818842792,
+        636003834,
+        801842541,
+        1028276083,
+        318773667
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 15,
+      "variant": "recompute",
+      "ns": 5232094542,
+      "steps_ns": [
+        326573042,
+        386141625,
+        766724750,
+        844320334,
+        943698875,
+        1251986708,
+        712649208
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 16,
+      "variant": "recompute",
+      "ns": 4949419750,
+      "steps_ns": [
+        324741750,
+        365099167,
+        734483875,
+        740299167,
+        912887625,
+        1167136375,
+        704771791
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 16,
+      "variant": "reuse",
+      "ns": 4184852040,
+      "steps_ns": [
+        321612625,
+        374328708,
+        741623791,
+        619864833,
+        799137209,
+        1008030833,
+        320254041
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 17,
+      "variant": "reuse",
+      "ns": 4292224041,
+      "steps_ns": [
+        329148875,
+        390447125,
+        774030125,
+        628779625,
+        809306083,
+        1033753250,
+        326758958
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 17,
+      "variant": "recompute",
+      "ns": 5024795250,
+      "steps_ns": [
+        343030667,
+        396500500,
+        769457208,
+        750257375,
+        910066916,
+        1113209334,
+        742273250
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 18,
+      "variant": "recompute",
+      "ns": 5021704916,
+      "steps_ns": [
+        331830375,
+        379243541,
+        748537750,
+        746850500,
+        939990125,
+        1165848125,
+        709404500
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 18,
+      "variant": "reuse",
+      "ns": 4144667584,
+      "steps_ns": [
+        323541084,
+        377856167,
+        741218834,
+        605685875,
+        763171000,
+        1003230458,
+        329964166
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 19,
+      "variant": "reuse",
+      "ns": 4584453208,
+      "steps_ns": [
+        348415875,
+        400734375,
+        809963833,
+        697680750,
+        859905250,
+        1098026625,
+        369726500
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 19,
+      "variant": "recompute",
+      "ns": 5264464791,
+      "steps_ns": [
+        548686125,
+        460263625,
+        814348625,
+        741451041,
+        888903959,
+        1096347791,
+        714463625
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 20,
+      "variant": "recompute",
+      "ns": 5066445958,
+      "steps_ns": [
+        327756917,
+        397411708,
+        782872333,
+        777010041,
+        915971500,
+        1136602334,
+        728821125
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 20,
+      "variant": "reuse",
+      "ns": 4148271457,
+      "steps_ns": [
+        331889833,
+        373126458,
+        743231333,
+        605932667,
+        778006500,
+        1000764208,
+        315320458
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 21,
+      "variant": "reuse",
+      "ns": 4240167378,
+      "steps_ns": [
+        325464917,
+        384952667,
+        757254209,
+        649672625,
+        792659584,
+        996599417,
+        333563959
+      ],
+      "mallocs": 3,
+      "bytes": 336
+    },
+    {
+      "pair": 21,
+      "variant": "recompute",
+      "ns": 5013657043,
+      "steps_ns": [
+        341938708,
+        387021417,
+        783788208,
+        765708167,
+        927574709,
+        1108647167,
+        698978667
+      ],
+      "mallocs": 1,
+      "bytes": 112
+    },
+    {
+      "pair": 22,
+      "variant": "recompute",
+      "ns": 4854976750,
+      "steps_ns": [
+        323380916,
+        368241167,
+        739414000,
+        741182209,
+        886381333,
+        1095225125,
+        701152000
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    },
+    {
+      "pair": 22,
+      "variant": "reuse",
+      "ns": 4202885417,
+      "steps_ns": [
+        311951250,
+        370678417,
+        736909208,
+        630721625,
+        818402083,
+        1026015584,
+        308207250
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 23,
+      "variant": "reuse",
+      "ns": 4146815708,
+      "steps_ns": [
+        324827583,
+        379381250,
+        750250083,
+        605229042,
+        761385958,
+        1001716792,
+        324025000
+      ],
+      "mallocs": 0,
+      "bytes": 0
+    },
+    {
+      "pair": 23,
+      "variant": "recompute",
+      "ns": 4996273499,
+      "steps_ns": [
+        344038541,
+        392157416,
+        752016125,
+        774049750,
+        917300042,
+        1121206333,
+        695505292
+      ],
+      "mallocs": 2,
+      "bytes": 224
+    }
+  ],
+  "binary_sha256": "4680e3f8caa092ec17c6adf143eff6d31b20f19ecd665d61eaba5b5e488d1451",
+  "environment": {
+    "cpu": "Apple M4 Max",
+    "memory_gib": 64,
+    "model": "Qwen/Qwen3-ASR-1.7B",
+    "GOEXPERIMENT": "simd",
+    "CGO_ENABLED": "0",
+    "GOMAXPROCS": "16"
+  },
+  "allocation_method": "Process Mallocs/TotalAlloc counters around each complete seven-call public trace at GOMAXPROCS=16; includes runtime worker scheduling metadata. No universal zero-allocation claim.",
+  "harness": "decoder-continuation-experiment.patch",
+  "baseline_commit": "14f4aa9a8fd5fccfc26865b9b7c38c5d67d95609",
+  "source_note": "Before original-item-count dispatch guard; this seven-call workload stays below the 64-group-item threshold, so its head/group policy is identical with the guard."
+}

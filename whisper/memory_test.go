@@ -13,6 +13,45 @@ import (
 	"github.com/GetStream/gophonic/internal/whispergemm"
 )
 
+func TestEncoderAttentionArenaOwnershipAndClose(t *testing.T) {
+	var lanes [2]*EncoderWorkspace
+	for i := range lanes {
+		var err error
+		lanes[i], err = NewEncoderWorkspaceWithWorkers(8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lanes[i].Close()
+	}
+	first, second := lanes[0].attention, lanes[1].attention
+	memory := first.memory
+	// tiny.en: 8 score tiles and six pairs of packed K/V regions. All
+	// payloads fit exactly; no per-region alignment padding is needed here.
+	const wantBytes = 6150144
+	if memory == nil || memory.Bytes() != wantBytes {
+		t.Fatalf("attention arena bytes=%d, want %d", memory.Bytes(), wantBytes)
+	}
+	if memory == second.memory || &first.scores[0] == &second.scores[0] || first.keys[0] == second.keys[0] || first.values[0] == second.values[0] {
+		t.Fatal("lanes share mutable attention storage")
+	}
+	first.scores[0] = 42
+	runtime.GC()
+	if first.scores[0] != 42 || second.scores[0] != 0 {
+		t.Fatal("attention storage did not survive GC independently")
+	}
+	lanes[0].Close()
+	if memory.Bytes() != 0 || first.memory != nil || first.scores != nil || first.keys != nil || first.values != nil {
+		t.Fatal("Close retained attention payload or views")
+	}
+	lanes[0].Close()
+	second.scores[0] = 7
+	if second.memory.Bytes() != wantBytes || second.scores[0] != 7 {
+		t.Fatal("closing one lane invalidated another")
+	}
+	runtime.KeepAlive(lanes)
+	t.Logf("private attention arena: %d bytes; released on Close", wantBytes)
+}
+
 func TestLanesShareOnlyImmutableEncoderPacking(t *testing.T) {
 	m, err := Load(testmodels.Path(t, testmodels.WhisperTinyEN))
 	if err != nil {

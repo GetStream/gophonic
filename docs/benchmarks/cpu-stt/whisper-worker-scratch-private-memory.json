@@ -1,0 +1,11 @@
+{
+  "closed_executor_arena_bytes": 0,
+  "closed_pool_buffers": 0,
+  "closed_pool_bytes": 0,
+  "initial_buffers": 0,
+  "initial_pool_bytes": 0,
+  "shared": false,
+  "warm_buffers": 0,
+  "warm_executor_arena_bytes": 1572864,
+  "warm_pool_bytes": 0
+}
