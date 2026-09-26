@@ -220,6 +220,15 @@ func (d *Device) Compile(src string) (*Library, error) {
 	return &Library{lib: lib}, nil
 }
 
+// Release frees the compiled library. Pipelines created from it remain valid.
+// All Pipeline calls using this library must have completed before Release.
+func (l *Library) Release() {
+	if l != nil && l.lib != 0 {
+		send0(l.lib, selRelease)
+		l.lib = 0
+	}
+}
+
 // Pipeline is a compute pipeline for one kernel function.
 type Pipeline struct {
 	p                     uintptr
@@ -246,6 +255,14 @@ func (d *Device) Pipeline(l *Library, name string) (*Pipeline, error) {
 		p = &Pipeline{p: ps, MaxThreads: int(send0(ps, selMaxThreads)), SIMDWidth: int(send0(ps, selExecWidth))}
 	})
 	return p, err
+}
+
+// Release frees the pipeline after all command buffers using it complete.
+func (p *Pipeline) Release() {
+	if p != nil && p.p != 0 {
+		send0(p.p, selRelease)
+		p.p = 0
+	}
 }
 
 // Buffer is a GPU buffer in shared (unified) memory.
