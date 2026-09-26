@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	weights := flag.String("weights", qwen3.WeightsGPU, "weight format: gpu or gpu-q4")
+	weights := flag.String("weights", "gpu", "weight format: gpu or gpu-q4")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: qwen3-gptq [-weights gpu|gpu-q4] /path/to/Qwen3-8B")

@@ -71,7 +71,7 @@ agrees with `Question` on classification probes but not on turn detection;
 
 `ChooseBatch` answers many inputs in shared forward passes. On an M4 Max, a
 new input costs about 140 ms alone, 94 ms per input in a batch of 16, and
-47 ms per input in a batch with `Weights: "int8"`.
+47 ms per input in a batch with `Format: "int8"`.
 
 The programs in [`../examples/qwen3`](../examples/qwen3) are each one short
 `main.go`: `turn` (has a voice-agent user finished speaking?), `sentiment`,
@@ -112,7 +112,7 @@ Against the official BF16 PyTorch hidden state for `hello` this reaches
 cosine 0.99991 (llama.cpp Q8_0: 0.99929), and the pinned CLM ranking matches
 the official probabilities within 7.1e-5.
 
-`Options{Weights: "int8"}` is a fast mode on the int8 matrix units. Each
+`Options{Format: "int8"}` is a fast mode on the int8 matrix units. Each
 projection's input space is rotated with a fixed randomized Hadamard
 transform (applied to weight rows at load and to activation rows at run
 time, so W·x is unchanged before rounding); weights are stored as per-row

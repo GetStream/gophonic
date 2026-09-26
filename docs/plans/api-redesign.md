@@ -1,11 +1,11 @@
 # API redesign: every public surface
 
-Status: design and first five steps, 2026-09-26, branch `feat/asr-turn`.
+Status: design and first six steps, 2026-09-26, branch `feat/asr-turn`.
 Nothing is released, so every change below is breaking and meant to be.
 The migration plan at the end orders the work as PR-sized steps that each
 keep the tests green.
 
-Implemented in the tree (steps 1–5 of section 12, with what the MoE branch
+Implemented in the tree (steps 1–6 of section 12, with what the MoE branch
 needed carried over): `chat.Session.Reply` into an `io.Writer`,
 `chat.Tool`/`Func`/`Specs`/`Answer`, `chat.Options.Presence`, the role
 `chat.ToolResult`; `speech.Duplex.Step(in, out)` and `Note`,
@@ -46,7 +46,17 @@ it, and an interruption keeps the reply's bytes that were heard. The code
 predictor's fifteen steps per frame run as one GPU submission through
 `qwen3lm.Decoder` (FP16 heads with the final norm folded in, a radix-select
 top-k sampler, input rows gathered on the GPU): 10.3 ms per frame, from
-14.4. Steps 6–12 remain as planned.
+14.4.
+
+Step 6 is in too:
+- One weight-format vocabulary: `gophonic.Options.Format` and its constants, taken by `qwen3.Options.Format` (was `Weights`), `qwen3asr.Options.Format` (whose `FormatGPU` had meant `"gpu-q8"`), and `qwen3tts.Options.Format`.
+- `Model.Path`; `Open` checks a format's declared `Provides`; `gophonic.CacheDir`.
+- `Close` in place of `Release` on the model packages.
+- Lane option structs: `qwen3asr.NewTranscriber(m, LaneOptions{Threads})`, `whisper.NewTranscriber(m, LaneOptions{Threads})` (in place of `NewTranscriberWithWorkers`), `qwen3tts.NewSynthesizer(m, LaneOptions{Greedy})` (in place of the exported field).
+- `smartturn.NewDetector(m)` and `tinymel.NewDetector(m, LaneOptions{Threads})`, detectors rather than sessions. Smart Turn takes no options, since it has no thread count to bound.
+- `Lease.Path` is gone; `Lease.Model().Path()` replaces it.
+
+Steps 7–12 remain as planned.
 
 ## 0. The decisions in one page
 

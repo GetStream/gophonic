@@ -10,6 +10,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
 	"github.com/GetStream/gophonic/internal/testmodels"
 )
@@ -36,7 +37,7 @@ func TestOfficialGPUFidelity(t *testing.T) {
 	question := "What does the writer want?"
 	options := []string{"a refund", "information", "to complain", "to praise", "nothing"}
 	run := func(format string) ([][]float32, [][]float32) {
-		m, err := Open(path, Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1})
+		m, err := Open(path, Options{Format: format, CacheEntries: -1, PrefixCacheTokens: -1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,8 +62,8 @@ func TestOfficialGPUFidelity(t *testing.T) {
 		}
 		return emb, probs
 	}
-	refEmb, refProbs := run(WeightsF16)
-	for _, format := range []string{WeightsInt8, WeightsGPU, WeightsGPUQ4} {
+	refEmb, refProbs := run(qwen3lm.WeightsF16)
+	for _, format := range []string{qwen3lm.WeightsInt8, qwen3lm.WeightsGPU, qwen3lm.WeightsGPUQ4} {
 		emb, probs := run(format)
 		minCos, sumCos, maxDP, agree := 1.0, 0.0, 0.0, 0
 		for i := range texts {

@@ -70,7 +70,7 @@ func OpenChat(path string, opts Options) (*Chat, error) {
 		head = "model.embed_tokens.weight" // smaller Qwen3 models tie it
 	}
 	st.Close()
-	weights, err := LoadWeightsOptions(path, LoadOptions{Format: opts.Weights, Head: head})
+	weights, err := LoadWeightsOptions(path, LoadOptions{Format: opts.Format, Head: head})
 	if err != nil {
 		return nil, err
 	}

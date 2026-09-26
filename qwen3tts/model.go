@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
@@ -125,6 +126,8 @@ type Model struct {
 	// checkpoint has a known one.
 	align   [2]int
 	aligned bool
+	// The preset voices and the languages they speak, sorted.
+	voices, languages []string
 
 	hidden, cpHidden int
 
@@ -174,12 +177,22 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	}
 	m := &Model{cfg: c, threads: opts.Threads, hidden: c.Talker.HiddenSize, cpHidden: c.Talker.CodePredictor.HiddenSize}
 	m.align, m.aligned = alignHeads[[2]string{c.TTSModelSize, c.TTSModelType}]
+	for name := range c.Talker.Speakers {
+		m.voices = append(m.voices, strings.ToLower(name))
+	}
+	for name := range c.Talker.Languages {
+		if !strings.Contains(name, "dialect") {
+			m.languages = append(m.languages, strings.ToLower(name))
+		}
+	}
+	slices.Sort(m.voices)
+	slices.Sort(m.languages)
 	if m.threads <= 0 {
 		m.threads = max(1, qwen3lm.PerformanceCores())
 	}
 	defer func() {
 		if err != nil {
-			m.Release()
+			m.Close()
 		}
 	}()
 	if m.tokens, err = qwen3lm.LoadTokenizer(dir); err != nil {
@@ -337,39 +350,32 @@ func (m *Model) textRows(exec *whispergemm.Executor, dst []float32, ids []int, t
 	return m.textFC2.apply(exec, dst[:n*h], tmp[:n*h], n)
 }
 
-// Speakers lists the preset voices, in lower case.
-func (m *Model) Speakers() []string {
-	var names []string
-	for name := range m.cfg.Talker.Speakers {
-		names = append(names, name)
-	}
-	return names
-}
+// Voices lists the preset voices, in lower case and sorted. The list is
+// the model's: callers must not modify it.
+func (m *Model) Voices() []string { return m.voices }
 
 // Languages lists the languages a voice can be asked to speak, in lower
-// case; an empty language lets the model follow the text.
-func (m *Model) Languages() []string {
-	var names []string
-	for name := range m.cfg.Talker.Languages {
-		if !strings.Contains(name, "dialect") {
-			names = append(names, name)
-		}
-	}
-	return names
-}
+// case and sorted; an empty language lets the model follow the text. The
+// list is the model's: callers must not modify it.
+func (m *Model) Languages() []string { return m.languages }
 
-// Release frees the model's GPU memory and mappings; the model is unusable
-// afterwards.
-func (m *Model) Release() {
+// Close releases the model's GPU memory and mappings, once its lanes are
+// closed; the model is unusable afterwards. It is safe to call more than
+// once.
+func (m *Model) Close() error {
 	m.cpDecode.Close()
+	m.cpDecode = nil
 	if m.talker != nil {
 		m.talker.Release()
+		m.talker = nil
 	}
 	if m.cp != nil {
 		m.cp.Release()
+		m.cp = nil
 	}
 	for _, unmap := range m.unmap {
 		unmap()
 	}
 	m.unmap = nil
+	return nil
 }

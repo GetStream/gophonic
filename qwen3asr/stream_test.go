@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -15,9 +16,9 @@ import (
 // one's transcript, ends with the transcript of the whole audio in one call;
 // so does continuing a wrong transcript, or one in another language.
 func TestPartialTranscriptsContinueToTheOfflineResult(t *testing.T) {
-	for _, format := range []string{FormatGPU, FormatF16} {
+	for _, format := range []string{qwen3lm.WeightsGPUQ8, qwen3lm.WeightsF16} {
 		t.Run(format, func(t *testing.T) {
-			tr, err := NewTranscriber(loadModel(t, format), 0)
+			tr, err := NewTranscriber(loadModel(t, format), LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

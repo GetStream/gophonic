@@ -62,8 +62,8 @@ var registerFake = sync.OnceFunc(func() {
 	gophonic.Register(gophonic.Format{
 		Name:  "fake",
 		Match: func(p string) bool { b, _ := os.ReadFile(p); return string(b) == "FAKEMODL" },
-		Open: func(string, gophonic.Options) (*gophonic.Model, error) {
-			m := gophonic.NewModel("fake", nil)
+		Open: func(path string, _ gophonic.Options) (*gophonic.Model, error) {
+			m := gophonic.NewModel("fake", path, nil)
 			gophonic.Provide(m, func() (speech.AudioClassifier, error) { return fake{&fakeQuestions}, nil })
 			return gophonic.Provide(m, func() (speech.ZeroShot, error) { return fake{&fakeQuestions}, nil }), nil
 		},

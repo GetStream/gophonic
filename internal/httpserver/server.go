@@ -392,7 +392,7 @@ func (s *Server) classifyAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l.response = append(l.response[:0], `{"model":`...)
-	l.response = transcriptformat.AppendJSONString(l.response, s.modelName(lease.Path()))
+	l.response = transcriptformat.AppendJSONString(l.response, s.modelName(lease.Model().Path()))
 	l.response = append(l.response, `,"classes":`...)
 	l.response = appendClasses(l.response, labels, l.probs)
 	l.response = append(l.response, '}', '\n')
@@ -479,7 +479,7 @@ func (s *Server) classifyText(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer lease.Release()
-		classifier, path = lease.Lane, lease.Path()
+		classifier, path = lease.Lane, lease.Model().Path()
 	} else {
 		if req.Question == "" || len(req.Labels) < 2 {
 			writeError(w, http.StatusBadRequest, "a zero-shot classification needs a question and at least two labels")
@@ -491,7 +491,7 @@ func (s *Server) classifyText(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer lease.Release()
-		path = lease.Path()
+		path = lease.Model().Path()
 		q, err := s.questions.get(lease.Model(), path, lease.Lane, req.Question, req.Labels)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -14,8 +15,8 @@ import (
 // transcribed as without the limit, and other speech is named as one of
 // the allowed languages, never its own.
 func TestLanguages(t *testing.T) {
-	m := loadModel(t, FormatGPU)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(t, qwen3lm.WeightsGPUQ8)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

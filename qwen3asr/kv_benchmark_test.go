@@ -17,8 +17,8 @@ import (
 // extended by valid repeated text tokens to isolate context-length scaling.
 // Prefill is untimed; every iteration performs one real cached token and head.
 func BenchmarkDecoderPrefixLength(b *testing.B) {
-	m := loadModel(b, FormatF16)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(b, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -68,26 +68,28 @@ type Model struct {
 	ownsWeights bool // loaded by Open, so Close frees their GPU memory
 }
 
-// Options controls the local Qwen3 backend. The zero value picks the
-// fastest backend with llama.cpp Q8_0 fidelity: on an Apple GPU, WeightsGPU
-// (int8 rows, FP32 activations) for Qwen3-8B and WeightsGPUQ8 (int8 blocks of
-// 32) for other sizes; elsewhere WeightsF16 on the CPU (every BF16 checkpoint
-// weight exactly). Weights may name a backend explicitly: WeightsF16,
-// WeightsInt8 (CPU, per-row int8), WeightsGPU, WeightsGPUQ8, or WeightsGPUQ4
-// (4.5-bit GPU weights, lowest latency, lower fidelity).
+// Options controls the local Qwen3 backend.
+//
+// Format names the weight format, as gophonic.Options does: "f16" (every
+// BF16 checkpoint weight exactly, on the CPU), "int8" (per-row int8 on the
+// CPU), "gpu" (int8 rows, FP32 activations, on the Apple GPU), "gpu-q8"
+// (int8 blocks of 32), or "gpu-q4" (4.5-bit blocks: lowest latency, lower
+// fidelity). Empty picks the fastest of llama.cpp Q8_0 fidelity: on an
+// Apple GPU, "gpu" for Qwen3-8B and "gpu-q8" for other sizes; elsewhere
+// "f16".
+//
 // Threads bounds the CPU worker goroutines, including the caller; zero
 // selects min(performance cores, GOMAXPROCS). CacheEntries sizes an exact
 // cache of finished embeddings keyed by token IDs (16 KiB per entry for
-// Qwen3-8B): zero
-// selects 4096 entries, and a negative value disables it. A hit returns
-// exactly the vector a fresh evaluation would produce.
+// Qwen3-8B): zero selects 4096 entries, and a negative value disables it.
+// A hit returns exactly the vector a fresh evaluation would produce.
 //
 // PrefixCacheTokens sizes a store of the last long input's per-layer keys and
 // values (288 KiB per token for Qwen3-8B): when a later input of at least 64 tokens shares
 // a token prefix with it (a growing conversation state), only the new tokens
 // are evaluated. Zero selects 2048 tokens; a negative value disables it.
 type Options struct {
-	Weights           string
+	Format            string
 	Threads           int
 	CacheEntries      int
 	PrefixCacheTokens int
@@ -136,7 +138,7 @@ func Open(path string, opts Options) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: load tokenizer: %w", err)
 	}
-	model, err := LoadWeights(path, opts.Weights)
+	model, err := LoadWeights(path, opts.Format)
 	if err != nil {
 		return nil, err
 	}

@@ -79,14 +79,21 @@ type Transcriber struct {
 	closed     bool
 }
 
-// NewTranscriber opens a lane over m with workers CPU workers, including
-// the caller; zero picks GOMAXPROCS, at most 8 for the encoder.
-func NewTranscriber(m *Model, workers int) (*Transcriber, error) {
+// LaneOptions configures a Transcriber.
+type LaneOptions struct {
+	// Threads bounds the lane's CPU workers, including the caller; zero
+	// picks GOMAXPROCS, at most 16, and at most 8 for the encoder.
+	Threads int
+}
+
+// NewTranscriber opens a lane over m.
+func NewTranscriber(m *Model, opts LaneOptions) (*Transcriber, error) {
 	if m == nil {
 		return nil, errors.New("qwen3asr: nil model")
 	}
+	workers := opts.Threads
 	if workers < 0 || workers > 64 {
-		return nil, fmt.Errorf("qwen3asr: invalid worker count %d", workers)
+		return nil, fmt.Errorf("qwen3asr: invalid thread count %d", workers)
 	}
 	if workers == 0 {
 		workers = min(runtime.GOMAXPROCS(0), 16)

@@ -55,18 +55,22 @@ type Transcriber struct {
 	closed              bool
 }
 
-// NewTranscriber prepares one reusable tiny.en worker with at most eight
-// execution slots, capped by GOMAXPROCS.
-func NewTranscriber(model *Model) (*Transcriber, error) {
-	return NewTranscriberWithWorkers(model, min(runtime.GOMAXPROCS(0), 8))
+// LaneOptions configures a Transcriber.
+type LaneOptions struct {
+	// Threads bounds the lane's CPU workers, including the caller: 1 through
+	// 64, or zero for GOMAXPROCS, at most eight.
+	Threads int
 }
 
-// NewTranscriberWithWorkers prepares one reusable tiny.en worker with an
-// explicit CPU slot count, including the caller. The count must be 1 through
-// 64. Use one Transcriber per concurrent caller and Close it when finished.
-func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) {
+// NewTranscriber prepares one reusable lane. Use one Transcriber per
+// concurrent caller and Close it when finished.
+func NewTranscriber(model *Model, opts LaneOptions) (*Transcriber, error) {
 	if model == nil {
 		return nil, ErrDecoderNilModel
+	}
+	workers := opts.Threads
+	if workers == 0 {
+		workers = min(runtime.GOMAXPROCS(0), 8)
 	}
 	dims := model.dims
 	if dims == (Dims{}) {

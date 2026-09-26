@@ -38,22 +38,14 @@ type tokenIDs struct {
 	language, none int
 }
 
-// Decoder weight formats for Options.Format.
-const (
-	// FormatF16 runs the encoder and decoder on the CPU's SME matrix units,
-	// keeping every BF16 weight exactly.
-	FormatF16 = qwen3lm.WeightsF16
-	// FormatGPU runs the encoder and decoder on the Apple GPU (darwin/arm64):
-	// the encoder with every BF16 weight exact, the decoder with FP32
-	// activations and int8 weights in blocks of 32 sharing an FP16 scale, in
-	// a Hadamard-rotated basis, more faithful than GGML's Q8_0.
-	FormatGPU = qwen3lm.WeightsGPUQ8
-)
-
 // Options configures Load.
 type Options struct {
-	// Format is the decoder's weight format: FormatF16, FormatGPU, or empty
-	// for FormatGPU where a Metal GPU is present and FormatF16 elsewhere.
+	// Format is the decoder's weight format, as gophonic.Options names it:
+	// "f16" (every BF16 weight exactly, on the CPU's matrix units), "int8",
+	// "gpu", "gpu-q8" (int8 blocks of 32, on the Apple GPU), or "gpu-q4".
+	// Empty picks "gpu-q8" where a Metal GPU is present and "f16" elsewhere.
+	// The GPU formats run the encoder on the GPU too, every BF16 weight
+	// exact.
 	Format string
 }
 
@@ -117,13 +109,13 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	}
 	switch opts.Format {
 	case "":
-		opts.Format = FormatF16
+		opts.Format = qwen3lm.WeightsF16
 		if qwen3lm.GPUAvailable() {
-			opts.Format = FormatGPU
+			opts.Format = qwen3lm.WeightsGPUQ8
 		}
-	case FormatF16, FormatGPU, qwen3lm.WeightsInt8, qwen3lm.WeightsGPU, qwen3lm.WeightsGPUQ4:
+	case qwen3lm.WeightsF16, qwen3lm.WeightsInt8, qwen3lm.WeightsGPU, qwen3lm.WeightsGPUQ8, qwen3lm.WeightsGPUQ4:
 	default:
-		return nil, fmt.Errorf("qwen3asr: unsupported decoder format %q", opts.Format)
+		return nil, fmt.Errorf("qwen3asr: unknown weight format %q: %w", opts.Format, speech.ErrUnsupported)
 	}
 	if c.Thinker.Audio.OutputDim != text.HiddenSize {
 		return nil, fmt.Errorf("qwen3asr: audio output width %d does not match decoder width %d", c.Thinker.Audio.OutputDim, text.HiddenSize)
@@ -139,7 +131,7 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 		genc *gpuEncoder
 	)
 	const audioPrefix = "thinker.audio_tower."
-	if opts.Format == FormatGPU || opts.Format == qwen3lm.WeightsGPU || opts.Format == qwen3lm.WeightsGPUQ4 {
+	if opts.Format == qwen3lm.WeightsGPUQ8 || opts.Format == qwen3lm.WeightsGPU || opts.Format == qwen3lm.WeightsGPUQ4 {
 		if enc, err = newEncoder(c.Thinker.Audio); err == nil {
 			genc, err = loadGPUEncoder(st, enc, audioPrefix)
 		}
@@ -254,14 +246,22 @@ func (m *Model) Languages() []string {
 	return names
 }
 
-// Release frees resources the decoder holds outside the Go heap. The model
-// is unusable afterwards.
-func (m *Model) Release() {
-	if m.enc != nil {
-		_ = m.enc.memory.Close()
+// Close releases the model's memory outside the Go heap, once its lanes
+// are closed; the model is unusable afterwards. It is safe to call more
+// than once.
+func (m *Model) Close() error {
+	var err error
+	if m.enc != nil && m.enc.memory != nil {
+		err = m.enc.memory.Close()
+		m.enc.memory = nil
 	}
-	m.lm.Release()
+	if m.lm != nil {
+		m.lm.Release()
+		m.lm = nil
+	}
 	if m.genc != nil {
 		m.genc.release()
+		m.genc = nil
 	}
+	return err
 }

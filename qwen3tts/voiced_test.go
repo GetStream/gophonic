@@ -21,7 +21,7 @@ import (
 
 // A lane keeps the speech.Synthesizer contract.
 func TestSynthesizerContract(t *testing.T) {
-	s, err := NewSynthesizer(loadModel(t))
+	s, err := NewSynthesizer(loadModel(t), LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +42,12 @@ func TestVoicedFollowsWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer wm.Close()
-	ears, err := whisper.NewTranscriber(wm)
+	ears, err := whisper.NewTranscriber(wm, whisper.LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ears.Close()
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

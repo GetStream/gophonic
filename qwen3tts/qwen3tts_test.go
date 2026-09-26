@@ -123,12 +123,12 @@ func TestCodecMatchesReference(t *testing.T) {
 func TestGreedyCodesMatchReference(t *testing.T) {
 	ref := loadReference(t, "hello")
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	var got [][groups]int
 	start := time.Now()
 	err = s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, ref.Text,
@@ -176,12 +176,12 @@ func TestFirstStepMatchesReference(t *testing.T) {
 	wantRows := readFloats(t, filepath.Join(dir, "step_rows.f32"))
 	wantHidden := readFloats(t, filepath.Join(dir, "step_hidden.f32"))
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	h := m.hidden
 	step := 0
 	s.onFeed = func(row, hidden []float32) {
@@ -225,7 +225,7 @@ func TestPredictorMatchesReference(t *testing.T) {
 	inputs := readFloats(t, filepath.Join(dir, "cp_inputs.f32"))
 	want := readFloats(t, filepath.Join(dir, "cp_logits.f32"))
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,12 +292,12 @@ func top2(v []float32) (int, int) {
 func TestVoicePromptReuse(t *testing.T) {
 	ref := loadReference(t, "hello")
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}
 	speak := func() [][groups]int {
 		var got [][groups]int
@@ -332,7 +332,7 @@ func TestVoicePromptReuse(t *testing.T) {
 // boundary, and every token knows the byte of the text it ends at.
 func TestFirstPieceTokens(t *testing.T) {
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,12 +383,12 @@ func TestFirstPieceTokens(t *testing.T) {
 // A warm utterance allocates nothing, on any of the lane's goroutines.
 func TestSpeakAllocations(t *testing.T) {
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	opts := speech.SpeakOptions{Voice: "Ryan", Language: "en"}
 	text := []byte("Hello there.")
 	pcm := make([]float32, FrameSamples/4)
@@ -417,12 +417,12 @@ func TestSpeakAllocations(t *testing.T) {
 func TestStyle(t *testing.T) {
 	ref := loadReference(t, "hello")
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	speak := func(style string) [][groups]int {
 		var got [][groups]int
 		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: style}

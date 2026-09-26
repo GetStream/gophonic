@@ -18,6 +18,7 @@ import (
 
 	"github.com/GetStream/gophonic/clm"
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
 	"github.com/GetStream/gophonic/internal/testmodels"
 )
@@ -37,7 +38,7 @@ type officialEncoder struct {
 }
 
 // officialFormats are the weight formats the official benchmarks compare.
-var officialFormats = []string{WeightsF16, WeightsInt8, WeightsGPU, WeightsGPUQ4}
+var officialFormats = []string{qwen3lm.WeightsF16, qwen3lm.WeightsInt8, qwen3lm.WeightsGPU, qwen3lm.WeightsGPUQ4}
 
 // forEachFormat runs bench as one sub-benchmark per weight format.
 func forEachFormat(b *testing.B, bench func(b *testing.B, format string)) {
@@ -51,12 +52,12 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	path := testmodels.Path(tb, testmodels.Qwen3)
 	v, _ := officialEncoders.LoadOrStore(format, &officialEncoder{})
 	o := v.(*officialEncoder)
-	if (format == WeightsGPU || format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+	if (format == qwen3lm.WeightsGPU || format == qwen3lm.WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		tb.Skipf("%s needs the Apple GPU", format)
 	}
 	o.once.Do(func() {
 		// Benchmarks repeat inputs; keep both caches out of compute timings.
-		opts := Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1}
+		opts := Options{Format: format, CacheEntries: -1, PrefixCacheTokens: -1}
 		start := time.Now()
 		o.enc, o.err = Open(path, opts)
 		o.load = time.Since(start)
@@ -94,12 +95,12 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		format string
 		cosine float64
 	}{
-		{WeightsF16, 0.9999},
-		{WeightsInt8, 0.998},
-		{WeightsGPU, 0.999},
-		{WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
+		{qwen3lm.WeightsF16, 0.9999},
+		{qwen3lm.WeightsInt8, 0.998},
+		{qwen3lm.WeightsGPU, 0.999},
+		{qwen3lm.WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
 	} {
-		if (tc.format == WeightsGPU || tc.format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		if (tc.format == qwen3lm.WeightsGPU || tc.format == qwen3lm.WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 			continue
 		}
 		enc, load := loadOfficialEncoder(t, tc.format)
@@ -131,8 +132,8 @@ func TestOfficialCLMRankingAndZeroAlloc(t *testing.T) {
 		format    string
 		tolerance float64
 	}{
-		{WeightsF16, 0.0002},
-		{WeightsInt8, 0.0005},
+		{qwen3lm.WeightsF16, 0.0002},
+		{qwen3lm.WeightsInt8, 0.0005},
 	} {
 		enc, _ := loadOfficialEncoder(t, tc.format)
 		engine, err := clm.NewEngine(head, clmEmbedder(enc))
@@ -195,7 +196,7 @@ func BenchmarkOfficialRankCached(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	base, _ := loadOfficialEncoder(b, WeightsF16)
+	base, _ := loadOfficialEncoder(b, qwen3lm.WeightsF16)
 	enc, err := newModel(base.model, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
 	if err != nil {
 		b.Fatal(err)
@@ -337,7 +338,7 @@ func clmEmbedder(m *Model) clm.Embedder {
 // prompt tokenization equals tokenizing the whole prompt, and that warmed
 // calls do not allocate.
 func TestOfficialQuestion(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	options := []string{"payments", "cancellations", "technical support", "shipping", "account login"}
 	const text = "Which support team should handle this customer message?"
 	q, err := m.Question(text, options)
@@ -503,7 +504,7 @@ func benchmarkQuestion(b *testing.B, format string) {
 // TestOfficialStream feeds growing and revised partial transcripts to a
 // Stream and checks each answer against a fresh Choose on the same text.
 func TestOfficialStream(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -606,7 +607,7 @@ func contextQuestions(tb testing.TB, m *Model) ([]*ContextQuestion, [][]string) 
 // TestOfficialContext asks several questions about a growing conversation
 // and checks tokenization, answers, incremental updates, and allocations.
 func TestOfficialContext(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	c, err := m.NewContext(1024)
 	if err != nil {
 		t.Fatal(err)

@@ -69,8 +69,7 @@ type Synthesizer struct {
 	seenIDs          []int
 	sample           sampler
 	draws            uint64 // the GPU's draws so far
-	// Greedy decodes deterministically, as the reference tests do.
-	Greedy bool
+	greedy           bool   // LaneOptions.greedy
 
 	// The utterance's text as the worker has it: tokens, their projected
 	// rows, the byte of the text each token ends at, and bytes not yet
@@ -144,9 +143,17 @@ type Synthesizer struct {
 
 var _ speech.Synthesizer = (*Synthesizer)(nil)
 
-// NewSynthesizer opens a lane.
-func NewSynthesizer(m *Model) (*Synthesizer, error) {
-	s := &Synthesizer{m: m, hidden: make([]float32, m.hidden), cpHidden: make([]float32, m.cpHidden),
+// LaneOptions configures a Synthesizer.
+type LaneOptions struct {
+	// Greedy takes each frame's likeliest codes instead of sampling them,
+	// as the official model's reference outputs do: the same text gives
+	// the same speech, for tests and fixtures.
+	Greedy bool
+}
+
+// NewSynthesizer opens a lane over m.
+func NewSynthesizer(m *Model, opts LaneOptions) (*Synthesizer, error) {
+	s := &Synthesizer{m: m, greedy: opts.Greedy, hidden: make([]float32, m.hidden), cpHidden: make([]float32, m.cpHidden),
 		logits: make([]float32, m.cfg.Talker.Vocab), cpLogits: make([]float32, codes),
 		row: make([]float32, m.hidden), cpRows: make([]float32, 2*m.cpHidden), seen: make([]bool, m.cfg.Talker.Vocab),
 		pcm:  [2][]float32{make([]float32, FrameSamples), make([]float32, FrameSamples)},
@@ -205,7 +212,7 @@ func wake(c chan struct{}) {
 func (s *Synthesizer) SampleRate() int { return SampleRate }
 
 // Voices lists the preset speakers.
-func (s *Synthesizer) Voices() []string { return s.m.Speakers() }
+func (s *Synthesizer) Voices() []string { return s.m.voices }
 
 // Begin starts an utterance; see speech.Synthesizer.
 func (s *Synthesizer) Begin(ctx context.Context, opts speech.SpeakOptions) error {
@@ -821,7 +828,7 @@ func (s *Synthesizer) predict() error {
 	if m.cpDecode != nil {
 		// The fifteen codes in one GPU submission.
 		d := qwen3lm.Sampling{TopK: topK, Temperature: temperature, Seed: seed, Draw: s.draws}
-		if s.Greedy {
+		if s.greedy {
 			d.TopK = 1
 		}
 		s.draws += groups - 1
@@ -902,14 +909,14 @@ func (s *Synthesizer) pick(logits []float32, step int) int {
 			logits[i] = inf
 		}
 	}
-	if s.Greedy {
+	if s.greedy {
 		return argmax(logits)
 	}
 	return s.sample.topK(logits, topK, temperature)
 }
 
 func (s *Synthesizer) pickPredictor(logits []float32) int {
-	if s.Greedy {
+	if s.greedy {
 		return argmax(logits)
 	}
 	return s.sample.topK(logits, topK, temperature)

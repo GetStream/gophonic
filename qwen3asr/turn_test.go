@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -33,8 +34,8 @@ func TestTurnHeadFile(t *testing.T) {
 // Americans," with its falling voice, is not sure, so an agent waits and
 // judges again as the pause grows. Each is judged 40 ms into the pause.
 func TestTurn(t *testing.T) {
-	m := loadModel(t, FormatGPU)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(t, qwen3lm.WeightsGPUQ8)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +92,8 @@ func TestTurnFeatures(t *testing.T) {
 	if list == "" || out == "" {
 		t.Skip("TURN_LIST and TURN_OUT name the clips and the output")
 	}
-	m := loadModel(t, FormatGPU)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(t, qwen3lm.WeightsGPUQ8)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

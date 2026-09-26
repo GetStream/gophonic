@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -84,7 +85,7 @@ func TestRegisteredFormat(t *testing.T) {
 		Name:  "custom",
 		Match: func(p string) bool { return strings.HasSuffix(p, ".custom") },
 		Open: func(p string, opts gophonic.Options) (*gophonic.Model, error) {
-			m := gophonic.NewModel("custom", func() error { closed++; return nil })
+			m := gophonic.NewModel("custom", p, func() error { closed++; return nil })
 			gophonic.Provide(m, func() (speech.TurnDetector, error) { return fixedDetector{}, nil })
 			// Any interface is a capability, including one gophonic never
 			// heard of.
@@ -98,8 +99,8 @@ func TestRegisteredFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Name() != "custom" || len(model.Provides()) != 2 || !gophonic.Supports[moderator](model) {
-		t.Fatalf("Open = %s providing %v", model.Name(), model.Provides())
+	if model.Name() != "custom" || model.Path() != path || len(model.Provides()) != 2 || !gophonic.Supports[moderator](model) {
+		t.Fatalf("Open = %s at %s providing %v", model.Name(), model.Path(), model.Provides())
 	}
 	mod, err := gophonic.Lane[moderator](model)
 	if err != nil || !mod.Flag("anything") {
@@ -189,5 +190,34 @@ func TestOpenQwen3ZeroShot(t *testing.T) {
 		if best := slices.Index(probs, slices.Max(probs)); best != want {
 			t.Errorf("%q: %v, want %q", text, probs, labels[want])
 		}
+	}
+}
+
+// A weight format Open does not know fails before any model loads.
+func TestOpenChecksFormat(t *testing.T) {
+	if _, err := gophonic.Open("anything", gophonic.Options{Format: "fp8"}); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Open with an unknown format: %v, want speech.ErrUnsupported", err)
+	}
+}
+
+// A format's model must provide what the format declares: Open fails, and
+// closes the model, when it does not.
+func TestOpenChecksProvides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "model.liar")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	gophonic.Register(gophonic.Format{
+		Name:  "liar",
+		Match: func(p string) bool { return strings.HasSuffix(p, ".liar") },
+		Open: func(p string, _ gophonic.Options) (*gophonic.Model, error) {
+			m := gophonic.NewModel("liar", p, func() error { closed = true; return nil })
+			return gophonic.Provide(m, func() (moderator, error) { return fixedDetector{}, nil }), nil
+		},
+		Provides: []reflect.Type{reflect.TypeFor[moderator](), reflect.TypeFor[speech.Transcriber]()},
+	})
+	if _, err := gophonic.Open(path, gophonic.Options{}); err == nil || !closed {
+		t.Fatalf("Open of a model that lacks a declared lane: %v, closed %v", err, closed)
 	}
 }

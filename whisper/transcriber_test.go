@@ -22,7 +22,7 @@ func TestTranscriberOfficialJFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(m)
+	worker, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,10 +247,10 @@ func TestTranscriberUTF8Replacement(t *testing.T) {
 }
 
 func TestTranscriberRejectsClosedAndLongWindow(t *testing.T) {
-	if _, err := NewTranscriber(nil); err == nil {
+	if _, err := NewTranscriber(nil, LaneOptions{}); err == nil {
 		t.Fatal("accepted nil model")
 	}
-	worker, err := NewTranscriber(&Model{})
+	worker, err := NewTranscriber(&Model{}, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,12 +265,12 @@ func TestTranscriberRejectsClosedAndLongWindow(t *testing.T) {
 }
 
 func TestTranscriberExplicitWorkerBudget(t *testing.T) {
-	for _, workers := range []int{0, 65} {
-		if _, err := NewTranscriberWithWorkers(&Model{}, workers); err == nil {
+	for _, workers := range []int{-1, 65} {
+		if _, err := NewTranscriber(&Model{}, LaneOptions{Threads: workers}); err == nil {
 			t.Fatalf("accepted %d workers", workers)
 		}
 	}
-	worker, err := NewTranscriberWithWorkers(&Model{}, 12)
+	worker, err := NewTranscriber(&Model{}, LaneOptions{Threads: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestOfficialJFKSegmentTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestOfficialJFKWordTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestOfficialOtherEnglishModelWordTimestamps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			worker, err := NewTranscriber(model)
+			worker, err := NewTranscriber(model, LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

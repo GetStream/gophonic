@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/speech"
 )
@@ -34,16 +35,16 @@ func TestCPUMemoryFootprint(t *testing.T) {
 		return s.HeapAlloc
 	}
 	start := heap()
-	m, err := Load(testmodels.Path(t, testmodels.Qwen3ASR), Options{Format: FormatF16})
+	m, err := Load(testmodels.Path(t, testmodels.Qwen3ASR), Options{Format: qwen3lm.WeightsF16})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Release()
+	defer m.Close()
 	loaded := heap()
 	pcm := clipPCM(t, "jfk")
 	var lanes [2]*Transcriber
 	for i := range lanes {
-		lanes[i], err = NewTranscriber(m, 0)
+		lanes[i], err = NewTranscriber(m, LaneOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

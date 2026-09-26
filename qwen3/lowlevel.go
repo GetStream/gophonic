@@ -26,22 +26,14 @@ type (
 	TokenizerWorkspace = qwen3lm.TokenizerWorkspace
 )
 
-// Weight formats accepted by LoadWeights and Options.Weights.
-const (
-	WeightsF16   = qwen3lm.WeightsF16
-	WeightsInt8  = qwen3lm.WeightsInt8
-	WeightsGPU   = qwen3lm.WeightsGPU
-	WeightsGPUQ4 = qwen3lm.WeightsGPUQ4
-)
-
 // Errors of Tokenizer.EncodeInto.
 var (
 	ErrTokenizerWorkspace = qwen3lm.ErrTokenizerWorkspace
 	ErrTokenBufferSmall   = qwen3lm.ErrTokenBufferSmall
 )
 
-// LoadWeights reads an official Qwen3 safetensors snapshot directory; see
-// the weight format constants.
+// LoadWeights reads an official Qwen3 safetensors snapshot directory in a
+// weight format as Options.Format names it.
 func LoadWeights(dir, format string) (*Weights, error) { return qwen3lm.LoadWeights(dir, format) }
 
 // LoadWeightsOptions reads a Qwen3 decoder with options, such as a head

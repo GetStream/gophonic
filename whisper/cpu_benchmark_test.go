@@ -48,7 +48,7 @@ func BenchmarkCPURepeatedAudio(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	tr, err := NewTranscriber(m)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCPUMemoryFootprint(t *testing.T) {
 	}
 	var lanes [2]*Transcriber
 	for i := range lanes {
-		lanes[i], err = NewTranscriber(m)
+		lanes[i], err = NewTranscriber(m, LaneOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

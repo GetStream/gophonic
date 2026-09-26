@@ -58,17 +58,38 @@ Whisper, Smart Turn, and TinyMelNet `.gophonic` bundles; `Register` adds more
 ([Add a backend](#add-a-backend)). It returns `ErrUnknownFormat` for anything
 no format claims. `Model.Close` releases the model's resources, such as GPU
 memory, once its lanes are closed. `Model.Name` reports the architecture
-(`"qwen3-asr"`, `"qwen3"`, `"whisper"`, `"smart-turn"`, `"tinymel"`).
+(`"qwen3-asr"`, `"qwen3-tts"`, `"qwen3"`, `"whisper"`, `"smart-turn"`,
+`"tinymel"`), and `Model.Path` the path it was loaded from.
 
 `Detect` reports the format `Open` would use without loading anything, and
 a format's `Provides` lists the lane types its models provide when that is
-known up front, which is how the server picks a model for a request.
+known up front, which is how the server picks a model for a request. `Open`
+checks that the model it loads provides them.
+
+`Options.Format` picks the weight format of the Qwen models, one vocabulary
+for all of them:
+
+| `Options.Format` | Weights |
+| --- | --- |
+| `gophonic.FormatF16` (`"f16"`) | every BF16 weight exactly, on the CPU's matrix units |
+| `gophonic.FormatInt8` (`"int8"`) | int8 rows in a rotated basis, on the CPU |
+| `gophonic.FormatGPU` (`"gpu"`) | int8 rows in a rotated basis, on the Apple GPU |
+| `gophonic.FormatGPUQ8` (`"gpu-q8"`) | int8 blocks of 32, on the Apple GPU |
+| `gophonic.FormatGPUQ4` (`"gpu-q4"`) | 4-bit blocks of 32, on the Apple GPU: lower fidelity |
+
+Empty picks the fastest format of llama.cpp Q8_0 fidelity on the machine:
+the Apple GPU where Metal is present, `f16` elsewhere. Whisper and the turn
+detectors have one format and ignore it; an unknown name fails with
+`speech.ErrUnsupported`. The model packages take the same names in their
+own `Options.Format`.
 
 `Options.Threads` bounds each lane's CPU workers, including the caller: a
 Qwen3-ASR transcriber uses that many (default `min(GOMAXPROCS, 16)`, at most
 8 for the encoder), a Whisper transcriber that many execution slots (default
-`min(GOMAXPROCS, 8)`), and a TinyMelNet detector `Threads-1` helper
-goroutines (default none). Smart Turn uses `GOMAXPROCS-1` helpers regardless.
+`min(GOMAXPROCS, 8)`), a Qwen3-TTS model's codec decoder that many, and a
+TinyMelNet detector `Threads-1` helper goroutines (default none). Smart Turn
+uses `GOMAXPROCS-1` helpers regardless. In the model packages the same
+bound is each lane's `LaneOptions.Threads`.
 
 ## Loading and the weight cache
 
@@ -91,9 +112,9 @@ The GPU formats of Qwen3 and Qwen3-ASR, the defaults on Apple silicon, load
 this way; the CPU formats still convert at every load, and Whisper and the
 turn detectors load their small converted bundles directly.
 
-Entries live in the user cache directory (`~/Library/Caches/gophonic` on
-macOS, `~/.cache/gophonic` on Linux), or in `$GOPHONIC_CACHE`; setting it to
-an empty string disables the cache. An entry is keyed by the checkpoint's
+Entries live in `gophonic.CacheDir()`: the user cache directory
+(`~/Library/Caches/gophonic` on macOS, `~/.cache/gophonic` on Linux), or
+`$GOPHONIC_CACHE`; setting it to an empty string disables the cache. An entry is keyed by the checkpoint's
 path, the names, sizes, and modification times of its files, the weight
 format, and a layout version, so a changed checkpoint or a new gophonic
 release rebuilds it; building an entry removes the one it replaces. One
@@ -291,16 +312,17 @@ two at worst (`TestVoicedFollowsWords`).
 ```go
 model, err := qwen3asr.Load("models/Qwen3-ASR-1.7B", qwen3asr.Options{})
 if err != nil { return err }
-lane, err := qwen3asr.NewTranscriber(model, 0) // 0: default workers
+lane, err := qwen3asr.NewTranscriber(model, qwen3asr.LaneOptions{})
 if err != nil { return err }
 defer lane.Close()
 
 err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: "de", Context: "Bundestag"}, &t)
 ```
 
-`Options.Format` picks the decoder: `qwen3asr.FormatGPU` (int8 blocks on the
-Apple GPU, the default where Metal is present) or `qwen3asr.FormatF16` (every
-BF16 weight exactly, on the CPU). `speech.Options.Language` forces one of
+`Options.Format` picks the decoder's weights: `"gpu-q8"` (int8 blocks on
+the Apple GPU, with the encoder on the GPU too; the default where Metal is
+present), `"f16"` (every BF16 weight exactly, on the CPU), or any other
+format of the table above. `speech.Options.Language` forces one of
 `Model.Languages()` and skips detection; `Context` primes recognition with
 names and terms. Qwen3-ASR produces no timestamps: `Segments` yields one
 segment per decoded piece (the whole clip, or each piece of audio longer
@@ -313,7 +335,7 @@ decoded audio. See [Qwen3-ASR](qwen3asr.md).
 ```go
 model, err := whisper.Load("tiny.en.gophonic")
 if err != nil { return err }
-worker, err := whisper.NewTranscriber(model) // or NewTranscriberWithWorkers
+worker, err := whisper.NewTranscriber(model, whisper.LaneOptions{})
 if err != nil { return err }
 defer worker.Close()
 
@@ -345,7 +367,7 @@ Whisper's UTF-8 replacement rule, so the output is always valid UTF-8.
 | Read a file | `Load(path)` | `Load(path)` |
 | Read an `io.Reader` | `ReadWeights(r)` | `ReadWeights(r)` |
 | Scratch | `NewWorkspace()` | `NewWorkspace()`, `NewWorkspaceWithWorkers(n)` |
-| `speech.TurnDetector` lane | `NewSession(model)` | `NewSession(model, helpers)` |
+| `speech.TurnDetector` lane | `NewDetector(model)` | `NewDetector(model, LaneOptions{Threads: n})` |
 
 Both models offer three prediction entry points on a workspace:
 
