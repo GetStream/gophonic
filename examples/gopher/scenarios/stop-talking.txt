@@ -1,0 +1,10 @@
+# Asked to be quiet until a word, the agent stays silent through
+# anything else, and comes back when the word is said.
+user: Gopher, stop talking until I say hi.
+gopher: silent
+user: What is the capital of Portugal?
+gopher: silent
+user: Hi!
+gopher: speaks
+user: What is the capital of Portugal?
+gopher: says that the capital of Portugal is Lisbon

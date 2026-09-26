@@ -1,0 +1,5 @@
+# A question gets an answer, promptly, and the answer is not a reading
+# back of the question.
+user: Gopher, can you hear me?
+gopher: says that it can hear the user, or that it is listening
+gopher: does not repeat the user

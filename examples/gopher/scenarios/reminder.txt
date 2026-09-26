@@ -1,0 +1,6 @@
+# A reminder is a planned moment: the agent may acknowledge or not, says
+# nothing for the time asked, then speaks up on its own.
+user: Gopher, remind me in thirty seconds to drink some water.
+wait: 24s
+gopher: speaks within 16s
+gopher: says that it is time to drink water, or reminds the user about the water

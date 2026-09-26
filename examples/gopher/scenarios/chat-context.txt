@@ -1,0 +1,8 @@
+# What people type in the call's chat is context: never read aloud on
+# its own, remembered when asked. Qwen3-8B reads the message back at the
+# note's moment despite the prompt; retest with Qwen3-30B-A3B.
+# expect: fail
+chat: Ana: the deploy is moved to Thursday at 3
+gopher: silent
+user: Gopher, what did Ana write in the chat?
+gopher: says that Ana wrote that the deploy moved to Thursday at 3

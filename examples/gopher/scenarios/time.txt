@@ -1,0 +1,3 @@
+# The time comes from the clock tool, not from the model's guess.
+user: Gopher, what time is it right now?
+gopher: says a time of day, with hours and minutes
