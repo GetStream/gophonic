@@ -415,3 +415,54 @@ func TestExecutorRowsValidationAndSmallInputs(t *testing.T) {
 		t.Fatalf("nil executor: %v", err)
 	}
 }
+
+// Each executor fits GOMAXPROCS by itself; together they do not. The caller
+// must release its P while a shard sleeps, including after GOMAXPROCS changes.
+func TestPrivateExecutorsConcurrentProgress(t *testing.T) {
+	previous := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previous)
+	const count = 4
+	var executors [count]*Executor
+	var ops [count]delayedPrivateRows
+	for i := range executors {
+		var err error
+		executors[i], err = NewExecutor(2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer executors[i].Close()
+	}
+	for _, procs := range []int{2, 1, 4} {
+		runtime.GOMAXPROCS(procs)
+		var done sync.WaitGroup
+		for i, e := range executors {
+			done.Go(func() {
+				for range 12 {
+					if err := e.Rows(&ops[i], 128, 1); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			})
+		}
+		done.Wait()
+	}
+	for lane := range ops {
+		for i, v := range ops[lane].values {
+			if v != 36*(i+1) {
+				t.Fatalf("lane%d row%d=%d", lane, i, v)
+			}
+		}
+	}
+}
+
+type delayedPrivateRows struct{ values [128]int }
+
+func (o *delayedPrivateRows) ApplyRows(start, end int) {
+	if start > 0 {
+		time.Sleep(50 * time.Microsecond)
+	}
+	for i := start; i < end; i++ {
+		o.values[i] += i + 1
+	}
+}

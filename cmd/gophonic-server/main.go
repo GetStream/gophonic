@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -34,7 +35,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
 	workers := flag.Int("workers", 1, "requests running inference at once")
 	maxSeconds := flag.Int("max-audio-seconds", 120, "longest audio a request may send")
-	threads := flag.Int("threads", 0, "CPU workers per lane (0: model default)")
+	threads := flag.Int("threads", 0, "CPU workers per lane (0: share GOMAXPROCS across requests; one request uses model default)")
 	keepAlive := flag.Duration("keep-alive", gophonic.DefaultKeepAlive, "close a model after this long without requests (negative: never)")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: gophonic-server [flags] MODEL|DIRECTORY...\n\n"+
@@ -42,7 +43,7 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() == 0 || *threads < 0 {
+	if flag.NArg() == 0 || *threads < 0 || *threads > 64 || *workers < 1 || *workers > 64 {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -50,7 +51,8 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	pool := gophonic.NewPool(gophonic.Options{Threads: *threads}, *keepAlive)
+	laneThreads := serverThreads(*threads, *workers, runtime.GOMAXPROCS(0))
+	pool := gophonic.NewPool(gophonic.Options{Threads: laneThreads}, *keepAlive)
 	defer pool.Close()
 	handler, err := httpserver.NewServer(httpserver.Config{Pool: pool, Models: models, Workers: *workers, MaxSeconds: *maxSeconds})
 	if err != nil {
@@ -114,6 +116,16 @@ func find(paths []string) ([]httpserver.Model, error) {
 		}
 	}
 	return models, nil
+}
+
+// A request retains its private workers and scratch. The default reserves
+// capacity for all request slots instead of giving every slot the whole CPU.
+// One slot preserves model defaults; explicit tuning remains available.
+func serverThreads(explicit, requests, procs int) int {
+	if explicit != 0 || requests == 1 {
+		return explicit
+	}
+	return max(1, min(64, procs/requests))
 }
 
 func fatal(err error) {
