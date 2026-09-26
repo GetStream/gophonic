@@ -4,6 +4,7 @@
 package qwen3
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -94,4 +95,28 @@ func TestChatTools(t *testing.T) {
 		t.Errorf("drafted %q %s, decoded %q %s", text[0], args[0], text[1], args[1])
 	}
 	t.Logf("call arguments %s: %v drafted, %v token by token", args[0], took[0].Round(time.Millisecond), took[1].Round(time.Millisecond))
+}
+
+// A replayed call is written as the chat template writes it, and reads
+// back as the call it was.
+func TestAppendCallRoundTrip(t *testing.T) {
+	call := chat.Call{Name: "search", Arguments: []byte(`{"query":"Lisbon trams","limit":3}`)}
+	for _, c := range []struct {
+		d    dialect
+		want string
+	}{
+		{jsonCalls, "Let me look.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\"query\":\"Lisbon trams\",\"limit\":3}}\n</tool_call>"},
+		{xmlCalls, "Let me look.\n\n<tool_call>\n<function=search>\n<parameter=query>\nLisbon trams\n</parameter>\n<parameter=limit>\n3\n</parameter>\n</function>\n</tool_call>"},
+	} {
+		got, err := c.d.appendCall([]byte("Let me look."), call, true, true)
+		if err != nil || string(got) != c.want {
+			t.Fatalf("dialect %d: %q, %v", c.d, got, err)
+		}
+		inner := got[len("Let me look."):]
+		inner = inner[bytes.Index(inner, []byte("<tool_call>"))+len("<tool_call>") : bytes.LastIndex(inner, []byte("</tool_call>"))]
+		name, args, err := c.d.parse(inner, func(_, p []byte) bool { return string(p) == "query" }, nil)
+		if err != nil || string(name) != "search" || !strings.Contains(string(args), `"query":"Lisbon trams"`) || !strings.Contains(string(args), `3`) {
+			t.Fatalf("dialect %d: read back %s %s, %v", c.d, name, args, err)
+		}
+	}
 }

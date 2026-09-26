@@ -5,6 +5,7 @@ package qwen3
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,51 @@ func (d dialect) scaffold(name string) string {
 		return "\n<function=" + name + ">\n"
 	}
 	return "\n{\"name\": \"" + name + "\", \"arguments\":"
+}
+
+// appendCall appends call as the model writes it in an assistant message,
+// <tool_call> tags and all: the first of the message's calls follows its
+// text (if any) as the chat template joins them.
+func (d dialect) appendCall(dst []byte, call chat.Call, first, afterText bool) ([]byte, error) {
+	switch {
+	case d == xmlCalls && first && afterText:
+		dst = append(dst, "\n\n"...)
+	case !first || afterText:
+		dst = append(dst, '\n')
+	}
+	dst = append(dst, "<tool_call>\n"...)
+	args := call.Arguments
+	if len(args) == 0 {
+		args = []byte("{}")
+	}
+	if d == jsonCalls {
+		dst = append(dst, `{"name": "`...)
+		dst = append(dst, call.Name...)
+		dst = append(dst, `", "arguments": `...)
+		dst = append(dst, args...)
+		return append(dst, "}\n</tool_call>"...), nil
+	}
+	dst = append(dst, "<function="...)
+	dst = append(dst, call.Name...)
+	dst = append(dst, ">\n"...)
+	err := vibejson.EachObject(args, func(key string, value vibejson.RawValue) error {
+		dst = append(dst, "<parameter="...)
+		dst = append(dst, key...)
+		dst = append(dst, ">\n"...)
+		if text, ok, err := value.AppendText(dst); err != nil {
+			return err
+		} else if ok {
+			dst = text // a string, as it is
+		} else {
+			dst = value.AppendJSON(dst)
+		}
+		dst = append(dst, "\n</parameter>\n"...)
+		return nil
+	})
+	if err != nil {
+		return dst, fmt.Errorf("qwen3: the arguments of %s: %w", call.Name, err)
+	}
+	return append(dst, "</function>\n</tool_call>"...), nil
 }
 
 // parse reads a call written between <tool_call> tokens, returning its name

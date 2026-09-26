@@ -214,3 +214,5 @@ func TestWordError(t *testing.T) {
 		}
 	}
 }
+
+func (s *yesSession) AddCalls(text string, _ []chat.Call) error { return s.Add(chat.Assistant, text) }

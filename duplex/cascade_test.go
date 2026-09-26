@@ -652,3 +652,5 @@ func TestCascadeCaptionsFollowTheVoice(t *testing.T) {
 		t.Fatalf("captions at %v of %q: want it word by word to the end", rec.voiced, reply)
 	}
 }
+
+func (s *fakeSession) AddCalls(text string, _ []chat.Call) error { return s.Add(chat.Assistant, text) }

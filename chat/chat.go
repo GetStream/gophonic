@@ -80,6 +80,12 @@ type Session interface {
 	// Add appends a complete message to the conversation without replying.
 	// It does not retain text.
 	Add(role Role, text string) error
+	// AddCalls appends an assistant message that called tools: its text,
+	// if any, then the calls, as the model writes them. A conversation
+	// replayed from a transcript, as a stateless server's is, needs it; a
+	// live one holds the calls its replies made already. It does not retain
+	// text.
+	AddCalls(text string, calls []Call) error
 	// Reply generates the assistant's next message, writing its text to w
 	// as it is decoded, in pieces that end on UTF-8 boundaries; w must not
 	// retain a piece. The message ends when the model ends it, after

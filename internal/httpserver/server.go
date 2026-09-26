@@ -83,6 +83,10 @@ type slot struct {
 	probs      []float32
 	text       textRequest
 	texts      textsRequest
+	chat       chatRequest
+	said       []byte    // a reply's text, or a stream's chunk
+	voice      []float32 // synthesized samples
+	speech     []byte    // their PCM bytes
 }
 
 // NewServer returns a server of cfg's models. It opens no model.
@@ -117,6 +121,8 @@ func NewServer(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/audio/transcriptions", s.transcribe)
 	s.mux.HandleFunc("POST /v1/audio/classifications", s.classifyAudio)
 	s.mux.HandleFunc("POST /v1/classifications", s.classifyText)
+	s.mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
+	s.mux.HandleFunc("POST /v1/audio/speech", s.speak)
 	return s, nil
 }
 

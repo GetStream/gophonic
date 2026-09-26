@@ -15,6 +15,7 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/internal/qwen3lm"
@@ -209,6 +210,7 @@ type session struct {
 	logits   []float32
 	tws      TokenizerWorkspace
 	text     []byte // message rendering and decoded pieces
+	message  []byte // AddCalls's message
 	sample   sampler
 	closed   bool
 
@@ -265,6 +267,23 @@ func (s *session) Add(role chat.Role, text string) error {
 	s.ids = append(s.ids, c.newline...)
 	s.reply = -1
 	return nil
+}
+
+// AddCalls appends an assistant message that called tools; see
+// chat.Session.
+func (s *session) AddCalls(text string, calls []chat.Call) error {
+	if s.closed {
+		return chat.ErrClosed
+	}
+	b := append(s.message[:0], text...)
+	var err error
+	for i, call := range calls {
+		if b, err = s.c.dialect.appendCall(b, call, i == 0, text != ""); err != nil {
+			return err
+		}
+	}
+	s.message = b
+	return s.Add(chat.Assistant, unsafe.String(unsafe.SliceData(b), len(b)))
 }
 
 // Calls returns the tool calls of the last reply; see chat.Session.

@@ -98,3 +98,5 @@ func TestAnswer(t *testing.T) {
 		t.Fatalf("%v; %d calls left, %q", err, len(s.Calls()), s.messages)
 	}
 }
+
+func (s *scripted) AddCalls(text string, _ []Call) error { return s.Add(Assistant, text) }
