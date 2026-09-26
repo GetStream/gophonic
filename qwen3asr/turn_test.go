@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/qwen3lm"
+	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -86,13 +87,18 @@ func TestTurn(t *testing.T) {
 // TestTurnFeatures writes the training data of the turn head (see
 // tools/turn.py): for each clip of TURN_LIST (WAV path, label, pause in ms),
 // the label, the pause, the audio rows and the state that ends its
-// transcript, as float32 to TURN_OUT.
+// transcript, as float32 to TURN_OUT. TURN_MODEL names the checkpoint in
+// the models directory (default Qwen3-ASR-1.7B).
 func TestTurnFeatures(t *testing.T) {
 	list, out := os.Getenv("TURN_LIST"), os.Getenv("TURN_OUT")
 	if list == "" || out == "" {
 		t.Skip("TURN_LIST and TURN_OUT name the clips and the output")
 	}
-	m := loadModel(t, qwen3lm.WeightsGPUQ8)
+	name := os.Getenv("TURN_MODEL")
+	if name == "" {
+		name = testmodels.Qwen3ASR
+	}
+	m := loadNamed(t, name, qwen3lm.WeightsGPUQ8)
 	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)

@@ -26,6 +26,9 @@ import (
 //go:embed turn-1.7b.bin
 var turn17 []byte
 
+// turnHeads are the heads trained so far, one per checkpoint geometry.
+var turnHeads = [][]byte{turn17}
+
 const turnMagic = "gophonic turn 1\n"
 
 // turnHead judges the end of a turn from the state that ends a transcript.
@@ -38,14 +41,16 @@ type turnHead struct {
 // turnHeadFor returns the head trained on the checkpoint geometry of lm, or
 // nil if none was.
 func turnHeadFor(lm qwen3lm.Config) *turnHead {
-	h, err := parseTurnHead(turn17)
-	if err != nil {
-		panic(err) // the embedded file is part of the package
+	for _, raw := range turnHeads {
+		h, err := parseTurnHead(raw)
+		if err != nil {
+			panic(err) // the embedded files are part of the package
+		}
+		if h.hidden == lm.Hidden && h.layers == lm.Layers && h.vocab == lm.Vocab {
+			return &h.turnHead
+		}
 	}
-	if h.hidden != lm.Hidden || h.layers != lm.Layers || h.vocab != lm.Vocab {
-		return nil
-	}
-	return &h.turnHead
+	return nil
 }
 
 type turnFile struct {

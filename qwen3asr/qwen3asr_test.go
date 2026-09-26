@@ -73,23 +73,31 @@ func readFloats(t testing.TB, raw []byte) []float32 {
 	return v
 }
 
-var models sync.Map // format → *Model
+var models sync.Map // checkpoint and format → *Model
 
 // loadModel loads the checkpoint once per format for the package's tests.
 func loadModel(t testing.TB, format string) *Model {
 	t.Helper()
-	dir := testmodels.Path(t, testmodels.Qwen3ASR)
+	return loadNamed(t, testmodels.Qwen3ASR, format)
+}
+
+// loadNamed loads the checkpoint name, in the models directory, once per
+// format.
+func loadNamed(t testing.TB, name, format string) *Model {
+	t.Helper()
+	dir := testmodels.Path(t, name)
 	if (format == qwen3lm.WeightsGPUQ8 || format == qwen3lm.WeightsGPU) && !qwen3lm.GPUAvailable() {
 		t.Skip("no Metal GPU")
 	}
-	if m, ok := models.Load(format); ok {
+	key := name + "\x00" + format
+	if m, ok := models.Load(key); ok {
 		return m.(*Model)
 	}
 	m, err := Load(dir, Options{Format: format})
 	if err != nil {
 		t.Fatal(err)
 	}
-	models.Store(format, m)
+	models.Store(key, m)
 	return m
 }
 
