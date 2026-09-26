@@ -105,8 +105,12 @@ func gpuRows(bits int) int {
 	if bits == 8 || bits == 9 {
 		return 16
 	}
-	return 32
+	return 8 * gpuRowsQ4
 }
+
+// gpuRowsQ4 is GEMV_ROWS_Q4: the 4-bit rows each simdgroup streams, which
+// share one read of the input block.
+const gpuRowsQ4 = 8
 
 func alignUp(n int) int { return (n + gpuAlign - 1) &^ (gpuAlign - 1) }
 

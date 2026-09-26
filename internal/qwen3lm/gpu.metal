@@ -38,6 +38,9 @@ using namespace metal;
 #ifndef GEMV_ROWS_Q8B
 #define GEMV_ROWS_Q8B 2
 #endif
+#ifndef GEMV_ROWS_Q4
+#define GEMV_ROWS_Q4 8
+#endif
 #ifndef GEMV_ROWS_HEAD
 #define GEMV_ROWS_HEAD 2
 #endif
@@ -62,7 +65,7 @@ constexpr bool eightBit(int q) { return q != Q4; }
 
 // rowsPerSimdgroup is the number of weight rows each simdgroup streams.
 constexpr uint rowsPerSimdgroup(int q) {
-	return q == Q8B ? GEMV_ROWS_Q8B : (q == Q8 ? GEMV_ROWS_Q8 : 4);
+	return q == Q8B ? GEMV_ROWS_Q8B : (q == Q8 ? GEMV_ROWS_Q8 : GEMV_ROWS_Q4);
 }
 
 // gemv computes y = W·x for quantized rows W[N][K]. With 8-bit codes each
