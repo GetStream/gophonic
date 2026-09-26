@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -35,12 +36,30 @@ var (
 	wsBase   = "wss://chat.stream-io-api.com/connect"
 )
 
-type chatChannel struct{ apiKey, token, path string }
+type chatChannel struct {
+	apiKey, token, path string
+	edits               bool // the user may edit its own messages here
+}
 
-// open creates the channel if nobody has opened the call's chat yet.
+// open creates the channel if nobody has opened the call's chat yet, and
+// learns from the channel's capabilities whether c's user may edit its own
+// messages: a channel type may let users post but not edit, as Pronto's
+// videocall does.
 func (c *chatChannel) open() error {
-	_, err := c.post("/query", map[string]any{"state": false}, "")
-	return err
+	data, err := c.post("/query", map[string]any{"state": false}, "")
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Channel struct {
+			OwnCapabilities []string `json:"own_capabilities"`
+		} `json:"channel"`
+	}
+	if err := vibejson.Unmarshal(data, &resp); err != nil {
+		return err
+	}
+	c.edits = slices.Contains(resp.Channel.OwnCapabilities, "update-own-message")
+	return nil
 }
 
 // send posts text as a message from c's user.
@@ -360,16 +379,18 @@ func (c *chatChannel) pump(ctx context.Context, conn *wsConn, connectionID strin
 
 // liveCaptions writes the call's captions into its chat when closed
 // captions are off: what people say as messages, and each of Gopher's
-// answers as one message that grows as the voice speaks it. Writes go out
-// in order; while one is under way, only the latest text of an answer
-// waits to follow.
+// answers as one message that grows as the voice speaks it, where the
+// channel lets Gopher edit its messages; where it does not, each sentence
+// is posted once it is spoken. Writes go out in order; while one is under
+// way, only the latest text of an answer waits to follow.
 type liveCaptions struct {
 	room *chatChannel
 	mu   sync.Mutex
 	wake chan struct{}
-	said []string // messages to post, in order
-	next string   // the answer's newest text, when it changed
-	done bool     // the answer is final
+	said []string  // messages to post, in order
+	next string    // the answer's newest text, when it changed
+	done bool      // the answer is final
+	cut  sentences // the answer's sentences posted, without edits
 }
 
 func newLiveCaptions(room *chatChannel) *liveCaptions {
@@ -386,10 +407,14 @@ func (l *liveCaptions) say(text string) {
 	l.signal()
 }
 
-// answer shows the answer's text so far; final ends it.
+// answer shows the text of Gopher's answer spoken so far; final ends it.
 func (l *liveCaptions) answer(text string, final bool) {
 	l.mu.Lock()
-	l.next, l.done = text, l.done || final
+	if l.room.edits {
+		l.next, l.done = "Gopher: "+text, l.done || final
+	} else if spoken := l.cut.next(text, final); spoken != "" {
+		l.said = append(l.said, "Gopher: "+spoken)
+	}
 	l.mu.Unlock()
 	l.signal()
 }

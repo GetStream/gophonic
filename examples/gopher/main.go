@@ -30,6 +30,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	rtc "github.com/GetStream/getstream-go-webrtc"
 	webaudio "github.com/GetStream/getstream-go-webrtc/audio"
@@ -488,7 +490,7 @@ func (o *observer) Said(text []byte, voiced int, final bool) {
 	}
 	o.captions.assistant(shown, final)
 	if l := o.live.Load(); l != nil {
-		l.answer("Gopher: "+shown, final)
+		l.answer(shown, final)
 	}
 	if final {
 		fmt.Printf("Gopher: %s\n", text)
@@ -507,7 +509,7 @@ func (o *observer) Error(err error) { log.Printf("agent: %v", err) }
 type captions struct {
 	call *getstream.Call // nil without the app's secret
 	send chan getstream.SendClosedCaptionRequest
-	sent int // bytes of the current reply already captioned
+	cut  sentences // the current reply's sentences captioned
 }
 
 func newCaptions(apiKey, callType, callID string) *captions {
@@ -547,21 +549,51 @@ func (c *captions) show(speaker, text string) {
 
 // assistant captions each finished sentence of the reply growing in text.
 func (c *captions) assistant(text string, final bool) {
-	if c.sent > len(text) {
-		c.sent = 0 // a new reply
+	if spoken := c.cut.next(text, final); spoken != "" {
+		c.show(self, spoken)
 	}
-	rest := text[c.sent:]
-	end := strings.LastIndexAny(rest, ".!?…")
+}
+
+// sentences cuts a reply that grows, a word at a time, into its finished
+// sentences.
+type sentences struct{ sent int } // bytes of the reply already cut
+
+// next returns the sentences text finishes beyond those already cut, and
+// all the rest of it when final ends the reply.
+func (s *sentences) next(text string, final bool) string {
+	if s.sent > len(text) {
+		s.sent = 0 // a new reply
+	}
+	end := s.sent + sentenceEnd(text[s.sent:])
 	if final {
-		end = len(rest) - 1
+		end = len(text)
 	}
-	if end >= 0 {
-		c.show(self, rest[:end+1])
-		c.sent += end + 1
-	}
+	spoken := strings.TrimSpace(text[s.sent:end])
+	s.sent = end
 	if final {
-		c.sent = 0
+		s.sent = 0
 	}
+	return spoken
+}
+
+// sentenceEnd is where the last finished sentence in text ends, or 0: after
+// a full stop, question or exclamation mark, or ellipsis that ends a word
+// (the point in 3.5 does not), or after an ideographic one, which needs no
+// space.
+func sentenceEnd(text string) int {
+	for i := len(text); i > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:i])
+		switch r {
+		case '。', '！', '？':
+			return i
+		case '.', '!', '?', '…':
+			if next, _ := utf8.DecodeRuneInString(text[i:]); i == len(text) || unicode.IsSpace(next) {
+				return i
+			}
+		}
+		i -= size
+	}
+	return 0
 }
 
 // roster counts the people in the call.
