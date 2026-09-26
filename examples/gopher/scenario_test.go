@@ -19,8 +19,9 @@ import (
 // scenarios/: each line the user says is spoken by Qwen3-TTS in another
 // voice, Gopher's answers are transcribed by Qwen3-ASR, and the language
 // model judges what they say. It needs the three models (GOPHONIC_MODELS,
-// or models/ at the repository root; GOPHER_LLM names another language
-// model directory there) and runs in real time.
+// or models/ at the repository root) and runs in real time. GOPHER_ASR,
+// GOPHER_LLM, and GOPHER_TTS name other model directories there for
+// Gopher; the harness keeps the reference models to hear, speak, and judge.
 func TestScenarios(t *testing.T) {
 	if testing.Short() {
 		t.Skip("scenarios run the models in real time")
@@ -41,22 +42,37 @@ func TestScenarios(t *testing.T) {
 		t.Cleanup(func() { m.Close() })
 		return m
 	}
-	llmName := os.Getenv("GOPHER_LLM")
-	if llmName == "" {
-		llmName = "Qwen3.6-35B-A3B"
+	env := func(name, fallback string) string {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+		return fallback
 	}
-	asr, llm, tts := open("Qwen3-ASR-1.7B"), open(llmName), open("Qwen3-TTS-12Hz-1.7B-CustomVoice")
+	// The harness hears, speaks, and judges with the reference models,
+	// whatever Gopher is made of: GOPHER_ASR, GOPHER_LLM, and GOPHER_TTS
+	// choose Gopher's.
+	opened := map[string]*gophonic.Model{}
+	model := func(name string) *gophonic.Model {
+		if opened[name] == nil {
+			opened[name] = open(name)
+		}
+		return opened[name]
+	}
+	ears, voiceModel, judgeModel := model("Qwen3-ASR-1.7B"), model("Qwen3-TTS-12Hz-1.7B-CustomVoice"), model("Qwen3.6-35B-A3B")
+	asr := model(env("GOPHER_ASR", "Qwen3-ASR-1.7B"))
+	llm := model(env("GOPHER_LLM", "Qwen3.6-35B-A3B"))
+	tts := model(env("GOPHER_TTS", "Qwen3-TTS-12Hz-1.7B-CustomVoice"))
 	lane := func(t *testing.T, l interface{ Close() error }, err error) {
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { l.Close() })
 	}
-	ears, err := gophonic.Lane[speech.Transcriber](asr)
-	lane(t, ears, err)
-	voice, err := gophonic.Lane[speech.Synthesizer](tts)
+	hear, err := gophonic.Lane[speech.Transcriber](ears)
+	lane(t, hear, err)
+	voice, err := gophonic.Lane[speech.Synthesizer](voiceModel)
 	lane(t, voice, err)
-	judge, err := gophonic.Lane[chat.Generator](llm)
+	judge, err := gophonic.Lane[chat.Generator](judgeModel)
 	lane(t, judge, err)
 	// Each script gets a fresh Gopher, as config makes it, so that no
 	// conversation leaks from one into the next.
@@ -67,7 +83,7 @@ func TestScenarios(t *testing.T) {
 		agent, err := duplex.New(cfg, asr, llm, tts)
 		lane(t, agent, err)
 		return scenario.Config{Agent: agent, Voice: voice, Speak: speech.SpeakOptions{Voice: "serena"},
-			Ears: ears, Listen: cfg.Listen, Judge: judge, Captions: captions}
+			Ears: hear, Listen: cfg.Listen, Judge: judge, Captions: captions}
 	}
 	scenario.Test(t, setup, "scenarios/*.txt")
 }
