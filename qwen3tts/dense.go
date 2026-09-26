@@ -30,6 +30,9 @@ const (
 
 // loadDense reads name.weight, [out][in] (a one-wide convolution kernel
 // also fits), and name.bias when present.
+// identity is the n-wide layer that passes its input through.
+func identity(n int) dense { return dense{in: n, out: n} }
+
 func loadDense(st *safetensors.Checkpoint, name string, out, in int, shape ...int) (dense, error) {
 	if shape == nil {
 		shape = []int{out, in}
@@ -77,6 +80,10 @@ func chunkWidth(out int) int {
 func (d *dense) apply(exec *whispergemm.Executor, dst, src []float32, rows int) error {
 	if len(dst) < rows*d.out || len(src) < rows*d.in {
 		return fmt.Errorf("qwen3tts: dense %dx%d on %d rows", d.out, d.in, rows)
+	}
+	if d.parts == nil { // the identity
+		copy(dst[:rows*d.out], src[:rows*d.in])
+		return nil
 	}
 	for c, p := range d.parts {
 		if err := exec.Mul(p, dst[c*d.cols:], d.out, src, d.in, rows); err != nil {

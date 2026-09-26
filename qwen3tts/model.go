@@ -25,7 +25,6 @@
 package qwen3tts
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -133,9 +132,11 @@ type Model struct {
 
 	hidden, cpHidden int
 
-	// textEmbed is the talker's text embedding table (BF16, mapped), and
-	// textFC1 and textFC2 its projection into the talker's width.
+	// textEmbed is the talker's text embedding table (BF16, mapped), rows
+	// textHidden wide, and textFC1 and textFC2 its projection into the
+	// talker's width.
 	textEmbed        []uint16
+	textHidden       int
 	textFC1, textFC2 dense
 	// codecEmbed is the talker's codec embedding table (BF16, mapped),
 	// [3072][hidden]; cpEmbed the code predictor's fifteen input tables,
@@ -174,8 +175,8 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	if c.ModelType != "qwen3_tts" || c.TokenizerType != "qwen3_tts_tokenizer_12hz" {
 		return nil, fmt.Errorf("qwen3tts: model_type %q with tokenizer %q is not Qwen3-TTS-12Hz", c.ModelType, c.TokenizerType)
 	}
-	if c.Talker.NumCodeGroups != groups || c.Talker.TextHidden != c.Talker.HiddenSize {
-		return nil, errors.New("qwen3tts: unsupported codebook count or text width")
+	if c.Talker.NumCodeGroups != groups {
+		return nil, fmt.Errorf("qwen3tts: %d codebooks per frame; want %d", c.Talker.NumCodeGroups, groups)
 	}
 	m := &Model{cfg: c, threads: opts.Threads, hidden: c.Talker.HiddenSize, cpHidden: c.Talker.CodePredictor.HiddenSize}
 	m.align, m.aligned = alignHeads[[2]string{c.TTSModelSize, c.TTSModelType}]
@@ -242,6 +243,8 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 // the CPU, and projects every code predictor input once.
 func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 	c, h, ch := &m.cfg.Talker, m.hidden, m.cpHidden
+	th := c.TextHidden
+	m.textHidden = th
 	mapped := func(name string, rows, cols int) ([]uint16, error) {
 		b, unmap, err := st.MapBF16(name, rows, cols)
 		if err == nil {
@@ -250,7 +253,7 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 		return b, err
 	}
 	var err error
-	if m.textEmbed, err = mapped("talker.model.text_embedding.weight", c.TextVocab, h); err != nil {
+	if m.textEmbed, err = mapped("talker.model.text_embedding.weight", c.TextVocab, th); err != nil {
 		return err
 	}
 	if m.codecEmbed, err = mapped("talker.model.codec_embedding.weight", c.Vocab, h); err != nil {
@@ -261,14 +264,24 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 			return err
 		}
 	}
-	if m.textFC1, err = loadDense(st, "talker.text_projection.linear_fc1", h, h); err != nil {
+	if m.textFC1, err = loadDense(st, "talker.text_projection.linear_fc1", th, th); err != nil {
 		return err
 	}
-	if m.textFC2, err = loadDense(st, "talker.text_projection.linear_fc2", h, h); err != nil {
+	if m.textFC2, err = loadDense(st, "talker.text_projection.linear_fc2", h, th); err != nil {
 		return err
 	}
-	if m.proj, err = loadDense(st, "talker.code_predictor.small_to_mtp_projection", ch, h); err != nil {
-		return err
+	// The talker's state reaches the code predictor through a projection
+	// when their widths differ, as in the 1.7B, and as it is when they are
+	// the same, as in the 0.6B.
+	switch bridge := "talker.code_predictor.small_to_mtp_projection"; {
+	case st.Has(bridge + ".weight"):
+		if m.proj, err = loadDense(st, bridge, ch, h); err != nil {
+			return err
+		}
+	case ch == h:
+		m.proj = identity(h)
+	default:
+		return fmt.Errorf("qwen3tts: a %d-wide talker and a %d-wide code predictor without %s", h, ch, bridge)
 	}
 	head, err := st.Float32("talker.codec_head.weight", c.Vocab, h)
 	if err != nil {
@@ -325,31 +338,33 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 	// The TTS control tokens' text rows.
 	rows := make([]float32, 3*h)
 	for i, id := range []int{m.cfg.TTSBOS, m.cfg.TTSEOS, m.cfg.TTSPad} {
-		m.textRows(exec, rows[i*h:(i+1)*h], []int{id}, make([]float32, h))
+		m.textRows(exec, rows[i*h:(i+1)*h], []int{id}, make([]float32, m.textScratch(1)))
 	}
 	m.bosRow, m.eosRow, m.padRow = rows[:h], rows[h:2*h], rows[2*h:]
 	return nil
 }
 
 // textRows writes the projected text embeddings of ids to dst, one hidden-
-// wide row each; tmp holds len(ids) rows of scratch.
+// wide row each; tmp holds textScratch(len(ids)) floats of scratch.
 func (m *Model) textRows(exec *whispergemm.Executor, dst []float32, ids []int, tmp []float32) error {
-	h := m.hidden
+	th, n := m.textHidden, len(ids)
+	emb, mid := tmp[:n*th], tmp[n*th:2*n*th]
 	for i, id := range ids {
-		row := m.textEmbed[id*h : (id+1)*h]
-		for j, b := range row {
-			dst[i*h+j] = q8gemm.BF16ToF32(b)
+		for j, b := range m.textEmbed[id*th : (id+1)*th] {
+			emb[i*th+j] = q8gemm.BF16ToF32(b)
 		}
 	}
-	n := len(ids)
-	if err := m.textFC1.apply(exec, tmp[:n*h], dst[:n*h], n); err != nil {
+	if err := m.textFC1.apply(exec, mid, emb, n); err != nil {
 		return err
 	}
-	for i, v := range tmp[:n*h] {
-		tmp[i] = silu(v)
+	for i, v := range mid {
+		mid[i] = silu(v)
 	}
-	return m.textFC2.apply(exec, dst[:n*h], tmp[:n*h], n)
+	return m.textFC2.apply(exec, dst[:n*m.hidden], mid, n)
 }
+
+// textScratch is the scratch textRows needs for n ids.
+func (m *Model) textScratch(n int) int { return 2 * n * m.textHidden }
 
 // Voices lists the preset voices, in lower case and sorted. The list is
 // the model's: callers must not modify it.

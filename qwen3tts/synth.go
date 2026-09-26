@@ -676,7 +676,7 @@ func (s *Synthesizer) tokenize(n int) error {
 	h := s.m.hidden
 	added := len(s.text) - start
 	s.textRows = slices.Grow(s.textRows, added*h)[:len(s.text)*h]
-	s.tmp = slices.Grow(s.tmp[:0], added*h)[:added*h]
+	s.tmp = slices.Grow(s.tmp[:0], s.m.textScratch(added))[:s.m.textScratch(added)]
 	return s.m.textRows(s.exec, s.textRows[start*h:], s.text[start:], s.tmp)
 }
 
@@ -718,7 +718,7 @@ func (s *Synthesizer) prefill(speaker, language int, style string) error {
 	}
 	s.voiceRows = 0
 	s.rows = slices.Grow(s.rows[:0], n*h)[:n*h]
-	s.tmp = slices.Grow(s.tmp[:0], (ns+3)*h)[:(ns+3)*h]
+	s.tmp = slices.Grow(s.tmp[:0], m.textScratch(ns+3))[:m.textScratch(ns+3)]
 	if ns > 0 {
 		if err := m.textRows(s.exec, s.rows[:ns*h], s.styleIDs, s.tmp); err != nil {
 			return err
