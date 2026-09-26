@@ -37,6 +37,7 @@ const (
 	// gpuCacheVersion names the layout of prepared weights in the cache;
 	// change it with anything that changes their bytes.
 	gpuCacheVersion = "qwen3lm-gpu-1"
+	gpuHeadRows     = 16 // GEMV_ROWS_HEAD (8 simdgroups × 2 rows)
 )
 
 // gpuLayer holds one layer's projections in one shared buffer: int8 rows
@@ -74,10 +75,10 @@ type gpuModel struct {
 	cache   *wcache.File // holds the layer and head buffers' memory
 }
 
-// gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
-// times rowsPerSimdgroup in gpu.metal.
+// gpuRows is the number of projection rows per GEMV threadgroup: 8
+// simdgroups times rowsPerSimdgroup in gpu.metal.
 func gpuRows(bits int) int {
-	if bits != 4 {
+	if bits == 8 || bits == 9 {
 		return 16
 	}
 	return 32
@@ -218,7 +219,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	if headName != "" {
 		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
 		// rotates the normalized state.
-		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
+		g.lmRows = (c.vocab + gpuHeadRows - 1) / gpuHeadRows * gpuHeadRows
 		g.lmScale = alignUp(g.lmRows * h)
 		headBytes = g.lmScale + 2*g.lmRows*(h/q4Group)
 	}
@@ -576,9 +577,10 @@ type mmArgs struct {
 // mmMinGroups is the threadgroup count below which projections split K.
 const mmMinGroups = 256
 
-// mmScratchFloats bounds split-K scratch: splits only happen while the grid
-// is below mmMinGroups tiles of at most 32×64, and splits are at most 8.
-const mmScratchFloats = 8 * mmMinGroups * 32 * mmColumns
+// mmScratchFloats bounds split-K scratch. The final power-of-two split has
+// fewer than 2*mmMinGroups tiles; each tile covers at most 32×mmColumns
+// outputs. A one-split GEMM never writes scratch.
+const mmScratchFloats = 2 * mmMinGroups * 32 * mmColumns
 
 type gemvArgs struct {
 	k, n  uint32
@@ -613,6 +615,27 @@ func (g *gpuModel) newPrefix(capacity int) (*gpuPrefix, error) {
 	return &gpuPrefix{kc: kc, vc: vc, capacity: capacity}, nil
 }
 
+// ensureKV allocates the workspace's temporary cache only for passes that
+// own their current K/V rows. Prefix continuation writes directly into the
+// lane's PrefixKV and does not need these full-context buffers.
+func (w *gpuWorkspace) ensureKV() error {
+	if w.kc != nil && w.vc != nil {
+		return nil
+	}
+	n := 4 * w.g.cfg.layers * gpuPositions * w.g.cfg.kvDim
+	kc, err := w.g.dev.Buffer(n)
+	if err != nil {
+		return err
+	}
+	vc, err := w.g.dev.Buffer(n)
+	if err != nil {
+		kc.Release()
+		return err
+	}
+	w.kc, w.vc = kc, vc
+	return nil
+}
+
 // copyFrom copies the first n values of each layer's keys and values.
 func (p *gpuPrefix) copyFrom(src *gpuPrefix, layers, n int) {
 	dk, dv := floats(p.kc.Bytes()), floats(p.vc.Bytes())
@@ -643,8 +666,6 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.qkv, 4 * gpuPositions * (qdim + 2*c.kvDim)},
 		{&w.ctx, 4 * gpuPositions * qdim},
 		{&w.act, 4 * gpuPositions * c.intermediate},
-		{&w.kc, 4 * c.layers * gpuPositions * c.kvDim},
-		{&w.vc, 4 * c.layers * gpuPositions * c.kvDim},
 		{&w.embedParts, 4 * gpuPositions},
 		{&w.info, 8 * gpuPositions},
 		{&w.scratch, 4 * mmScratchFloats},
@@ -682,7 +703,11 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 	e.SetBuffer(in, inOff, 4)
 	e.SetBytes(unsafe.Pointer(args), 16, 5)
 	e.SetBuffer(out, 0, 6)
-	e.Dispatch(metal.Size{X: int(args.n) / gpuRows(w.g.bits), Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+	rows := gpuRows(w.g.bits)
+	if p == w.g.gemvHead {
+		rows = gpuHeadRows
+	}
+	e.Dispatch(metal.Size{X: int(args.n) / rows, Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
 }
 
 // batch evaluates independent sequences and writes each one's last-token
@@ -694,18 +719,26 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 // longer than one pass. Placeholder tokens of embeds take its rows.
 func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool, embeds Embeds) error {
 	c := &m.cfg
-	own := 4 * gpuPositions * c.kvDim
-	w.curK, w.curV, w.curStride = w.kc, w.vc, own
-	w.preK, w.preV, w.preStride = w.kc, w.vc, own
 	w.attn.base, w.attn.prefixLen = 0, 0
-	if pre != nil {
+	if pre != nil && !shared {
+		// Continue in the lane-owned cache. The prefix input has length zero;
+		// binding it to the same valid buffer keeps both attention passes safe
+		// without allocating the workspace's otherwise-unused full cache.
 		stride := 4 * pre.capacity * c.kvDim
-		if shared {
-			w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+		w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
+		w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+		w.attn.base = uint32(past)
+	} else {
+		if err := w.ensureKV(); err != nil {
+			return err
+		}
+		own := 4 * gpuPositions * c.kvDim
+		w.curK, w.curV, w.curStride = w.kc, w.vc, own
+		w.preK, w.preV, w.preStride = w.kc, w.vc, own
+		if pre != nil {
+			w.preK, w.preV = pre.kc, pre.vc
+			w.preStride = 4 * pre.capacity * c.kvDim
 			w.attn.prefixLen = uint32(past)
-		} else {
-			w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
-			w.attn.base = uint32(past)
 		}
 	}
 	w.past, w.shared, w.embeds, w.spliced = past, shared, embeds, 0

@@ -29,7 +29,19 @@ using namespace metal;
 #define QKVW (QD + 2 * KVD) // one row of the fused QKV projection
 #define GROUP (NH / NKV)    // query heads per key/value head
 
-constant constexpr uint SG = 8; // simdgroups per GEMV threadgroup
+#ifndef GEMV_SIMDGROUPS
+#define GEMV_SIMDGROUPS 8
+#endif
+#ifndef GEMV_ROWS_Q8
+#define GEMV_ROWS_Q8 2
+#endif
+#ifndef GEMV_ROWS_Q8B
+#define GEMV_ROWS_Q8B 2
+#endif
+#ifndef GEMV_ROWS_HEAD
+#define GEMV_ROWS_HEAD 2
+#endif
+constant constexpr uint SG = GEMV_SIMDGROUPS; // simdgroups per GEMV threadgroup
 
 struct GemvArgs {
 	uint K, N;
@@ -49,16 +61,18 @@ enum { Q4 = 4, Q8 = 8, Q8B = 9 };
 constexpr bool eightBit(int q) { return q != Q4; }
 
 // rowsPerSimdgroup is the number of weight rows each simdgroup streams.
-constexpr uint rowsPerSimdgroup(int q) { return eightBit(q) ? 2 : 4; }
+constexpr uint rowsPerSimdgroup(int q) {
+	return q == Q8B ? GEMV_ROWS_Q8B : (q == Q8 ? GEMV_ROWS_Q8 : 4);
+}
 
 // gemv computes y = W·x for quantized rows W[N][K]. With 8-bit codes each
 // lane takes 16 values per step; with 4-bit codes, one 32-value block.
-template <int PRO, int EPI, int BITS>
+template <int PRO, int EPI, int BITS, bool HEAD>
 inline void gemv(device const uchar *W, device const void *scale, device const float *x,
 		device float *y, device const float *partsIn, device float *partsOut,
 		constant GemvArgs &a, threadgroup float *tgPart, uint tg, uint sg, uint lane) {
 	constexpr uint step = eightBit(BITS) ? 16 : 32;
-	constexpr uint RPS = rowsPerSimdgroup(BITS);
+	constexpr uint RPS = HEAD ? GEMV_ROWS_HEAD : rowsPerSimdgroup(BITS);
 	float inv = 1;
 	if (PRO == PRO_NORM) {
 		float s = 0;
@@ -147,7 +161,7 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 	}
 }
 
-#define GEMV_KERNEL(name, PRO, EPI, BITS)                                                        \
+#define GEMV_KERNEL(name, PRO, EPI, BITS, HEAD)                                                  \
 	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]],   \
 			device const float *x [[buffer(2)]], device float *y [[buffer(3)]],                    \
 			device const float *partsIn [[buffer(4)]], constant GemvArgs &a [[buffer(5)]],         \
@@ -155,19 +169,19 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 			uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],  \
 			uint lane [[thread_index_in_simdgroup]]) {                                             \
 		threadgroup float tgPart[SG];                                                            \
-		gemv<PRO, EPI, BITS>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane);        \
+		gemv<PRO, EPI, BITS, HEAD>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane);  \
 	}
 
 #define GEMV_KERNELS(suffix, BITS)                                      \
-	GEMV_KERNEL(gemv_qkv##suffix, PRO_NORM, EPI_STORE, BITS)            \
-	GEMV_KERNEL(gemv_o##suffix, PRO_PLAIN, EPI_ADD, BITS)               \
-	GEMV_KERNEL(gemv_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS)        \
-	GEMV_KERNEL(gemv_down##suffix, PRO_PLAIN, EPI_ADD, BITS)
+	GEMV_KERNEL(gemv_qkv##suffix, PRO_NORM, EPI_STORE, BITS, false)     \
+	GEMV_KERNEL(gemv_o##suffix, PRO_PLAIN, EPI_ADD, BITS, false)        \
+	GEMV_KERNEL(gemv_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS, false) \
+	GEMV_KERNEL(gemv_down##suffix, PRO_PLAIN, EPI_ADD, BITS, false)
 
 GEMV_KERNELS(, Q8)
 GEMV_KERNELS(_q8, Q8B)
 GEMV_KERNELS(_q4, Q4)
-GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B)
+GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B, true)
 
 // rotate replaces each ROT-value block of x with H·diag(signs)·x (signs
 // carry the normalization); threadgroup b of ROT/4 threads handles block b,
