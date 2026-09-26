@@ -307,7 +307,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	}
 	size := wcache.NewLayout(nil)
 	cut(size)
-	key, err := wcache.Key(st.Dir(), m.format, gpuCacheVersion, m.prefix, "")
+	key, err := wcache.Key(st.Dir(), m.cacheKind(""), gpuCacheVersion, m.prefix, "")
 	if err != nil {
 		return err
 	}
@@ -343,7 +343,7 @@ func (g *gpuModel) loadHead(m *Weights, st *safetensors.Checkpoint, name string)
 	rows := (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
 	scale := alignUp(rows * h)
 	n := scale + 2*rows*(h/q4Group)
-	key, err := wcache.Key(st.Dir(), m.format+"-lm", gpuCacheVersion, m.prefix, name)
+	key, err := wcache.Key(st.Dir(), m.cacheKind("-lm"), gpuCacheVersion, m.prefix, name)
 	if err != nil {
 		return err
 	}
@@ -2093,4 +2093,16 @@ func GPUAvailable() bool {
 		}
 	})
 	return gpuPresent
+}
+
+// cacheKind names the kind of a cache entry of m's weights, suffix added:
+// the format, and the decoder's tensor prefix when the checkpoint holds
+// more than one decoder (Qwen3-TTS's talker and code predictor), since an
+// entry replaces the others of its checkpoint and kind when it is made.
+func (m *Weights) cacheKind(suffix string) string {
+	switch m.prefix {
+	case "", "model.":
+		return m.format + suffix
+	}
+	return m.format + suffix + "-" + strings.TrimSuffix(m.prefix, ".")
 }
