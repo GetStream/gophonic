@@ -5,6 +5,7 @@ package qwen3
 
 import (
 	"context"
+	"io"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -79,7 +80,7 @@ func TestChatOfficial(t *testing.T) {
 	defer s.Close()
 	reply := func(opts chat.Options) string {
 		var b strings.Builder
-		if err := s.Reply(context.Background(), opts, func(p []byte) error { b.Write(p); return nil }); err != nil {
+		if err := s.Reply(context.Background(), opts, &b); err != nil {
 			t.Fatal(err)
 		}
 		return b.String()
@@ -106,8 +107,7 @@ func TestChatOfficial(t *testing.T) {
 		}
 		other.Add(chat.User, "Name a color.")
 		var b strings.Builder
-		if err := other.Reply(context.Background(), chat.Options{Temperature: 0.8, TopP: 0.95, Seed: 42, MaxTokens: 8},
-			func(p []byte) error { b.Write(p); return nil }); err != nil {
+		if err := other.Reply(context.Background(), chat.Options{Temperature: 0.8, TopP: 0.95, Seed: 42, MaxTokens: 8}, &b); err != nil {
 			t.Fatal(err)
 		}
 		other.Close()
@@ -168,14 +168,8 @@ func TestChatOfficial(t *testing.T) {
 			}
 		}
 		other.Add(chat.User, question)
-		var b strings.Builder
-		if err := other.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 3, MaxTokens: 24}, func(p []byte) error {
-			if b.Len() == 0 {
-				first[i] = time.Since(began)
-			}
-			b.Write(p)
-			return nil
-		}); err != nil {
+		b := timedWriter{began: began, first: &first[i]}
+		if err := other.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 3, MaxTokens: 24}, &b); err != nil {
 			t.Fatal(err)
 		}
 		other.Close()
@@ -190,7 +184,7 @@ func TestChatOfficial(t *testing.T) {
 	t.Logf("first text after %v, %v when prefilled, %v after Finished (%.3f), %v when judged as heard: %q", first[0], first[1], first[2], finished, first[3], replies[1])
 	s.Add(chat.User, "Say hi.")
 	allocs := testing.AllocsPerRun(3, func() {
-		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, TopK: 40, MaxTokens: 16}, func([]byte) error { return nil }); err != nil {
+		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, TopK: 40, Presence: 1.5, MaxTokens: 16}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		s.Add(chat.User, "Again.")
@@ -198,4 +192,18 @@ func TestChatOfficial(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("warm replies allocate %v times", allocs)
 	}
+}
+
+// timedWriter collects a reply and notes when its first piece arrived.
+type timedWriter struct {
+	strings.Builder
+	began time.Time
+	first *time.Duration
+}
+
+func (w *timedWriter) Write(p []byte) (int, error) {
+	if w.Len() == 0 {
+		*w.first = time.Since(w.began)
+	}
+	return w.Builder.Write(p)
 }

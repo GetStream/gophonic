@@ -44,7 +44,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/GetStream/gophonic"
-	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/duplex"
 	"github.com/GetStream/gophonic/speech"
 	"github.com/thesyncim/vibejson"
@@ -58,11 +57,11 @@ func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
 	asrPath := flag.String("asr", "../../models/Qwen3-ASR-1.7B", "speech recognition model")
 	turnPath := flag.String("turn", "", "turn detection model, for a speech recognizer that does not judge turns itself as Qwen3-ASR-1.7B does")
-	llmPath := flag.String("llm", "../../models/Qwen3-8B", "language model")
+	llmPath := flag.String("llm", "../../models/Qwen3-30B-A3B-Instruct-2507", "language model")
 	ttsPath := flag.String("tts", "../../models/Qwen3-TTS-12Hz-1.7B-CustomVoice", "speech synthesis model")
 	language := flag.String("language", "", "language spoken in the call (ISO 639-1); empty detects it, and Gopher answers in kind")
 	languages := flag.String("languages", "", "languages spoken in the call, comma-separated ISO 639-1 codes such as en,pt: what is heard is transcribed in one of them, and Gopher answers in kind")
-	voice := flag.String("voice", "ryan", "voice: ryan, aiden, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
+	voice := flag.String("voice", "aiden", "voice: aiden, ryan, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
 	pronto := flag.String("pronto", "https://pronto-staging.getstream.io", "Pronto app whose call to join")
 	verbose = flag.Bool("v", false, "log the input level every second")
 	flag.Parse()
@@ -105,44 +104,10 @@ func main() {
 	// said appears as the call's captions; without it, in the chat.
 	captions := newCaptions(apiKey, callType, callID)
 	cfg := config(*voice, *language, strings.FieldsFunc(*languages, func(r rune) bool { return r == ',' || r == ' ' }))
-	// Alone with one person Gopher answers everything; in a meeting, only
-	// what is addressed to it by name, and it keeps track of who said
-	// what, for when it is asked about the meeting.
-	cfg.Heard = func(text string) (string, bool) {
-		if humans.count() <= 1 {
-			return text, true
-		}
-		return present.name(mix.loudest()) + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
-	}
 	// Captions follow the voice: closed captions sentence by sentence with
 	// the app's secret; otherwise the call's chat, where each answer is one
 	// message that grows as it is spoken.
-	cfg.OnText = func(role chat.Role, text string, final bool) {
-		if role == chat.Assistant {
-			captions.assistant(text, final)
-			if l := live.Load(); l != nil {
-				l.answer("Gopher: "+text, final)
-			}
-		} else {
-			captions.show(present.name(mix.loudest()), text)
-		}
-		if !final {
-			return
-		}
-		who := present.name(mix.loudest()) + ":"
-		if role == chat.Assistant {
-			who = "Gopher:"
-		} else if l := live.Load(); l != nil {
-			l.say(who + " " + text)
-		}
-		fmt.Printf("%s %s\n", who, text)
-	}
-	cfg.OnError = func(err error) { log.Printf("agent: %v", err) }
-	cfg.OnStage = func(stage string, elapsed time.Duration) {
-		if *verbose {
-			log.Printf("reply %s after %v", stage, elapsed.Round(time.Millisecond))
-		}
-	}
+	cfg.Observer = &observer{captions: captions, live: &live}
 	agent, err := duplex.New(cfg, models...)
 	check(err)
 	defer agent.Close()
@@ -186,7 +151,7 @@ func main() {
 				name = userID
 			}
 			present.learn(userID, name)
-			if err := agent.Add(chat.System, present.name(userID)+" wrote in the call's chat: "+text); err != nil {
+			if err := agent.Note(present.name(userID) + " wrote in the call's chat: " + text); err != nil {
 				log.Printf("chat: %v", err)
 			}
 		}); err != nil {
@@ -244,7 +209,7 @@ func main() {
 	// notes, by name, as the chat does.
 	arrive := func(p *sfu_models.Participant, note string) {
 		if id := p.GetUserId(); id != self && present.arrive(id, p.GetName()) {
-			if err := agent.Add(chat.System, present.name(id)+note); err != nil {
+			if err := agent.Note(present.name(id) + note); err != nil {
 				log.Printf("agent: %v", err)
 			}
 		}
@@ -254,7 +219,7 @@ func main() {
 	})()
 	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_ParticipantLeft) {
 		if id := e.ParticipantLeft.GetParticipant().GetUserId(); id != self && present.leave(id) {
-			if err := agent.Add(chat.System, present.name(id)+" left the call."); err != nil {
+			if err := agent.Note(present.name(id) + " left the call."); err != nil {
 				log.Printf("agent: %v", err)
 			}
 		}
@@ -290,12 +255,14 @@ func main() {
 	})()
 
 	fmt.Printf("🐹 Gopher is in the call. Join and say hi: %s/join/%s?type=%s\n", *pronto, url.PathEscape(callID), callType)
-	converse(ctx, agent, mix, writer)
+	converse(ctx, agent, mix, humans, present, writer)
 }
 
 // converse runs the agent on the call's clock: every 20 ms the room's audio
-// goes in and the agent's speech comes out.
-func converse(ctx context.Context, agent speech.Duplex, mix *mixer, writer *audiortc.TrackWriter) {
+// goes in and the agent's speech comes out. In a meeting, the loudest
+// participant is named as the speaker, so the conversation knows whose
+// words it hears.
+func converse(ctx context.Context, agent *duplex.Cascade, mix *mixer, humans *roster, present *people, writer *audiortc.TrackWriter) {
 	inSize, outSize := agent.Frame()
 	_, outRate := agent.Rates()
 	in, out := make([]float32, inSize), make([]float32, outSize)
@@ -316,7 +283,14 @@ func converse(ctx context.Context, agent speech.Duplex, mix *mixer, writer *audi
 		for _, v := range heard {
 			peak = max(peak, v, -v)
 		}
-		state, err := agent.Step(ctx, heard, out)
+		if frames%10 == 0 {
+			if humans.count() > 1 {
+				agent.Speaker(present.name(mix.loudest()))
+			} else {
+				agent.Speaker("")
+			}
+		}
+		state, err := agent.Step(heard, out)
 		if err != nil {
 			return
 		}
@@ -458,6 +432,50 @@ func (m *mixer) loudest() string {
 	id, _, _ := strings.Cut(who, "/")
 	return id
 }
+
+// observer shows what is said: as the call's closed captions with the
+// app's secret, otherwise in its chat, and on the terminal.
+type observer struct {
+	duplex.Base
+	captions *captions
+	live     *atomic.Pointer[liveCaptions]
+}
+
+func (o *observer) Heard(speaker string, text []byte, final bool) {
+	if !final {
+		return
+	}
+	if speaker == "" {
+		speaker = "you"
+	}
+	o.captions.show(speaker, string(text))
+	if l := o.live.Load(); l != nil {
+		l.say(speaker + ": " + string(text))
+	}
+	fmt.Printf("%s: %s\n", speaker, text)
+}
+
+func (o *observer) Said(text []byte, voiced int, final bool) {
+	shown := string(text[:voiced])
+	if final {
+		shown = string(text)
+	}
+	o.captions.assistant(shown, final)
+	if l := o.live.Load(); l != nil {
+		l.answer("Gopher: "+shown, final)
+	}
+	if final {
+		fmt.Printf("Gopher: %s\n", text)
+	}
+}
+
+func (o *observer) Stage(s duplex.Stage, elapsed time.Duration) {
+	if *verbose {
+		log.Printf("reply %s after %v", s, elapsed.Round(time.Millisecond))
+	}
+}
+
+func (o *observer) Error(err error) { log.Printf("agent: %v", err) }
 
 // captions sends what is said as the call's closed captions.
 type captions struct {

@@ -57,6 +57,7 @@ type Model struct {
 	shortIDs    [][]int // inputs batched together (below prefixMinTokens)
 	shortDst    [][]float32
 	letters     *letterHead // answer-letter head rows for Question, or nil
+	answer      string      // what opens the assistant's answer (answerThinking or answerPlain)
 	cache       *embeddingCache
 	prefix      *PrefixKV // last long input's keys and values, or nil
 	reused      uint64    // tokens served from prefix
@@ -104,7 +105,7 @@ func (o Options) threads() int {
 }
 
 // IsModelDir reports whether dir holds a Qwen3 checkpoint: a config.json
-// whose model_type is qwen3.
+// whose model_type is qwen3, or qwen3_moe for a mixture of experts.
 func IsModelDir(dir string) bool {
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
@@ -113,7 +114,7 @@ func IsModelDir(dir string) bool {
 	var c struct {
 		ModelType string `json:"model_type"`
 	}
-	return vibejson.Unmarshal(raw, &c) == nil && c.ModelType == "qwen3"
+	return vibejson.Unmarshal(raw, &c) == nil && (c.ModelType == "qwen3" || c.ModelType == "qwen3_moe")
 }
 
 // Open loads an official Qwen3 safetensors snapshot directory, such as
@@ -148,6 +149,9 @@ func Open(path string, opts Options) (*Model, error) {
 		return nil, err
 	}
 	e.letters = letters
+	if !thinks(path) {
+		e.answer = answerPlain
+	}
 	e.ownsWeights = true
 	return e, nil
 }
@@ -169,7 +173,7 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 		_ = ws.Close()
 		return nil, err
 	}
-	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.Config().Hidden)}
+	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.Config().Hidden), answer: answerThinking}
 	if prefixTokens > 0 {
 		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
 			_ = ws.Close()

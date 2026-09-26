@@ -38,7 +38,7 @@ func (s *Session) ClassifyInto(pcm []float32, sampleRate, channels int, probs []
 	if len(probs) != len(turnLabels) {
 		return fmt.Errorf("%s: %d probabilities for %d labels", "tinymel", len(probs), len(turnLabels))
 	}
-	p, err := s.PredictInto(pcm, sampleRate, channels)
+	p, err := s.Predict(pcm, sampleRate, channels)
 	if err != nil {
 		return err
 	}
@@ -56,9 +56,9 @@ func NewSession(model *Model, helpers int) (*Session, error) {
 	return &Session{model: model, workspace: NewWorkspaceWithWorkers(helpers)}, nil
 }
 
-// PredictInto extracts features from interleaved PCM and runs TinyMelNet. A
+// Predict extracts features from interleaved PCM and runs TinyMelNet. A
 // session may be used by only one goroutine at a time.
-func (s *Session) PredictInto(pcm []float32, sampleRate, channels int) (Prediction, error) {
+func (s *Session) Predict(pcm []float32, sampleRate, channels int) (Prediction, error) {
 	if s == nil || s.closed {
 		return Prediction{}, speech.ErrClosed
 	}

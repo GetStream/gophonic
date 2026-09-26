@@ -5,6 +5,7 @@ package qwen3
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -66,14 +67,11 @@ func TestChatTools(t *testing.T) {
 			s.tools = nil // no drafts
 		}
 		s.Add(chat.User, "Hello!")
-		s.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 5, MaxTokens: 40}, func([]byte) error { return nil })
+		s.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 5, MaxTokens: 40}, io.Discard)
 		s.Add(chat.User, "Please stop talking until I say the word hi.")
 		var b strings.Builder
 		began := time.Now()
-		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 5, MaxTokens: 60}, func(p []byte) error {
-			b.Write(p)
-			return nil
-		}); err != nil {
+		if err := s.Reply(context.Background(), chat.Options{Temperature: 0.7, Seed: 5, MaxTokens: 60}, &b); err != nil {
 			t.Fatal(err)
 		}
 		took[i] = time.Since(began)
@@ -87,7 +85,7 @@ func TestChatTools(t *testing.T) {
 			t.Errorf("the call reached the text: %q", text[i])
 		}
 		// The result joins the conversation, and the conversation goes on.
-		if err := s.Add(chat.Tool, "Quiet until someone says \"hi\"."); err != nil {
+		if err := s.Add(chat.ToolResult, "Quiet until someone says \"hi\"."); err != nil {
 			t.Fatal(err)
 		}
 		s.Close()

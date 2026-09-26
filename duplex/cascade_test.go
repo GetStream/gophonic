@@ -48,15 +48,20 @@ func (fakeTranscriber) Close() error { return nil }
 
 type fakeTurns struct{}
 
-func (fakeTurns) PredictInto([]float32, int, int) (speech.Prediction, error) {
+func (fakeTurns) Predict([]float32, int, int) (speech.Prediction, error) {
 	return speech.Prediction{Probability: 1, Complete: true}, nil
 }
 func (fakeTurns) Close() error { return nil }
 
+// fakeSession replies from a script, in pieces; without one, "Hi there,
+// friend." every time. It records every message.
 type fakeSession struct {
 	mu        sync.Mutex
+	script    []string // replies, in order; a "call:name" reply calls the tool
 	messages  []string
 	truncated int
+	replies   atomic.Int32
+	calls     []chat.Call
 }
 
 func (s *fakeSession) Add(role chat.Role, text string) error {
@@ -66,15 +71,30 @@ func (s *fakeSession) Add(role chat.Role, text string) error {
 	return nil
 }
 
-func (s *fakeSession) Reply(ctx context.Context, _ chat.Options, sink func([]byte) error) error {
-	for _, p := range []string{"Hi ", "there, ", "friend."} {
-		if err := sink([]byte(p)); err != nil {
-			return err
-		}
+func (s *fakeSession) Reply(ctx context.Context, _ chat.Options, w io.Writer) error {
+	s.replies.Add(1)
+	s.calls = s.calls[:0]
+	reply := "Hi there, friend."
+	s.mu.Lock()
+	if len(s.script) > 0 {
+		reply, s.script = s.script[0], s.script[1:]
+	}
+	s.mu.Unlock()
+	if name, ok := strings.CutPrefix(reply, "call:"); ok {
+		s.calls = append(s.calls, chat.Call{Name: name, Arguments: []byte(`{"q": "x"}`)})
+		return nil
 	}
 	s.mu.Lock()
-	s.messages = append(s.messages, "Hi there, friend.")
+	s.messages = append(s.messages, reply)
 	s.mu.Unlock()
+	// In pieces of a few bytes, as a model writes.
+	for len(reply) > 0 {
+		n := min(4, len(reply))
+		if _, err := w.Write([]byte(reply[:n])); err != nil {
+			return err
+		}
+		reply = reply[n:]
+	}
 	return ctx.Err()
 }
 
@@ -88,7 +108,7 @@ func (s *fakeSession) Prefill(ctx context.Context) error { return ctx.Err() }
 func (s *fakeSession) Finished(ctx context.Context, _ chat.Role, _ string) (float32, error) {
 	return 1, ctx.Err()
 }
-func (s *fakeSession) Calls() []chat.Call { return nil }
+func (s *fakeSession) Calls() []chat.Call { return s.calls }
 func (s *fakeSession) Checkpoint() int    { s.mu.Lock(); defer s.mu.Unlock(); return len(s.messages) }
 func (s *fakeSession) Restore(mark int) error {
 	s.mu.Lock()
@@ -98,12 +118,19 @@ func (s *fakeSession) Restore(mark int) error {
 }
 func (s *fakeSession) Close() error { return nil }
 
-// fakeSynth speaks five seconds of a constant for any text.
-type fakeSynth struct{}
+func (s *fakeSession) conversation() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.messages, "|")
+}
+
+// fakeSynth speaks a constant for any text: frames of 80 ms, 62 (five
+// seconds) by default.
+type fakeSynth struct{ frames int }
 
 func (fakeSynth) SampleRate() int  { return 24000 }
 func (fakeSynth) Voices() []string { return nil }
-func (fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() ([]byte, error), out func([]float32) error) error {
+func (f fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() ([]byte, error), out func([]float32) error) error {
 	said := 0
 	for {
 		p, err := next()
@@ -121,7 +148,11 @@ func (fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() (
 	for i := range frame {
 		frame[i] = 0.5
 	}
-	for range 62 {
+	frames := f.frames
+	if frames == 0 {
+		frames = 62
+	}
+	for range frames {
 		if err := out(frame); err != nil {
 			return err
 		}
@@ -129,6 +160,37 @@ func (fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() (
 	return nil
 }
 func (fakeSynth) Close() error { return nil }
+
+// recorder keeps the final words heard and said, in order.
+type recorder struct {
+	Base
+	mu     sync.Mutex
+	final  []string
+	voiced []int // Said's voiced counts, in order
+}
+
+func (r *recorder) Heard(_ string, text []byte, final bool) {
+	if final {
+		r.mu.Lock()
+		r.final = append(r.final, string(text))
+		r.mu.Unlock()
+	}
+}
+
+func (r *recorder) Said(text []byte, voiced int, final bool) {
+	r.mu.Lock()
+	r.voiced = append(r.voiced, voiced)
+	if final {
+		r.final = append(r.final, string(text))
+	}
+	r.mu.Unlock()
+}
+
+func (r *recorder) said() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.final...)
+}
 
 func speechClip(t *testing.T) []float32 {
 	raw, err := os.ReadFile(filepath.Join("..", "testdata", "whisper_jfk.pcm.f32le"))
@@ -155,7 +217,7 @@ func run(t *testing.T, c *Cascade, audio []float32, until func(speech.DuplexStat
 		if pos+inFrame <= len(audio) {
 			copy(in, audio[pos:pos+inFrame])
 		}
-		state, err := c.Step(context.Background(), in, out)
+		state, err := c.Step(in, out)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,6 +227,10 @@ func run(t *testing.T, c *Cascade, audio []float32, until func(speech.DuplexStat
 	}
 	return false
 }
+
+func speaking(s speech.DuplexState, out []float32) bool  { return s == speech.Speaking && out[0] == 0.5 }
+func notSpeaking(s speech.DuplexState, _ []float32) bool { return s != speech.Speaking }
+func never(speech.DuplexState, []float32) bool           { return false }
 
 // Both ways of judging turns: a turn detector, or the transcriber itself.
 var judges = []struct {
@@ -181,36 +247,26 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 
 func answersAndStops(t *testing.T, asr fakeTranscriber, turns speech.TurnDetector) {
 	session := &fakeSession{}
-	var mu sync.Mutex
-	var said []string
-	c, err := New(Config{Transcriber: asr, TurnDetector: turns, Session: session, Synthesizer: fakeSynth{},
-		OnText: func(role chat.Role, text string, final bool) {
-			if final {
-				mu.Lock()
-				said = append(said, text)
-				mu.Unlock()
-			}
-		}})
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: fakeSynth{}, Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	clip := speechClip(t)
 	// Speech, then a pause: the agent answers.
-	if !run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking && out[0] == 0.5 }, 5*time.Second) {
+	if !run(t, c, clip, speaking, 5*time.Second) {
 		t.Fatal("the agent never spoke")
 	}
 	// Speech over the answer, once it is under way, interrupts it: its
 	// audio stops.
-	run(t, c, nil, func(speech.DuplexState, []float32) bool { return false }, resumeWindow+200*time.Millisecond)
-	stopped := run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return s != speech.Speaking }, 2*time.Second)
-	if !stopped {
+	run(t, c, nil, never, resumeWindow+200*time.Millisecond)
+	if !run(t, c, clip, notSpeaking, 2*time.Second) {
 		t.Fatal("the agent kept speaking over the user")
 	}
 	// Let the responder record the interruption.
 	time.Sleep(200 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
+	said := rec.said()
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if len(said) < 2 || said[0] != "hello gopher" || !strings.HasSuffix(said[1], "…") {
@@ -231,232 +287,341 @@ func TestCascadeLetsTheSpeakerGoOn(t *testing.T) {
 
 func letsTheSpeakerGoOn(t *testing.T, asr fakeTranscriber, turns speech.TurnDetector) {
 	session := &fakeSession{}
-	var mu sync.Mutex
-	var said []string
-	c, err := New(Config{Transcriber: asr, TurnDetector: turns, Session: session, Synthesizer: fakeSynth{},
-		OnText: func(role chat.Role, text string, final bool) {
-			if final {
-				mu.Lock()
-				said = append(said, text)
-				mu.Unlock()
-			}
-		}})
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: fakeSynth{}, Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	clip := speechClip(t)
-	speaking := func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking && out[0] == 0.5 }
 	if !run(t, c, clip, speaking, 5*time.Second) {
 		t.Fatal("the agent never spoke")
 	}
-	mu.Lock()
-	if len(said) != 0 {
+	if said := rec.said(); len(said) != 0 {
 		t.Fatalf("captions %q before the answer was under way", said)
 	}
-	mu.Unlock()
 	// The speaker goes on at once: the answer stops, then comes again.
-	if !run(t, c, clip, func(s speech.DuplexState, _ []float32) bool { return s != speech.Speaking }, time.Second) {
+	if !run(t, c, clip, notSpeaking, time.Second) {
 		t.Fatal("the agent kept speaking over the speaker going on")
 	}
 	if !run(t, c, clip[:0], speaking, 5*time.Second) {
 		t.Fatal("the agent never answered the whole utterance")
 	}
-	run(t, c, nil, func(speech.DuplexState, []float32) bool { return false }, resumeWindow+200*time.Millisecond)
-	session.mu.Lock()
-	defer session.mu.Unlock()
+	run(t, c, nil, never, resumeWindow+200*time.Millisecond)
 	// The first answer was forgotten; the second is under way.
-	if got := strings.Join(session.messages, "|"); got != "hello gopher|Hi there, friend." {
+	if got := session.conversation(); got != "hello gopher|Hi there, friend." {
 		t.Fatalf("conversation %q", got)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(said) != 1 || said[0] != "hello gopher" {
+	if said := rec.said(); len(said) != 1 || said[0] != "hello gopher" {
 		t.Fatalf("captions %q; want the utterance once", said)
 	}
 }
 
 func TestCascadeStepAllocatesNothing(t *testing.T) {
-	c, err := New(Config{Transcriber: fakeTranscriber{}, TurnDetector: fakeTurns{}, Session: &fakeSession{}, Synthesizer: fakeSynth{}})
+	c, err := New(Config{Transcriber: fakeTranscriber{}, Turns: fakeTurns{}, Session: &fakeSession{}, Voice: fakeSynth{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	in, out := make([]float32, inFrame), make([]float32, c.outSize)
-	if allocs := testing.AllocsPerRun(100, func() { c.Step(context.Background(), in, out) }); allocs != 0 {
+	if allocs := testing.AllocsPerRun(100, func() { c.Step(in, out) }); allocs != 0 {
 		t.Fatalf("Step allocates %v times", allocs)
 	}
-}
-
-// toolSession answers a user's message with a call to lookup, then, given
-// its result, in words.
-type toolSession struct {
-	fakeSession
-	calls []chat.Call
-}
-
-func (s *toolSession) Reply(ctx context.Context, opts chat.Options, sink func([]byte) error) error {
-	s.mu.Lock()
-	last := s.messages[len(s.messages)-1]
-	s.mu.Unlock()
-	s.calls = s.calls[:0]
-	if last == "hello gopher" {
-		s.calls = append(s.calls, chat.Call{Name: "lookup", Arguments: []byte(`{"q": "x"}`)})
-		return nil
+	if allocs := testing.AllocsPerRun(100, func() { c.Speaker("Ana") }); allocs != 0 {
+		t.Fatalf("Speaker allocates %v times", allocs)
 	}
-	return s.fakeSession.Reply(ctx, opts, sink)
 }
-
-func (s *toolSession) Calls() []chat.Call { return s.calls }
 
 // A call runs once the turn is over, its result joins the conversation,
-// and a result that needs words has the agent answer.
+// and the agent answers again knowing it.
 func TestCascadeRunsTools(t *testing.T) {
-	session := &toolSession{}
+	session := &fakeSession{script: []string{"call:lookup"}}
 	var runs atomic.Int32
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Synthesizer: fakeSynth{},
-		Tools: []Tool{{ToolSpec: chat.ToolSpec{Name: "lookup"}, Run: func(_ context.Context, args []byte) (string, bool, error) {
-			runs.Add(1)
-			return "found " + string(args), true, nil
-		}}}})
+	lookup := chat.Func("lookup", "Looks up.", func(_ context.Context, args struct {
+		Q string `json:"q"`
+	}) (string, error) {
+		runs.Add(1)
+		return "found " + args.Q, nil
+	})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{}, Tools: []chat.Tool{lookup}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if !run(t, c, speechClip(t), func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking && out[0] == 0.5 }, 5*time.Second) {
+	if !run(t, c, speechClip(t), speaking, 5*time.Second) {
 		t.Fatal("the agent never spoke")
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if got := strings.Join(session.messages, "|"); runs.Load() != 1 || got != `hello gopher|found {"q": "x"}|Hi there, friend.` {
+	if got := session.conversation(); runs.Load() != 1 || got != `hello gopher|found x|Hi there, friend.` {
 		t.Fatalf("%d runs; conversation %q", runs.Load(), got)
 	}
 }
 
-// silentSession always chooses silence until "hi", in pieces.
-type silentSession struct {
-	fakeSession
-	replies atomic.Int32
-}
-
-func (s *silentSession) Reply(ctx context.Context, _ chat.Options, sink func([]byte) error) error {
-	s.replies.Add(1)
-	for _, p := range []string{"<sil", "ent until ", `"hi">`} {
-		if err := sink([]byte(p)); err != nil {
-			return err
+// The model may choose silence: nothing is spoken, what was said joins the
+// conversation, and each utterance (and each pause within one) is judged
+// again in context.
+func TestCascadeKeepsSilence(t *testing.T) {
+	session := &fakeSession{script: []string{`<silent until "hi">`, "<silent>", "<silent>", "<silent>", "<silent>", "<silent>"}}
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{}, Observer: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	clip := speechClip(t)
+	for i := range 2 {
+		if run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return out[0] != 0 }, 3*time.Second) {
+			t.Fatalf("the agent spoke in round %d; conversation %q, captions %q", i, session.conversation(), rec.said())
 		}
 	}
-	s.mu.Lock()
-	s.messages = append(s.messages, `<silent until "hi">`)
-	s.mu.Unlock()
-	return nil
+	// The silence's condition is noted before each later moment, until
+	// the agent speaks.
+	got := session.conversation()
+	if session.replies.Load() < 2 || !strings.HasPrefix(got, `hello gopher|<silent until "hi">|You are staying silent until "hi" happens: reply <silent> unless it has.|hello gopher|<silent>`) ||
+		strings.Contains(got, "Hi there") {
+		t.Fatalf("%d replies; conversation %q", session.replies.Load(), got)
+	}
+	for _, s := range rec.said() {
+		if s != "hello gopher" {
+			t.Fatalf("captions %q; want the utterances alone", rec.said())
+		}
+	}
 }
 
-type fakeWake struct{ speak float32 }
+// fakeQuiet judges every message the same way; as a Wake, it says whether
+// the message ends a silence.
+type fakeQuiet struct{ asks bool }
 
-func (w fakeWake) Labels() []string { return []string{"stay", "speak"} }
-func (w fakeWake) ClassifyInto(_ context.Context, _ string, probs []float32) error {
-	probs[0], probs[1] = 1-w.speak, w.speak
+func (fakeQuiet) Labels() []string { return quietLabels }
+func (q fakeQuiet) ClassifyInto(_ context.Context, _ string, probs []float32) error {
+	probs[0], probs[1] = 1, 0
+	if q.asks {
+		probs[0], probs[1] = 0, 1
+	}
 	return nil
 }
-func (fakeWake) Close() error { return nil }
+func (fakeQuiet) Close() error { return nil }
 
-// The model may choose silence: nothing is spoken, and until what it named
-// happens, what is said joins the conversation without being answered.
-func TestCascadeKeepsSilence(t *testing.T) {
-	session := &silentSession{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Synthesizer: fakeSynth{}, Wake: fakeWake{speak: 0.1}})
+// With a Wake, a silence the model chose until something happens is kept
+// through words that do not end it, without asking the model, and ended
+// by words that do, the model told so.
+func TestCascadeWakes(t *testing.T) {
+	session := &fakeSession{script: []string{`<silent until "hi">`, "Hello!"}}
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5},
+		Wake: fakeQuiet{asks: false}, Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	clip := speechClip(t)
 	for range 2 {
-		if run(t, c, clip, func(s speech.DuplexState, out []float32) bool { return out[0] != 0 }, 3*time.Second) {
-			t.Fatal("the agent spoke")
+		if run(t, c, clip, speaking, 3*time.Second) {
+			t.Fatalf("the agent spoke; conversation %q", session.conversation())
 		}
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	// One reply, the silence; what was said after it is context only.
-	got := strings.Join(session.messages, "|")
-	if session.replies.Load() != 1 || !strings.HasPrefix(got, `hello gopher|<silent until "hi">|hello gopher`) ||
-		strings.Count(got, "<silent") != 1 {
+	if got := session.conversation(); session.replies.Load() != 1 || !strings.HasPrefix(got, `hello gopher|<silent until "hi">|hello gopher`) {
 		t.Fatalf("%d replies; conversation %q", session.replies.Load(), got)
+	}
+	c.cfg.Wake = fakeQuiet{asks: true}
+	if !run(t, c, clip, speaking, 5*time.Second) {
+		t.Fatalf("the agent stayed silent; conversation %q", session.conversation())
+	}
+	if got := session.conversation(); !strings.HasSuffix(got, `What you were waiting for ("hi") has happened: answer now.|hello gopher|Hello!`) {
+		t.Fatalf("conversation %q", got)
+	}
+}
+
+// A silence until something happens, chosen when no one asked for quiet,
+// is overruled: the agent answers, told why.
+func TestCascadeOverrulesSilence(t *testing.T) {
+	session := &fakeSession{script: []string{`<silent until "return">`}}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Return."}, Session: session, Voice: fakeSynth{frames: 5},
+		Quiet: fakeQuiet{asks: false}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, speechClip(t), speaking, 5*time.Second) {
+		t.Fatal("the agent kept a silence no one asked for")
+	}
+	run(t, c, nil, notSpeaking, 3*time.Second)
+	if got := session.conversation(); !strings.HasSuffix(got, "Return.|"+notAskedQuiet+"|Hi there, friend.") || strings.Contains(got, "<silent") {
+		t.Fatalf("conversation %q", got)
+	}
+	// Asked for, the silence stands.
+	session = &fakeSession{script: []string{`<silent until "hi">`, "<silent>", "<silent>", "<silent>"}}
+	c2, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Be quiet until I say hi."}, Session: session, Voice: fakeSynth{frames: 5},
+		Quiet: fakeQuiet{asks: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+	if run(t, c2, speechClip(t), speaking, 3*time.Second) {
+		t.Fatalf("the agent spoke; conversation %q", session.conversation())
+	}
+}
+
+// A reply that ends with <silent 1s> is spoken, and the agent is asked
+// again after a second: a reminder needs no tool.
+func TestCascadePlansAMoment(t *testing.T) {
+	session := &fakeSession{script: []string{"Sure, I will remind you. <silent 1s>", "This is your reminder."}}
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}, Observer: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, speechClip(t), speaking, 5*time.Second) {
+		t.Fatal("the agent never spoke")
+	}
+	if !run(t, c, nil, notSpeaking, 3*time.Second) {
+		t.Fatal("the agent never finished")
+	}
+	began := time.Now()
+	if !run(t, c, nil, speaking, 4*time.Second) {
+		t.Fatal("the agent never came back")
+	}
+	if since := time.Since(began); since < 800*time.Millisecond {
+		t.Fatalf("came back after %v; want about a second", since)
+	}
+	run(t, c, nil, notSpeaking, 3*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	if got := session.conversation(); got != "hello gopher|Sure, I will remind you. <silent 1s>|The time you asked to wait has passed.|This is your reminder." {
+		t.Fatalf("conversation %q", got)
+	}
+	if said := rec.said(); len(said) != 3 || said[1] != "Sure, I will remind you." || said[2] != "This is your reminder." {
+		t.Fatalf("captions %q", said)
+	}
+}
+
+// A note is a moment: the agent may answer it, once no one is speaking.
+func TestCascadeAnswersNotes(t *testing.T) {
+	session := &fakeSession{script: []string{"Hi Ana!"}}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Note("Ana joined the call."); err != nil {
+		t.Fatal(err)
+	}
+	if !run(t, c, nil, speaking, 3*time.Second) {
+		t.Fatal("the agent never answered the note")
+	}
+	run(t, c, nil, notSpeaking, 3*time.Second)
+	if got := session.conversation(); got != "Ana joined the call.|Hi Ana!" {
+		t.Fatalf("conversation %q", got)
+	}
+}
+
+// After Idle of quiet the agent is asked once whether it has something to
+// say.
+func TestCascadeIdleMoment(t *testing.T) {
+	session := &fakeSession{script: []string{"Is anyone there?"}}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}, Idle: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, nil, speaking, 3*time.Second) {
+		t.Fatal("the agent never spoke up")
+	}
+	run(t, c, nil, notSpeaking, 3*time.Second)
+	if got := session.conversation(); got != "Nothing has happened for a while.|Is anyone there?" {
+		t.Fatalf("conversation %q", got)
+	}
+}
+
+// The speaker's name joins the conversation once, when the speaker
+// changes, and the words stay as they were said.
+func TestCascadeNotesTheSpeaker(t *testing.T) {
+	session := &fakeSession{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Speaker("Ana")
+	clip := speechClip(t)
+	for range 2 {
+		if !run(t, c, clip, speaking, 5*time.Second) {
+			t.Fatal("the agent never spoke")
+		}
+		run(t, c, nil, notSpeaking, 3*time.Second)
+	}
+	if got := session.conversation(); got != "Ana is speaking.|hello gopher|Hi there, friend.|hello gopher|Hi there, friend." {
+		t.Fatalf("conversation %q", got)
+	}
+}
+
+func TestMarker(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		n     int
+		wait  time.Duration
+		until string
+		ok    bool
+	}{
+		{"<silent>", 8, 0, "", true},
+		{"<silent> and more", 8, 0, "", true},
+		{"<silent 30s>", 12, 30 * time.Second, "", true},
+		{"<silent 30>", 11, 30 * time.Second, "", true},
+		{"<silent for 2 minutes>", 22, 2 * time.Minute, "", true},
+		{"<silent 500ms>", 14, 500 * time.Second, "", true}, // no milliseconds: seconds
+		{`<silent until "hi">`, 19, 0, "hi", true},
+		{`<silent until Ana says go>`, 26, 0, "Ana says go", true},
+		{"<silent until>", 14, 0, "being asked to speak", true},
+		{"<sil", -1, 0, "", false},
+		{"<silent 30", -1, 0, "", false},
+		{"<3 you", 0, 0, "", false},
+		{"hello", 0, 0, "", false},
+	} {
+		n, wait, until, ok := marker([]byte(c.in))
+		if n != c.n || wait != c.wait || until != c.until || ok != c.ok {
+			t.Errorf("%q: %d %v %q %v; want %d %v %q %v", c.in, n, wait, until, ok, c.n, c.wait, c.until, c.ok)
+		}
 	}
 }
 
 func TestEchoOf(t *testing.T) {
 	for _, c := range []struct {
-		reply   string
-		n       int // bytes of reply that repeat, if it does
-		holding bool
+		reply, message string
+		n              int // bytes of reply that repeat, if it does
+		holding        bool
 	}{
-		{"Three, two, one. Got it.", len("Three, two, one"), false},
-		{"Cherry Judge said: How is it going? Fine.", len("Cherry Judge said: How is it going"), false},
-		{"How is it going? I'm well.", len("How is it going"), false},
-		{"How is", 0, true},
-		{"How is it g", 0, true},
-		{"How about you?", 0, false},
-		{"Sempre é só fazer tudo bem.", len("Sempre é só fazer tudo bem"), false},
-		{"So, you're heading out!", 0, false},
+		{"Three, two, one. Got it.", "Three, two, one.", len("Three, two, one"), false},
+		{"How is it going? I'm well.", "How is it going?", len("How is it going"), false},
+		{"How is", "How is it going?", 0, true},
+		{"How is it g", "How is it going?", 0, true},
+		{"How about you?", "How is it going?", 0, false},
+		{"Sempre é só fazer tudo bem.", "sempre é só fazer tudo bem.", len("Sempre é só fazer tudo bem"), false},
+		{"So, you're heading out!", "How is it going?", 0, false},
+		{"Hi there.", "Hi.", 0, false}, // short messages are answered, not repeated
 	} {
-		n, holding := echoOf(c.reply, "Cherry Judge said: How is it going?", "How is it going?")
-		if c.reply[0] == 'T' {
-			n, holding = echoOf(c.reply, "Three, two, one.")
-		}
-		if c.reply[0] == 'S' {
-			n, holding = echoOf(c.reply, "sempre é só fazer tudo bem.")
-		}
+		n, holding := echoOf(c.reply, c.message)
 		if n != c.n || holding != c.holding {
 			t.Errorf("%q: %d, %v; want %d, %v", c.reply, n, holding, c.n, c.holding)
 		}
 	}
 }
 
-// echoSession reads the question back before answering it.
-type echoSession struct{ fakeSession }
-
-func (s *echoSession) Reply(ctx context.Context, _ chat.Options, sink func([]byte) error) error {
-	for _, p := range []string{"How is it ", "going? ", "Fine, ", "thanks."} {
-		if err := sink([]byte(p)); err != nil {
-			return err
-		}
-	}
-	s.mu.Lock()
-	s.messages = append(s.messages, "How is it going? Fine, thanks.")
-	s.mu.Unlock()
-	return nil
-}
-
 // A reply that reads back what it answers says only the rest, and the
 // conversation keeps it as said.
 func TestCascadeDropsEcho(t *testing.T) {
-	session := &echoSession{}
-	var mu sync.Mutex
-	var said []string
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "How is it going?"}, Session: session, Synthesizer: fakeSynth{},
-		OnText: func(role chat.Role, text string, final bool) {
-			if final && role == chat.Assistant {
-				mu.Lock()
-				said = append(said, text)
-				mu.Unlock()
-			}
-		}})
+	session := &fakeSession{script: []string{"How is it going? Fine, thanks."}}
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "How is it going?"}, Session: session, Voice: fakeSynth{}, Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if !run(t, c, speechClip(t), func(s speech.DuplexState, out []float32) bool { return s == speech.Speaking }, 5*time.Second) {
+	if !run(t, c, speechClip(t), func(s speech.DuplexState, _ []float32) bool { return s == speech.Speaking }, 5*time.Second) {
 		t.Fatal("the agent never spoke")
 	}
-	run(t, c, nil, func(s speech.DuplexState, _ []float32) bool { return s == speech.Listening }, 5*time.Second)
+	run(t, c, nil, func(s speech.DuplexState, _ []float32) bool { return s == speech.Listening }, 6*time.Second)
 	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if len(said) == 0 || said[0] != "Fine, thanks." || session.messages[len(session.messages)-1] != "Fine, thanks." {
-		t.Fatalf("said %q; conversation %q", said, session.messages)
+	said := rec.said()
+	if got := session.conversation(); len(said) < 2 || said[1] != "Fine, thanks." || !strings.HasSuffix(got, "|Fine, thanks.") {
+		t.Fatalf("said %q; conversation %q", said, got)
 	}
 }

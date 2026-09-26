@@ -142,10 +142,10 @@ func listen(ctx context.Context, t rtc.OnTrackReceived, turn, stt *gophonic.Mode
 	reader, err := audiortc.NewTrackReader(t.Track, audiortc.ReaderConfig{Opus: opus.Config{SampleRate: rate}})
 	check(err)
 	defer reader.Close()
-	detector, err := turn.NewTurnDetector()
+	detector, err := gophonic.Lane[speech.TurnDetector](turn)
 	check(err)
 	defer detector.Close()
-	transcriber, err := stt.NewTranscriber()
+	transcriber, err := gophonic.Lane[speech.Transcriber](stt)
 	check(err)
 	defer transcriber.Close()
 	vad, err := gopus.NewVAD(rate)
@@ -192,7 +192,7 @@ func listen(ctx context.Context, t rtc.OnTrackReceived, turn, stt *gophonic.Mode
 				continue
 			}
 			start := time.Now()
-			p, err := detector.PredictInto(spoken, rate, 1)
+			p, err := detector.Predict(spoken, rate, 1)
 			if err != nil || (!p.Complete && silence < giveUp) {
 				if err == nil && talked >= shortest && silence == pause {
 					fmt.Printf("  · %s paused, not done yet (%.2f)\n", name, p.Probability)

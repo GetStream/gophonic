@@ -28,7 +28,7 @@ func newExampleExternalSession() *exampleExternalSession {
 	}
 }
 
-func (s *exampleExternalSession) PredictInto(pcm []float32, sampleRate, channels int) (speech.Prediction, error) {
+func (s *exampleExternalSession) Predict(pcm []float32, sampleRate, channels int) (speech.Prediction, error) {
 	if s == nil || s.closed {
 		return speech.Prediction{}, speech.ErrClosed
 	}
@@ -54,7 +54,7 @@ func TestExternalPackageCanImplementTurnDetector(t *testing.T) {
 	defer custom.Close()
 	var session speech.TurnDetector = custom
 
-	got, err := session.PredictInto(pcm, 16000, 1)
+	got, err := session.Predict(pcm, 16000, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestExternalPackageCanImplementTurnDetector(t *testing.T) {
 		t.Fatalf("external session prediction = %+v", got)
 	}
 	if allocs := testing.AllocsPerRun(3, func() {
-		if _, err := session.PredictInto(pcm, 16000, 1); err != nil {
+		if _, err := session.Predict(pcm, 16000, 1); err != nil {
 			t.Fatal(err)
 		}
 	}); allocs != 0 {
@@ -71,7 +71,7 @@ func TestExternalPackageCanImplementTurnDetector(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PredictInto(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
+	if _, err := session.Predict(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
 		t.Fatalf("prediction after Close error = %v, want speech.ErrClosed", err)
 	}
 }

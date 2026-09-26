@@ -88,7 +88,7 @@ func run(inputs []string) error {
 }
 
 func transcribe(model *gophonic.Model, paths []string) error {
-	transcriber, err := model.NewTranscriber()
+	transcriber, err := gophonic.Lane[speech.Transcriber](model)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func transcribe(model *gophonic.Model, paths []string) error {
 }
 
 func detectTurns(model *gophonic.Model, out *vibejson.Writer, paths []string) error {
-	detector, err := model.NewTurnDetector()
+	detector, err := gophonic.Lane[speech.TurnDetector](model)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func detectTurns(model *gophonic.Model, out *vibejson.Writer, paths []string) er
 		if err != nil {
 			return err
 		}
-		prediction, err := detector.PredictInto(pcm, rate, channels)
+		prediction, err := detector.Predict(pcm, rate, channels)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}

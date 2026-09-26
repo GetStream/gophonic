@@ -7,15 +7,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/internal/safetensors"
+	"github.com/thesyncim/vibejson"
 )
 
 // Chat generates text with a Qwen3 model: it is a chat.Generator whose
@@ -77,7 +82,27 @@ func OpenChat(path string, opts Options) (*Chat, error) {
 		return nil, err
 	}
 	c.own, c.path = true, path
+	if !thinks(path) {
+		c.answer = slices.Clone(c.header[chat.Assistant])
+	}
 	return c, nil
+}
+
+// thinks reports whether the chat template of the snapshot at path has
+// Qwen3's thinking block, which a non-thinking reply opens empty. The
+// Instruct-2507 models have none: their replies start after the header.
+func thinks(path string) bool {
+	raw, err := os.ReadFile(filepath.Join(path, "tokenizer_config.json"))
+	if err != nil {
+		return true
+	}
+	var cfg struct {
+		Template string `json:"chat_template"`
+	}
+	if vibejson.Unmarshal(raw, &cfg) != nil || cfg.Template == "" {
+		return true
+	}
+	return strings.Contains(cfg.Template, "<think>")
 }
 
 // Questions returns a Model for embeddings and zero-shot questions that
@@ -105,6 +130,9 @@ func (c *Chat) Questions(opts Options) (*Model, error) {
 		return nil, err
 	}
 	m.letters = letters
+	if !thinks(c.path) {
+		m.answer = answerPlain
+	}
 	return m, nil
 }
 
@@ -140,9 +168,9 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 	c.header[chat.System] = encode("<|im_start|>system\n")
 	c.header[chat.User] = encode("<|im_start|>user\n")
 	c.header[chat.Assistant] = encode("<|im_start|>assistant\n")
-	c.header[chat.Tool] = encode("<|im_start|>user\n<tool_response>\n")
+	c.header[chat.ToolResult] = encode("<|im_start|>user\n<tool_response>\n")
 	c.resultEnd = encode("\n</tool_response>")
-	c.answer = encode("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+	c.answer = encode(answerThinking)
 	if err != nil {
 		return nil, fmt.Errorf("qwen3: chat template: %w", err)
 	}
@@ -260,6 +288,10 @@ type Session struct {
 	call    []byte    // its text
 	callIDs []int     // its tokens
 	vlogits []float32 // the logits of drafted states
+
+	// The tokens of the reply so far, for the presence penalty.
+	seen    []bool
+	seenIDs []int
 }
 
 // toolDraft is a tool's name and the tokens a call to it starts with.
@@ -275,7 +307,7 @@ func (s *Session) Add(role chat.Role, text string) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
-	if role > chat.Tool {
+	if role > chat.ToolResult {
 		return fmt.Errorf("qwen3: unknown role %d", role)
 	}
 	c := s.c
@@ -291,7 +323,7 @@ func (s *Session) Add(role chat.Role, text string) error {
 		return fmt.Errorf("qwen3: tokenize message: %w", err)
 	}
 	s.ids = s.ids[:start+len(body)]
-	if role == chat.Tool {
+	if role == chat.ToolResult {
 		s.ids = append(s.ids, c.resultEnd...)
 	}
 	s.ids = append(s.ids, c.imEnd)
@@ -304,7 +336,7 @@ func (s *Session) Add(role chat.Role, text string) error {
 func (s *Session) Calls() []chat.Call { return s.calls }
 
 // Reply generates the assistant's next message.
-func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece []byte) error) error {
+func (s *Session) Reply(ctx context.Context, opts chat.Options, w io.Writer) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -339,6 +371,7 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 	s.sample.reset(opts)
 	s.text = s.text[:0]
 	s.calls, s.calling = s.calls[:0], false
+	s.forget()
 	var err error
 	next, sampled := 0, false // sampled: next was drawn while checking a draft
 	for n := 0; n < room; n++ {
@@ -346,13 +379,14 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 			if err = c.eval.LogitsInto(s.hidden, s.logits, c.ws); err != nil {
 				break
 			}
+			s.penalize(s.logits, opts)
 			next = s.sample.next(s.logits, opts)
 		}
 		sampled = false
 		if next == c.imEnd || next == c.endText {
 			break
 		}
-		if err = s.take(next, sink); err != nil || n+1 == room {
+		if err = s.take(next, w); err != nil || n+1 == room {
 			break
 		}
 		if err = ctx.Err(); err != nil {
@@ -371,13 +405,13 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 			continue
 		}
 		var taken int
-		if taken, next, err = s.verify(draft, opts, sink); err != nil {
+		if taken, next, err = s.verify(draft, opts, w); err != nil {
 			break
 		}
 		n += taken
 		sampled = true
 	}
-	if ferr := s.emit(nil, sink, true); err == nil {
+	if ferr := s.emit(nil, w, true); err == nil {
 		err = ferr
 	}
 	s.ids = append(s.ids, c.imEnd)
@@ -396,11 +430,12 @@ func (s *Session) Reply(ctx context.Context, opts chat.Options, sink func(piece 
 // reply's start, grown after a reply when it runs short.
 const roomAhead = 512
 
-// take appends a token of the reply: text goes to sink, and a tool call's
+// take appends a token of the reply: text goes to w, and a tool call's
 // tokens are collected until it closes, when the call is recorded.
-func (s *Session) take(id int, sink func([]byte) error) error {
+func (s *Session) take(id int, w io.Writer) error {
 	c := s.c
 	s.ids = append(s.ids, id)
+	s.remember(id)
 	switch {
 	case id == c.callOpen:
 		s.calling, s.call, s.callIDs = true, s.call[:0], s.callIDs[:0]
@@ -413,9 +448,38 @@ func (s *Session) take(id int, sink func([]byte) error) error {
 		s.call = append(s.call, c.tokens.Piece(id)...)
 		s.callIDs = append(s.callIDs, id)
 	default:
-		return s.emit(c.tokens.Piece(id), sink, false)
+		return s.emit(c.tokens.Piece(id), w, false)
 	}
 	return nil
+}
+
+// remember records a token of the reply, for the presence penalty.
+func (s *Session) remember(id int) {
+	if len(s.seen) == 0 {
+		s.seen = make([]bool, s.c.weights.Config().Vocab)
+	}
+	if !s.seen[id] {
+		s.seen[id] = true
+		s.seenIDs = append(s.seenIDs, id)
+	}
+}
+
+// forget clears the tokens remembered for the presence penalty.
+func (s *Session) forget() {
+	for _, id := range s.seenIDs {
+		s.seen[id] = false
+	}
+	s.seenIDs = s.seenIDs[:0]
+}
+
+// penalize lowers the logits of the tokens the reply already holds.
+func (s *Session) penalize(logits []float32, opts chat.Options) {
+	if opts.Presence == 0 {
+		return
+	}
+	for _, id := range s.seenIDs {
+		logits[id] -= opts.Presence
+	}
 }
 
 // record adds the call just written to Calls, if it is well formed.
@@ -473,7 +537,7 @@ func (s *Session) draft(max int) []int {
 // then samples each position as decoding one token at a time would, taking
 // drafted tokens while the samples agree. It returns how many it took and
 // the first sample that is not a drafted token, which comes next.
-func (s *Session) verify(draft []int, opts chat.Options, sink func([]byte) error) (taken, next int, err error) {
+func (s *Session) verify(draft []int, opts chat.Options, w io.Writer) (taken, next int, err error) {
 	c, h, vocab := s.c, len(s.hidden), len(s.logits)
 	base := len(s.ids) - 1
 	s.probe = append(append(s.probe[:0], s.ids[base]), draft...)
@@ -487,12 +551,14 @@ func (s *Session) verify(draft []int, opts chat.Options, sink func([]byte) error
 		return 0, 0, err
 	}
 	for i := range k {
-		x := s.sample.next(s.vlogits[i*vocab:(i+1)*vocab], opts)
+		logits := s.vlogits[i*vocab : (i+1)*vocab]
+		s.penalize(logits, opts)
+		x := s.sample.next(logits, opts)
 		if i == len(draft) || x != draft[i] {
 			copy(s.hidden, s.tail[i*h:(i+1)*h])
 			return taken, x, nil
 		}
-		if err := s.take(x, sink); err != nil {
+		if err := s.take(x, w); err != nil {
 			return taken, 0, err
 		}
 		taken++
@@ -648,10 +714,10 @@ func (s *Session) Prefill(ctx context.Context) error {
 	return c.eval.HiddenLastExtendInto(s.kv, keep, s.ids[keep:], s.hidden, c.ws)
 }
 
-// emit passes the complete UTF-8 prefix of the text decoded so far, plus
-// piece, to sink, keeping an incomplete trailing sequence for the next
-// piece; flush passes everything.
-func (s *Session) emit(piece []byte, sink func([]byte) error, flush bool) error {
+// emit writes the complete UTF-8 prefix of the text decoded so far, plus
+// piece, to w, keeping an incomplete trailing sequence for the next piece;
+// flush writes everything.
+func (s *Session) emit(piece []byte, w io.Writer, flush bool) error {
 	s.text = append(s.text, piece...)
 	cut := len(s.text)
 	if !flush {
@@ -660,7 +726,7 @@ func (s *Session) emit(piece []byte, sink func([]byte) error, flush bool) error 
 	if cut == 0 {
 		return nil
 	}
-	err := sink(s.text[:cut])
+	_, err := w.Write(s.text[:cut])
 	s.text = s.text[:copy(s.text, s.text[cut:])]
 	return err
 }

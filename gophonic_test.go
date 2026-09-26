@@ -45,10 +45,10 @@ func TestOpenWhisper(t *testing.T) {
 	if model.Name() != "whisper" || !gophonic.Supports[speech.Transcriber](model) {
 		t.Fatalf("Open = %s providing %v, want whisper transcription", model.Name(), model.Provides())
 	}
-	if _, err := model.NewTurnDetector(); !errors.Is(err, speech.ErrUnsupported) {
-		t.Fatalf("NewTurnDetector error = %v, want speech.ErrUnsupported", err)
+	if _, err := gophonic.Lane[speech.TurnDetector](model); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Lane[TurnDetector] error = %v, want speech.ErrUnsupported", err)
 	}
-	lane, err := model.NewTranscriber()
+	lane, err := gophonic.Lane[speech.Transcriber](model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,15 +105,15 @@ func TestRegisteredFormat(t *testing.T) {
 	if err != nil || !mod.Flag("anything") {
 		t.Fatalf("moderator lane: %v", err)
 	}
-	detector, err := model.NewTurnDetector()
+	detector, err := gophonic.Lane[speech.TurnDetector](model)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := detector.PredictInto(nil, 16000, 1); err != nil || !p.Complete {
-		t.Fatalf("PredictInto = %+v, %v", p, err)
+	if p, err := detector.Predict(nil, 16000, 1); err != nil || !p.Complete {
+		t.Fatalf("Predict = %+v, %v", p, err)
 	}
-	if _, err := model.NewTranscriber(); !errors.Is(err, speech.ErrUnsupported) {
-		t.Fatalf("NewTranscriber error = %v, want speech.ErrUnsupported", err)
+	if _, err := gophonic.Lane[speech.Transcriber](model); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Lane[Transcriber] error = %v, want speech.ErrUnsupported", err)
 	}
 	if model.Close() != nil || model.Close() != nil || closed != 1 {
 		t.Fatalf("Close ran %d times", closed)
@@ -127,7 +127,7 @@ type fixedDetector struct{}
 
 func (fixedDetector) Flag(string) bool { return true }
 
-func (fixedDetector) PredictInto([]float32, int, int) (speech.Prediction, error) {
+func (fixedDetector) Predict([]float32, int, int) (speech.Prediction, error) {
 	return speech.Prediction{Probability: 1, Complete: true}, nil
 }
 

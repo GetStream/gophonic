@@ -19,7 +19,7 @@ func TestSessionConstructorAndClosedState(t *testing.T) {
 		t.Fatalf("NewSession(nil, 0) error = %v, want ErrNilModel", err)
 	}
 	var s *Session
-	if _, err := s.PredictInto(nil, 16000, 1); !errors.Is(err, speech.ErrClosed) {
+	if _, err := s.Predict(nil, 16000, 1); !errors.Is(err, speech.ErrClosed) {
 		t.Fatalf("nil Session prediction error = %v, want speech.ErrClosed", err)
 	}
 	if err := s.Close(); err != nil {
@@ -48,7 +48,7 @@ func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
 	}
 	defer concrete.Close()
 	var session speech.TurnDetector = concrete
-	got, err := session.PredictInto(pcm, 16000, 1)
+	got, err := session.Predict(pcm, 16000, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
 		t.Fatalf("adapter prediction %+v, direct prediction %+v", got, want)
 	}
 	if allocs := testing.AllocsPerRun(3, func() {
-		if _, err := session.PredictInto(pcm, 16000, 1); err != nil {
+		if _, err := session.Predict(pcm, 16000, 1); err != nil {
 			t.Fatal(err)
 		}
 	}); allocs != 0 {
@@ -69,7 +69,7 @@ func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if _, err := session.PredictInto(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
+	if _, err := session.Predict(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
 		t.Fatalf("prediction after Close error = %v, want speech.ErrClosed", err)
 	}
 

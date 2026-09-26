@@ -108,12 +108,6 @@ func (m *Model) Provides() []reflect.Type {
 	return types
 }
 
-// NewTranscriber is Lane[speech.Transcriber](m).
-func (m *Model) NewTranscriber() (speech.Transcriber, error) { return Lane[speech.Transcriber](m) }
-
-// NewTurnDetector is Lane[speech.TurnDetector](m).
-func (m *Model) NewTurnDetector() (speech.TurnDetector, error) { return Lane[speech.TurnDetector](m) }
-
 // Close releases the model's resources. Close its lanes first; neither the
 // model nor its lanes may be used afterwards. It is safe to call more than
 // once.

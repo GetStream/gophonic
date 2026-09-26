@@ -159,11 +159,12 @@ type ZeroShot interface {
 // TurnDetector predicts from the latest audio whether a speaker has finished
 // their turn. PCM is interleaved mono or stereo at 8–96 kHz.
 //
-// Implementations own the mutable scratch of one call lane: PredictInto and
+// Implementations own the mutable scratch of one call lane: Predict and
 // Close must not overlap on one TurnDetector, so open one per concurrent
 // lane. A custom backend can implement this interface without registering
 // itself anywhere.
 type TurnDetector interface {
-	PredictInto(pcm []float32, sampleRate, channels int) (Prediction, error)
+	// Predict judges the latest audio. Warm calls allocate nothing.
+	Predict(pcm []float32, sampleRate, channels int) (Prediction, error)
 	Close() error
 }

@@ -13,17 +13,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GetStream/gophonic/duplex"
+	"github.com/GetStream/gophonic/chat"
 	"github.com/thesyncim/vibejson"
 )
 
 // Gopher's tools: what the model can do besides talking. Each is a Go
 // function whose arguments struct tells the model how to call it; add one
 // to give Gopher a new ability.
-func tools() []duplex.Tool {
-	return []duplex.Tool{
-		duplex.Func("now", "The current date and time: here, in "+localZone()+", or in another time zone.", now),
-		duplex.Func("search", "Look something up in Wikipedia: people, places, events, facts, "+
+func tools() []chat.Tool {
+	return []chat.Tool{
+		chat.Func("now", "The current date and time: here, in "+localZone()+", or in another time zone.", now),
+		chat.Func("search", "Look something up in Wikipedia: people, places, events, facts, "+
 			"and anything you may not know or that may have changed.", search),
 	}
 }
@@ -58,7 +58,7 @@ func now(_ context.Context, args struct {
 	if loc == time.Local {
 		name = localZone()
 	}
-	return t.Format("Monday, January 2, 2006, 15:04") + " " + zone + " (" + name + ")", nil
+	return t.Format("Monday, January 2, 2006, 3:04 PM") + " " + zone + " (" + name + ")", nil
 }
 
 // search looks a query up in Wikipedia: the best match's summary, and the
