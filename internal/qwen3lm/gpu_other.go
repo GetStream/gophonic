@@ -15,6 +15,8 @@ type gpuModel struct{}
 
 type gpuWorkspace struct{ tail []float32 }
 
+type gpuDecodeBatchWorkspace struct{}
+
 type gpuPrefix struct{}
 
 func (g *gpuModel) newPrefix(int) (*gpuPrefix, error) {
@@ -28,6 +30,16 @@ func (m *Weights) loadGPU(*safetensors.Checkpoint, int, string) error {
 func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	return nil, errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
+
+func (m *Weights) newDecodeBatchWorkspace(int) (*gpuDecodeBatchWorkspace, error) {
+	return nil, errors.New("qwen3: batched token decode requires Q8B Metal weights and a language-model head")
+}
+
+func (*gpuDecodeBatchWorkspace) decode(*Weights, []*PrefixKV, []int, [][]float32, [][]float32) error {
+	return errors.New("qwen3: GPU backend unavailable")
+}
+
+func (*gpuDecodeBatchWorkspace) release() {}
 
 func (w *gpuWorkspace) batch(*Weights, [][]int, [][]float32, *gpuPrefix, int, bool, Embeds) error {
 	return errors.New("qwen3: the GPU backend requires darwin/arm64")

@@ -183,6 +183,107 @@ GEMV_KERNELS(_q8, Q8B)
 GEMV_KERNELS(_q4, Q4)
 GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B, true)
 
+#ifdef QWEN3_DECODE_BATCH
+// gemvQ8BVector reads each packed Q8B row and scale once for V independent
+// FP32 input vectors. Each vector keeps the same code/scale bytes and the
+// same per-row K iteration and accumulation order as gemv.
+template <uint V, int PRO, int EPI, bool HEAD>
+inline void gemvQ8BVector(device const uchar *W, device const void *scale,
+		device const float *x, device float *y, device const float *partsIn,
+		device float *partsOut, constant GemvArgs &a, threadgroup float *tgPart,
+		uint3 tg, uint sg, uint lane) {
+	constexpr uint step = 16;
+	constexpr uint RPS = HEAD ? GEMV_ROWS_HEAD : rowsPerSimdgroup(Q8B);
+	uint base = tg.y * V;
+	float inv[V];
+	for (uint v = 0; v < V; v++) {
+		float f = 1;
+		if (PRO == PRO_NORM) {
+			float s = 0;
+			for (uint i = lane; i < a.parts; i += 32)
+				s += partsIn[(ulong)(base + v) * a.parts + i];
+			f = rsqrt(simd_sum(s) / a.K + a.eps);
+		}
+		inv[v] = f;
+	}
+	uint row0 = (tg.x * SG + sg) * RPS;
+	float acc[V][RPS] = {};
+	device const uchar *wr = W + (ulong)row0 * a.K;
+	device const half *sr = (device const half *)scale + (ulong)row0 * (a.K / 32);
+	for (uint i = lane * step; i < a.K; i += 32 * step) {
+		for (uint r = 0; r < RPS; r++) {
+			uint4 w = *(device const uint4 *)(wr + (ulong)r * a.K + i);
+			float d = float(sr[(ulong)r * (a.K / 32) + i / 32]);
+			for (uint v = 0; v < V; v++) {
+				device const float4 *xv = (device const float4 *)(x + (ulong)(base + v) * a.K + i);
+				float4 x0 = xv[0], x1 = xv[1], x2 = xv[2], x3 = xv[3];
+				float t = dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
+					dot(float4(as_type<char4>(w.z)), x2) + dot(float4(as_type<char4>(w.w)), x3);
+				acc[v][r] = fma(d, t, acc[v][r]);
+			}
+		}
+	}
+	for (uint v = 0; v < V; v++) {
+		for (uint r = 0; r < RPS; r++)
+			acc[v][r] = simd_sum(acc[v][r]) * inv[v];
+		if (EPI == EPI_SWIGLU) {
+			if (lane == 0)
+				for (uint r = 0; r < RPS; r += 2) {
+					float g = acc[v][r];
+					y[(ulong)(base + v) * (a.N / 2) + (row0 + r) / 2] = g / (1 + exp(-g)) * acc[v][r + 1];
+				}
+		} else if (EPI == EPI_STORE) {
+			if (lane == 0)
+				for (uint r = 0; r < RPS; r++)
+					y[(ulong)(base + v) * a.N + row0 + r] = acc[v][r];
+		} else if (lane == 0) {
+			float ss = 0;
+			for (uint r = 0; r < RPS; r++) {
+				ulong at = (ulong)(base + v) * a.N + row0 + r;
+				float value = y[at] + acc[v][r];
+				y[at] = value;
+				ss += value * value;
+			}
+			tgPart[v * SG + sg] = ss;
+		}
+	}
+	if (EPI == EPI_ADD) {
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (sg == 0 && lane == 0) {
+			uint groups = a.N / (SG * RPS);
+			for (uint v = 0; v < V; v++) {
+				float total = 0;
+				for (uint i = 0; i < SG; i++)
+					total += tgPart[v * SG + i];
+				partsOut[(ulong)(base + v) * groups + tg.x] = total;
+			}
+		}
+	}
+}
+
+#define VEC_GEMV_KERNEL(name, V, PRO, EPI, HEAD) \
+	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]], \
+		device const float *x [[buffer(2)]], device float *y [[buffer(3)]], \
+		device const float *partsIn [[buffer(4)]], constant GemvArgs &a [[buffer(5)]], \
+		device float *partsOut [[buffer(6)]], uint3 tg [[threadgroup_position_in_grid]], \
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) { \
+		threadgroup float tgPart[(V) * SG]; \
+		gemvQ8BVector<V, PRO, EPI, HEAD>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane); \
+	}
+
+#define VEC_GEMV_SET(V) \
+	VEC_GEMV_KERNEL(gemv_vec_qkv_m##V, V, PRO_NORM, EPI_STORE, false) \
+	VEC_GEMV_KERNEL(gemv_vec_o_m##V, V, PRO_PLAIN, EPI_ADD, false) \
+	VEC_GEMV_KERNEL(gemv_vec_gateup_m##V, V, PRO_NORM, EPI_SWIGLU, false) \
+	VEC_GEMV_KERNEL(gemv_vec_down_m##V, V, PRO_PLAIN, EPI_ADD, false) \
+	VEC_GEMV_KERNEL(gemv_vec_head_m##V, V, PRO_PLAIN, EPI_STORE, true)
+
+VEC_GEMV_SET(1)
+VEC_GEMV_SET(2)
+VEC_GEMV_SET(4)
+VEC_GEMV_SET(8)
+#endif // QWEN3_DECODE_BATCH
+
 // rotate replaces each ROT-value block of x with H·diag(signs)·x (signs
 // carry the normalization); threadgroup b of ROT/4 threads handles block b,
 // and rows hold perRow blocks.

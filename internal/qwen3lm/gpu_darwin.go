@@ -56,6 +56,9 @@ type gpuModel struct {
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
 	attendFlash, gemvHead        *metal.Pipeline
+	decodeVecOnce                sync.Once
+	decodeVecErr                 error
+	decodeVec                    [4][5]*metal.Pipeline // widths 1, 2, 4, 8; qkv, o, gateup, down, head
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
@@ -102,8 +105,20 @@ func gpuGeometry(c *modelConfig) error {
 
 // gpuSourceFor returns gpu.metal specialized for the model's geometry.
 func gpuSourceFor(c *modelConfig) string {
-	return fmt.Sprintf("#define QD %d\n#define KVD %d\n#define NH %d\n#define NKV %d\n#define ROT %d\n",
-		c.heads*c.headDim, c.kvDim, c.heads, c.kvHeads, newRotation(c.intermediate).block) + gpuSource
+	return gpuSourceMode(c, false)
+}
+
+func gpuDecodeBatchSourceFor(c *modelConfig) string {
+	return gpuSourceMode(c, true)
+}
+
+func gpuSourceMode(c *modelConfig, decodeBatch bool) string {
+	header := fmt.Sprintf("#define QD %d\n#define KVD %d\n#define NH %d\n#define NKV %d\n#define ROT %d\n",
+		c.heads*c.headDim, c.kvDim, c.heads, c.kvHeads, newRotation(c.intermediate).block)
+	if decodeBatch {
+		header += "#define QWEN3_DECODE_BATCH\n"
+	}
+	return header + gpuSource
 }
 
 // gpuSupports reports whether a Metal GPU is present and the model has a
@@ -136,6 +151,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	if err != nil {
 		return err
 	}
+	defer lib.Release()
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
@@ -554,6 +570,23 @@ type gpuWorkspace struct {
 	oneSeq                                  [1][]int
 }
 
+// gpuDecodeBatchWorkspace owns scratch for one synchronous set of independent
+// single-token decodes. K/V storage remains in each lane's gpuPrefix.
+type gpuDecodeBatchWorkspace struct {
+	g                               *gpuModel
+	capacity, vectorWidth           int
+	laneGroups                      int
+	h, qkv, ctx, act, logits        *metal.Buffer
+	embedParts, attnParts, mlpParts *metal.Buffer
+	finalHidden                     []float32
+	enc                             metal.Encoder
+	qkv0Args, qkvArgs               gemvArgs
+	oArgs, guArgs, dArgs, headArgs  gemvArgs
+	attn                            attnArgs
+	perRow                          uint32
+	concurrent                      bool
+}
+
 // gpuTokenByToken forces the single-token kernels and gpuScalarAttention
 // the per-key attention loop; tests compare the paths.
 var gpuTokenByToken, gpuScalarAttention bool
@@ -674,6 +707,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.logits, 4 * max(g.lmRows, 1)},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
+			w.release()
 			return nil, err
 		}
 	}
@@ -688,6 +722,244 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	w.headArgs = gemvArgs{uint32(c.hidden), uint32(g.lmRows), eps, 0}
 	w.attn = attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: eps, scale: float32(c.attnScale)}
 	return w, nil
+}
+
+func (g *gpuModel) ensureDecodeVec() error {
+	g.decodeVecOnce.Do(func() {
+		lib, err := g.dev.Compile(gpuDecodeBatchSourceFor(g.cfg))
+		if err != nil {
+			g.decodeVecErr = err
+			return
+		}
+		defer lib.Release()
+		projections := [...]string{"qkv", "o", "gateup", "down", "head"}
+		widths := [...]int{1, 2, 4, 8}
+		for wi, width := range widths {
+			for pi, projection := range projections {
+				name := fmt.Sprintf("gemv_vec_%s_m%d", projection, width)
+				if g.decodeVec[wi][pi], err = g.dev.Pipeline(lib, name); err != nil {
+					g.decodeVecErr = err
+					return
+				}
+			}
+		}
+	})
+	return g.decodeVecErr
+}
+
+func decodeVectorWidth(lanes int) int {
+	// Capacity is limited to eight, so this short table is clearer than a
+	// bit trick at the call site.
+	switch {
+	case lanes <= 1:
+		return 1
+	case lanes <= 2:
+		return 2
+	case lanes <= 4:
+		return 4
+	default:
+		return 8
+	}
+}
+
+func decodeVectorIndex(width int) int {
+	switch width {
+	case 1:
+		return 0
+	case 2:
+		return 1
+	case 4:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (m *Weights) newDecodeBatchWorkspace(capacity int) (*gpuDecodeBatchWorkspace, error) {
+	g := m.gpu
+	if g == nil || g.bits != 9 || !g.hasHead() {
+		return nil, errors.New("qwen3: batched token decode requires Q8B Metal weights and a language-model head")
+	}
+	if err := g.ensureDecodeVec(); err != nil {
+		return nil, fmt.Errorf("qwen3: compile batched decode kernels: %w", err)
+	}
+	c, width := &m.cfg, decodeVectorWidth(capacity)
+	qdim := c.heads * c.headDim
+	qkvWidth := qdim + 2*c.kvDim
+	parts := c.hidden / gpuRows(9)
+	w := &gpuDecodeBatchWorkspace{g: g, capacity: capacity, vectorWidth: width,
+		qkv0Args: gemvArgs{k: uint32(c.hidden), n: uint32(qkvWidth), eps: float32(c.eps), parts: 1},
+		qkvArgs:  gemvArgs{k: uint32(c.hidden), n: uint32(qkvWidth), eps: float32(c.eps), parts: uint32(parts)},
+		oArgs:    gemvArgs{k: uint32(qdim), n: uint32(c.hidden), eps: float32(c.eps)},
+		guArgs:   gemvArgs{k: uint32(c.hidden), n: uint32(2 * c.intermediate), eps: float32(c.eps), parts: uint32(parts)},
+		dArgs:    gemvArgs{k: uint32(c.intermediate), n: uint32(c.hidden), eps: float32(c.eps)},
+		headArgs: gemvArgs{k: uint32(c.hidden), n: uint32(g.lmRows), eps: float32(c.eps)},
+		attn:     attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: float32(c.eps), scale: float32(c.attnScale)},
+		perRow:   uint32(c.intermediate / g.inter.block),
+	}
+	for _, buffer := range []struct {
+		dst **metal.Buffer
+		n   int
+	}{
+		{&w.h, 8 * width * c.hidden}, // input/residual rows plus final hidden staging
+		{&w.qkv, 4 * width * qkvWidth},
+		{&w.ctx, 4 * width * qdim},
+		{&w.act, 4 * width * c.intermediate},
+		{&w.logits, 4 * width * g.lmRows},
+		{&w.embedParts, 4 * width},
+		{&w.attnParts, 4 * width * parts},
+		{&w.mlpParts, 4 * width * parts},
+	} {
+		var err error
+		if *buffer.dst, err = g.dev.Buffer(buffer.n); err != nil {
+			w.release()
+			return nil, err
+		}
+	}
+	w.finalHidden = floats(w.h.Bytes())[width*c.hidden : 2*width*c.hidden]
+	w.concurrent = true
+	return w, nil
+}
+
+func (w *gpuDecodeBatchWorkspace) release() {
+	if w == nil {
+		return
+	}
+	for _, buffer := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.logits, w.embedParts, w.attnParts, w.mlpParts} {
+		buffer.Release()
+	}
+	w.h, w.qkv, w.ctx, w.act, w.logits, w.embedParts, w.attnParts, w.mlpParts = nil, nil, nil, nil, nil, nil, nil, nil
+	w.finalHidden = nil
+}
+
+func (w *gpuDecodeBatchWorkspace) gemv(projection int, buf *metal.Buffer, wOff, sOff int,
+	x, y, partsIn, partsOut *metal.Buffer, args *gemvArgs, head bool) {
+	e := &w.enc
+	e.SetPipeline(w.g.decodeVec[decodeVectorIndex(w.vectorWidth)][projection])
+	e.SetBuffer(buf, wOff, 0)
+	e.SetBuffer(buf, sOff, 1)
+	e.SetBuffer(x, 0, 2)
+	e.SetBuffer(y, 0, 3)
+	e.SetBuffer(partsIn, 0, 4)
+	e.SetBytes(unsafe.Pointer(args), 16, 5)
+	e.SetBuffer(partsOut, 0, 6)
+	rows := gpuRows(9)
+	if head {
+		rows = gpuHeadRows
+	}
+	e.Dispatch(metal.Size{X: int(args.n) / rows, Y: w.laneGroups, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+}
+
+func (w *gpuDecodeBatchWorkspace) decode(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32) error {
+	return w.decodeMode(m, kvs, tokens, hidden, logits, w.concurrent)
+}
+
+func (w *gpuDecodeBatchWorkspace) decodeMode(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, concurrent bool) error {
+	return w.decodeModeTile(m, kvs, tokens, hidden, logits, concurrent, 4)
+}
+
+// decodeModeTile permits a full-width M=8 control in tests and benchmarks;
+// production uses M=4 tiles for eight active lanes to limit register pressure.
+func (w *gpuDecodeBatchWorkspace) decodeModeTile(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, concurrent bool, maxVectorWidth int) error {
+	g, c := w.g, &m.cfg
+	active, qdim := len(kvs), c.heads*c.headDim
+	width := decodeVectorWidth(active)
+	if width > maxVectorWidth {
+		width = maxVectorWidth
+	}
+	w.vectorWidth = width
+	w.laneGroups = (active + width - 1) / width
+	scratchWidth := decodeVectorWidth(w.capacity)
+	allH := floats(w.h.Bytes())
+	h := allH[:scratchWidth*c.hidden]
+	clear(h)
+	embedParts := floats(w.embedParts.Bytes())[:scratchWidth]
+	clear(embedParts)
+	for lane, token := range tokens {
+		row := h[lane*c.hidden : (lane+1)*c.hidden]
+		m.embedRow(token, row)
+		g.hidden.apply(row)
+		embedParts[lane] = sumSquares(row)
+	}
+	if scratchWidth > active {
+		clear(floats(w.ctx.Bytes())[active*qdim : scratchWidth*qdim])
+	}
+
+	dev := g.dev
+	dev.Begin(&w.enc, concurrent)
+	barrier := func() {
+		if concurrent {
+			w.enc.Barrier()
+		}
+	}
+	for layer := range g.layers {
+		gl := &g.layers[layer]
+		if layer == 0 {
+			w.gemv(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.embedParts, w.attnParts, &w.qkv0Args, false)
+		} else {
+			w.gemv(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, &w.qkvArgs, false)
+		}
+		barrier() // QKV outputs feed every lane's independent attention dispatch.
+		layerStride := 4 * c.kvDim
+		for lane, kv := range kvs {
+			a := w.attn
+			a.pos = uint32(len(kv.tokens))
+			e := &w.enc
+			e.SetPipeline(g.attend)
+			e.SetBuffer(w.qkv, lane*4*(qdim+2*c.kvDim), 0)
+			e.SetBuffer(kv.gpu.kc, layer*layerStride*kv.capacity, 1)
+			e.SetBuffer(kv.gpu.vc, layer*layerStride*kv.capacity, 2)
+			e.SetBuffer(g.norms, 4*2*layer*c.headDim, 3)
+			e.SetBuffer(g.norms, 4*(2*layer+1)*c.headDim, 4)
+			e.SetBuffer(g.rope, 0, 5)
+			e.SetBuffer(w.ctx, lane*4*qdim, 6)
+			e.SetBytes(unsafe.Pointer(&a), int(unsafe.Sizeof(a)), 7)
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
+		}
+		barrier() // Lane attention writes ctx before the shared O projection.
+		w.gemv(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, &w.oArgs, false)
+		barrier()
+		w.gemv(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, &w.guArgs, false)
+		barrier()
+		if !g.noInter {
+			w.enc.SetPipeline(g.rotate)
+			w.enc.SetBuffer(w.act, 0, 0)
+			w.enc.SetBuffer(g.signs, 0, 1)
+			w.enc.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
+			w.enc.Dispatch(metal.Size{X: active * int(w.perRow), Y: 1, Z: 1}, metal.Size{X: g.inter.block / 4, Y: 1, Z: 1})
+			barrier()
+		}
+		w.gemv(3, gl.buf, gl.d, gl.dScale, w.act, w.h, w.attnParts, w.attnParts, &w.dArgs, false)
+		barrier() // The next layer reads the residual and RMSNorm partials.
+	}
+	if err := w.enc.Wait(); err != nil {
+		return err
+	}
+
+	for lane := range active {
+		row := h[lane*c.hidden : (lane+1)*c.hidden]
+		g.hidden.unapply(row)
+		rmsNorm32(row, row, m.finalNorm, c.eps)
+		for _, value := range row {
+			if !finite32(value) {
+				return errors.New("qwen3: non-finite batched hidden state")
+			}
+		}
+		copy(w.finalHidden[lane*c.hidden:(lane+1)*c.hidden], row)
+		g.hidden.apply(row)
+	}
+
+	dev.Begin(&w.enc, false)
+	w.gemv(4, g.lm, 0, g.lmScale, w.h, w.logits, w.attnParts, w.mlpParts, &w.headArgs, true)
+	if err := w.enc.Wait(); err != nil {
+		return err
+	}
+	logitRows := floats(w.logits.Bytes())
+	for lane := range active {
+		copy(hidden[lane], w.finalHidden[lane*c.hidden:(lane+1)*c.hidden])
+		copy(logits[lane], logitRows[lane*g.lmRows:lane*g.lmRows+c.vocab])
+	}
+	return nil
 }
 
 // gemv encodes one projection: weights at wOff and scales at sOff in buf,
@@ -1049,6 +1321,25 @@ func (m *Weights) releaseGPU() {
 	}
 	for i := range g.layers {
 		g.layers[i].buf.Release()
+	}
+	for _, p := range []*metal.Pipeline{g.qkv, g.o, g.gateup, g.down, g.attend, g.rotate, g.qkRope, g.attendM, g.attendFlash, g.gemvHead, g.finishHead} {
+		p.Release()
+	}
+	for _, p := range g.decodeVec {
+		for _, pipeline := range p {
+			pipeline.Release()
+		}
+	}
+	for _, p := range g.mm {
+		for _, pipeline := range p {
+			pipeline.Release()
+		}
+	}
+	for _, p := range g.finish {
+		p.Release()
+	}
+	for _, p := range g.mmHead {
+		p.Release()
 	}
 	for _, b := range []*metal.Buffer{g.lm, g.norms, g.signs, g.rope} {
 		b.Release()
