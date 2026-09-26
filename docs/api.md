@@ -426,15 +426,15 @@ in one pass, sampling each position as decoding one token at a time would.
 
 ## The turn detectors' frontend
 
-A detector trained on the same features can reuse the frontend without any
-model scratch:
+A detector trained on the same features can reuse the frontend, which
+lives in package `speech` and holds no model scratch:
 
 ```go
-frontend := gophonic.NewWhisperFeatureWorkspace()
+frontend := speech.NewTurnFeatures()
 defer frontend.Close()
-features := make([]float32, 80*800)
+features := make([]float32, speech.TurnFeatureBands*speech.TurnFeatureFrames)
 
-err := gophonic.ExtractWhisperFeaturesInto(pcm, 48000, 2, features, frontend)
+err := frontend.Into(pcm, 48000, 2, features)
 ```
 
 It accepts mono or stereo PCM at 8–96 kHz and writes the normalized,
@@ -505,13 +505,14 @@ func (s *Session) Close() error {
 }
 ```
 
-A backend trained on Whisper's turn-detector features can hold a
-`WhisperFeatureWorkspace` in its scratch and call `ExtractWhisperFeaturesInto`
-before its own model. The interfaces perform no loading, feature conversion,
+A backend trained on the turn detectors' features can hold a
+`speech.TurnFeatures` in its scratch and call its `Into` before its own
+model, importing nothing but `speech`. The interfaces perform no loading, feature conversion,
 or allocation management on a backend's behalf; its implementation
 establishes its own numerical and allocation guarantees. The
-[conformance test](../external_test.go) implements `speech.TurnDetector` from
-outside the module's packages with only the standalone frontend.
+[conformance test](../speech/turnfeatures_test.go) implements
+`speech.TurnDetector` from outside package `speech` with only the
+standalone frontend.
 
 ## Ownership, lifetime, and allocations
 

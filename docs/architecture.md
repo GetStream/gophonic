@@ -153,7 +153,7 @@ floor, max-minus-8 dynamic floor, and `(log10(mel)+4)/4` scaling.
 
 | Frontend | Precision | Used by | Input and output |
 | --- | --- | --- | --- |
-| `mel.Turn` | float64 | Smart Turn, TinyMelNet, `ExtractWhisperFeaturesInto` | Last 8 s at 8–96 kHz, normalized, `[80,800]` |
+| `mel.Turn` | float64 | Smart Turn, TinyMelNet, `speech.TurnFeatures` | Last 8 s at 8–96 kHz, normalized, `[80,800]` |
 | `mel.Window` | float32 | Whisper windows | First 30 s at 16 kHz, `[bands,3000]` |
 | `mel.Spectrogram` | float32 | Whisper whole-file, Qwen3-ASR | Any length plus configurable silence, `[bands,frames]` |
 

@@ -1,11 +1,11 @@
 # API redesign: every public surface
 
-Status: design and first eight steps, 2026-09-26, branch `feat/asr-turn`.
+Status: design and first nine steps, 2026-09-26, branch `feat/asr-turn`.
 Nothing is released, so every change below is breaking and meant to be.
 The migration plan at the end orders the work as PR-sized steps that each
 keep the tests green.
 
-Implemented in the tree (steps 1–8 of section 12, with what the MoE branch
+Implemented in the tree (steps 1–9 of section 12, with what the MoE branch
 needed carried over): `chat.Session.Reply` into an `io.Writer`,
 `chat.Tool`/`Func`/`Specs`/`Answer`, `chat.Options.Presence`, the role
 `chat.ToolResult`; `speech.Duplex.Step(in, out)` and `Note`,
@@ -67,7 +67,7 @@ Step 8 as well:
 - Generation and questions keep a workspace each, a departure from section 7. A reply holds its lock for the whole reply, and the duplex asks its judges while replies are written.
 - `OpenChat`, `NewChat`, `Chat.Questions`, and the engine aliases (`Weights`, `Evaluator`, `Workspace`, `PrefixKV`, `Embeds`, `LoadWeights`, `NewEvaluator`, `QuantizeGPTQ`) are gone. Only the tokenizer stays public.
 
-Steps 9–12 remain as planned.
+Step 9 moved the turn detectors' frontend to `speech.TurnFeatures`, so a third-party detector imports only `speech`. Steps 10–12 remain as planned.
 
 ## 0. The decisions in one page
 

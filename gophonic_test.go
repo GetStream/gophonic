@@ -5,6 +5,7 @@ package gophonic_test
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"math"
 	"os"
@@ -220,4 +221,17 @@ func TestOpenChecksProvides(t *testing.T) {
 	if _, err := gophonic.Open(path, gophonic.Options{}); err == nil || !closed {
 		t.Fatalf("Open of a model that lacks a declared lane: %v, closed %v", err, closed)
 	}
+}
+
+func readFloatFixture(t testing.TB, path string) []float32 {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]float32, len(data)/4)
+	for i := range values {
+		values[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
+	}
+	return values
 }
