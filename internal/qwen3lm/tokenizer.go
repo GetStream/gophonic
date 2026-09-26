@@ -31,6 +31,10 @@ type Tokenizer struct {
 	pieces   []byte
 	pieceEnd []uint32
 	special  []bool
+
+	// marks makes combining marks letters in the pre-tokenizer, as the
+	// Qwen3.5 family's expression (qwenMarksSplitPattern) has them.
+	marks bool
 }
 
 type qwenMerge struct {
@@ -104,7 +108,7 @@ type qwenTokenizerJSON struct {
 		IgnoreMerges bool             `json:"ignore_merges"`
 		ByteFallback bool             `json:"byte_fallback"`
 		Vocab        map[string]int32 `json:"vocab"`
-		Merges       [][]string       `json:"merges"`
+		Merges       []bpeMerge       `json:"merges"`
 	} `json:"model"`
 	Normalizer struct {
 		Type string `json:"type"`
@@ -118,6 +122,42 @@ type qwenTokenizerJSON struct {
 			} `json:"pattern"`
 		} `json:"pretokenizers"`
 	} `json:"pre_tokenizer"`
+}
+
+// bpeMerge is one merge of tokenizer.json: a pair of tokens, written
+// ["left", "right"] or, as older files have it, "left right".
+type bpeMerge [2]string
+
+func (m *bpeMerge) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.DecodeCursor, error) {
+	var pair string
+	if s := c; s.String(&pair) == nil {
+		left, right, ok := strings.Cut(pair, " ")
+		if !ok || left == "" || right == "" || strings.Contains(right, " ") {
+			return s, fmt.Errorf("qwen3: malformed merge %q", pair)
+		}
+		*m = bpeMerge{left, right}
+		return s, nil
+	}
+	if err := c.BeginArray("merge"); err != nil {
+		return c, err
+	}
+	n := 0
+	for first := true; ; first = false {
+		more, err := c.NextElement(first)
+		if err != nil || !more {
+			if err == nil && n != 2 {
+				err = fmt.Errorf("qwen3: a merge has %d tokens, want 2", n)
+			}
+			return c, err
+		}
+		if n == 2 {
+			return c, errors.New("qwen3: a merge has more than 2 tokens")
+		}
+		if err := c.String(&m[n]); err != nil {
+			return c, err
+		}
+		n++
+	}
 }
 
 // qwenTokenizerConfig is the part of tokenizer_config.json that a slow
@@ -137,6 +177,10 @@ type qwenAddedToken struct {
 }
 
 const qwenSplitPattern = `(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+`
+
+// qwenMarksSplitPattern is the Qwen3.5 family's expression: combining marks
+// (\p{M}) join letters instead of punctuation.
+const qwenMarksSplitPattern = `(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+`
 
 var qwenNormReleaseByte = [1]byte{0}
 
@@ -179,21 +223,23 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 			break
 		}
 	}
-	if spec.PreTokenizer.Type != "Sequence" || regex != qwenSplitPattern {
+	if spec.PreTokenizer.Type != "Sequence" || regex != qwenSplitPattern && regex != qwenMarksSplitPattern {
 		return nil, fmt.Errorf("qwen3: unsupported Qwen pre-tokenizer pipeline (type=%q regex=%q)", spec.PreTokenizer.Type, regex)
 	}
 	merges := make([][2]string, len(spec.Model.Merges))
 	for rank, pair := range spec.Model.Merges {
-		if len(pair) != 2 {
-			return nil, fmt.Errorf("qwen3: merge %d has %d elements, want 2", rank, len(pair))
-		}
-		merges[rank] = [2]string{pair[0], pair[1]}
+		merges[rank] = pair
 	}
 	added := make([]qwenAddedToken, len(spec.AddedTokens))
 	for i, a := range spec.AddedTokens {
 		added[i] = qwenAddedToken{a.ID, a.Content, a.Special}
 	}
-	return newTokenizer(spec.Model.Vocab, merges, added)
+	t, err := newTokenizer(spec.Model.Vocab, merges, added)
+	if err != nil {
+		return nil, err
+	}
+	t.marks = regex == qwenMarksSplitPattern
+	return t, nil
 }
 
 // loadQwen2Tokenizer reads a slow Qwen2Tokenizer's files from dir.
@@ -518,7 +564,7 @@ func (t *Tokenizer) encodeGap(gap string, out []int, ws *TokenizerWorkspace) ([]
 	}
 	text := ws.normalized
 	for i := 0; i < len(text); {
-		start, end := qwenNextPiece(text, i)
+		start, end := qwenNextPiece(text, i, t.marks)
 		var err error
 		out, err = t.encodePiece(text[start:end], out, ws)
 		if err != nil {
@@ -713,7 +759,7 @@ func buildQwenByteEncoder(encoded *[256]string) {
 // qwenNextPiece returns the next ordered-alternative match from Qwen's exact
 // pre-tokenizer expression. The implementation walks UTF-8 in place and does
 // not build rune slices or substrings.
-func qwenNextPiece(s []byte, start int) (int, int) {
+func qwenNextPiece(s []byte, start int, marks bool) (int, int) {
 	r, size := qwenRuneAt(s, start)
 	if r == '\'' && start+size < len(s) {
 		r1, sz1 := qwenRuneAt(s, start+size)
@@ -732,18 +778,18 @@ func qwenNextPiece(s []byte, start int) (int, int) {
 		}
 	}
 
-	// [^\r\n\p{L}\p{N}]?\p{L}+
+	// [^\r\n\p{L}\p{N}]?\p{L}+, or [\p{L}\p{M}]+ with marks
 	j := start
 	if !qwenNewline(r) && !unicode.IsLetter(r) && !unicode.IsNumber(r) && start+size < len(s) {
-		if next, _ := qwenRuneAt(s, start+size); unicode.IsLetter(next) {
+		if next, _ := qwenRuneAt(s, start+size); qwenLetter(next, marks) {
 			j += size
 		}
 	}
-	if letter, _ := qwenRuneAt(s, j); unicode.IsLetter(letter) {
+	if letter, _ := qwenRuneAt(s, j); qwenLetter(letter, marks) {
 		k := j
 		for k < len(s) {
 			current, step := qwenRuneAt(s, k)
-			if !unicode.IsLetter(current) {
+			if !qwenLetter(current, marks) {
 				break
 			}
 			k += step
@@ -763,11 +809,11 @@ func qwenNextPiece(s []byte, start int) (int, int) {
 	}
 	if p < len(s) {
 		pr, _ := qwenRuneAt(s, p)
-		if qwenPunctuation(pr) {
+		if qwenPunctuation(pr, marks) {
 			k := p
 			for k < len(s) {
 				current, step := qwenRuneAt(s, k)
-				if !qwenPunctuation(current) {
+				if !qwenPunctuation(current, marks) {
 					break
 				}
 				k += step
@@ -827,6 +873,11 @@ func qwenRuneAt(s []byte, i int) (rune, int) {
 
 func qwenNewline(r rune) bool { return r == '\r' || r == '\n' }
 
-func qwenPunctuation(r rune) bool {
-	return !unicode.IsSpace(r) && !unicode.IsLetter(r) && !unicode.IsNumber(r)
+func qwenPunctuation(r rune, marks bool) bool {
+	return !unicode.IsSpace(r) && !qwenLetter(r, marks) && !unicode.IsNumber(r)
+}
+
+// qwenLetter reports whether r is \p{L}, or with marks [\p{L}\p{M}].
+func qwenLetter(r rune, marks bool) bool {
+	return unicode.IsLetter(r) || marks && unicode.Is(unicode.M, r)
 }

@@ -115,7 +115,10 @@ func (kv *PrefixKV) CopyPrefix(src *PrefixKV, p int) {
 	}
 	if kv.gpu != nil {
 		c := &kv.owner.m.cfg
-		kv.gpu.copyFrom(src.gpu, c.layers, p*c.kvDim)
+		kv.gpu.copyFrom(src.gpu, c.attnLayers(), p*c.kvDim)
+		if kv.gpu.recurrent() {
+			kv.gpu.copyStates(src.gpu, p)
+		}
 	} else {
 		kv.copyPackedPrefix(src, p)
 	}
@@ -189,6 +192,11 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	}
 	if kv.gpu == nil && keep != len(kv.tokens) {
 		kv.copyPackedPrefix(kv, keep)
+	}
+	if kv.gpu != nil && kv.gpu.recurrent() {
+		if err := e.rewind(kv, keep, len(ids) > 1, ws); err != nil {
+			return err
+		}
 	}
 	kv.tokens = kv.tokens[:keep] // the stored suffix is overwritten below
 	ws.prefix, ws.past = kv, keep
@@ -358,6 +366,7 @@ type Workspace struct {
 	op                              layerOp
 	oneSeq                          [1][]int
 	oneDst                          [1][]float32
+	rewound                         []float32 // a rewind's discarded last state
 }
 
 // NewWorkspace allocates a reusable workspace whose projections, attention,
