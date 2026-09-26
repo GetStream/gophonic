@@ -39,6 +39,10 @@ func (*gpuDecodeBatchWorkspace) decode(*Weights, []*PrefixKV, []int, [][]float32
 	return errors.New("qwen3: GPU backend unavailable")
 }
 
+func (*gpuDecodeBatchWorkspace) decodeGreedy(*Weights, []*PrefixKV, []int, [][]float32, []int) error {
+	return errors.New("qwen3: GPU backend unavailable")
+}
+
 func (*gpuDecodeBatchWorkspace) release() {}
 
 func (w *gpuWorkspace) batch(*Weights, [][]int, [][]float32, *gpuPrefix, int, bool, Embeds) error {

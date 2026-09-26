@@ -7,6 +7,8 @@ package qwen3lm
 
 import (
 	"fmt"
+	"math"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -146,6 +148,103 @@ func TestOfficialGPUDecodeBatchMatchesIndependentTokens(t *testing.T) {
 	}
 }
 
+func TestOfficialGPUDecodeBatchGreedyMatchesFullLogits(t *testing.T) {
+	m := loadOfficialASRQ8B(t, true)
+	e, err := NewEvaluator(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.NewDecodeBatchWorkspace(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	scalarWS, err := e.NewWorkspace(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scalarWS.Close()
+
+	const capacity = 12
+	seeds := [][]int{{}, {100, 101}, {202, 203, 204, 205}, {306}, {407, 408, 409}, {510, 511, 512, 513, 514}, {}, {714, 715}}
+	base := make([]*PrefixKV, len(seeds))
+	for lane, seed := range seeds {
+		base[lane], err = e.NewPrefixKV(capacity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = base[lane].Close() })
+		if len(seed) != 0 {
+			if err := e.HiddenLastExtendInto(base[lane], 0, seed, make([]float32, m.cfg.hidden), scalarWS); err != nil {
+				t.Fatalf("seed lane %d: %v", lane, err)
+			}
+		}
+	}
+
+	for _, active := range []int{1, 2, 3, 4, 5, 8} {
+		t.Run(fmt.Sprintf("active=%d", active), func(t *testing.T) {
+			ref := make([]*PrefixKV, active)
+			for lane := range active {
+				ref[lane], err = e.NewPrefixKV(capacity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref[lane].CopyPrefix(base[lane], len(seeds[lane]))
+				t.Cleanup(func() { _ = ref[lane].Close() })
+			}
+			tokens := make([]int, active)
+			hiddenRef := make([][]float32, active)
+			logitsRef := make([][]float32, active)
+			for lane := range active {
+				tokens[lane] = 900 + active*8 + lane
+				hiddenRef[lane] = make([]float32, m.cfg.hidden)
+				logitsRef[lane] = make([]float32, m.cfg.vocab)
+			}
+			if err := e.DecodeBatchInto(ref, tokens, hiddenRef, logitsRef, ws); err != nil {
+				t.Fatalf("full-logit reference: %v", err)
+			}
+
+			for _, gpuReduce := range []bool{false, true} {
+				name := "mapped-cpu-argmax"
+				if gpuReduce {
+					name = "gpu-argmax"
+				}
+				t.Run(name, func(t *testing.T) {
+					gotKV := make([]*PrefixKV, active)
+					gotHidden := make([][]float32, active)
+					next := make([]int, active)
+					for lane := range active {
+						gotKV[lane], err = e.NewPrefixKV(capacity)
+						if err != nil {
+							t.Fatal(err)
+						}
+						gotKV[lane].CopyPrefix(base[lane], len(seeds[lane]))
+						t.Cleanup(func() { _ = gotKV[lane].Close() })
+						gotHidden[lane] = make([]float32, m.cfg.hidden)
+					}
+					ws.gpu.argmaxGPU = gpuReduce
+					if err := e.DecodeBatchGreedyInto(gotKV, tokens, gotHidden, next, ws); err != nil {
+						t.Fatal(err)
+					}
+					for lane := range active {
+						if next[lane] != greedyArgmax(logitsRef[lane]) {
+							t.Errorf("lane %d next token %d, full-logit argmax %d", lane, next[lane], greedyArgmax(logitsRef[lane]))
+						}
+						if len(gotKV[lane].Tokens()) != len(seeds[lane])+1 || gotKV[lane].Tokens()[len(seeds[lane])] != tokens[lane] {
+							t.Errorf("lane %d did not append input token: %v", lane, gotKV[lane].Tokens())
+						}
+						for i := range gotHidden[lane] {
+							if math.Float32bits(gotHidden[lane][i]) != math.Float32bits(hiddenRef[lane][i]) {
+								t.Fatalf("lane %d hidden value %d changed bits: %08x != %08x", lane, i, math.Float32bits(gotHidden[lane][i]), math.Float32bits(hiddenRef[lane][i]))
+							}
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation(t *testing.T) {
 	m := loadOfficialASRQ8B(t, true)
 	e, err := NewEvaluator(m)
@@ -248,6 +347,24 @@ func TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation(t *testing.T) {
 			assertUnchanged()
 		})
 	}
+	if err := e.DecodeBatchGreedyInto([]*PrefixKV{first, second}, []int{7, 8}, hidden, []int{91}, ws); err == nil {
+		t.Fatal("wrong next-token output length unexpectedly succeeded")
+	}
+	assertUnchanged()
+	inputAndOutput := []int{7}
+	if err := e.DecodeBatchGreedyInto([]*PrefixKV{first}, inputAndOutput, [][]float32{hidden[0]}, inputAndOutput, ws); err == nil {
+		t.Fatal("next-token output aliasing input tokens unexpectedly succeeded")
+	}
+	assertUnchanged()
+	prefixSlot := first.tokens[:cap(first.tokens)][:1]
+	prefixSlot[0] = 515
+	if err := e.DecodeBatchGreedyInto([]*PrefixKV{first}, []int{7}, [][]float32{hidden[0]}, prefixSlot, ws); err == nil {
+		t.Fatal("next-token output aliasing prefix capacity unexpectedly succeeded")
+	}
+	if prefixSlot[0] != 515 {
+		t.Fatal("invalid greedy call mutated prefix capacity")
+	}
+	assertUnchanged()
 
 	closed, err := e.NewPrefixKV(4)
 	if err != nil {
@@ -280,6 +397,9 @@ func TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation(t *testing.T) {
 	}
 	if err := e.DecodeBatchInto([]*PrefixKV{first}, []int{7}, [][]float32{hidden[0]}, [][]float32{logits[0]}, ws); err == nil {
 		t.Fatal("closed workspace unexpectedly succeeded")
+	}
+	if err := e.DecodeBatchGreedyInto([]*PrefixKV{first}, []int{7}, [][]float32{hidden[0]}, []int{0}, ws); err == nil {
+		t.Fatal("closed workspace greedy call unexpectedly succeeded")
 	}
 	assertUnchanged()
 }
@@ -385,4 +505,139 @@ func BenchmarkGPUDecodeBatchStepPaired(b *testing.B) {
 	for i, variant := range variants {
 		b.ReportMetric(float64(elapsed[i].Nanoseconds())/float64(b.N)/1e6, variant.name+"-ms/step")
 	}
+}
+
+// BenchmarkGPUDecodeBatchGreedyPaired compares the existing full-logit copy
+// and host scan with mapped-logit scanning and a GPU stable argmax reduction.
+// Each variant decodes the same eight private prefixes without advancing
+// them; execution order alternates each iteration to limit drift bias.
+func BenchmarkGPUDecodeBatchGreedyPaired(b *testing.B) {
+	m := loadOfficialASRQ8B(b, true)
+	e, err := NewEvaluator(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ws, err := e.NewDecodeBatchWorkspace(8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ws.Close()
+	scalarWS, err := e.NewWorkspace(1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer scalarWS.Close()
+
+	const lanes, prefixLen = 8, 32
+	kvs := make([]*PrefixKV, lanes)
+	tokens := make([]int, lanes)
+	hidden := make([][]float32, lanes)
+	logits := make([][]float32, lanes)
+	gotHidden := make([][]float32, lanes)
+	next := make([]int, lanes)
+	for lane := range lanes {
+		kvs[lane], err = e.NewPrefixKV(prefixLen + 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer kvs[lane].Close()
+		seed := make([]int, prefixLen)
+		for i := range seed {
+			seed[i] = 100 + lane*prefixLen + i
+		}
+		if err := e.HiddenLastExtendInto(kvs[lane], 0, seed, make([]float32, m.cfg.hidden), scalarWS); err != nil {
+			b.Fatalf("seed lane %d: %v", lane, err)
+		}
+		tokens[lane] = 500 + lane
+		hidden[lane] = make([]float32, m.cfg.hidden)
+		logits[lane] = make([]float32, m.cfg.vocab)
+		gotHidden[lane] = make([]float32, m.cfg.hidden)
+	}
+
+	wantHidden := make([][]float32, lanes)
+	wantTokens := make([]int, lanes)
+	if err := ws.gpu.decodeModeTile(m, kvs, tokens, hidden, logits, true, 4); err != nil {
+		b.Fatalf("full-logit reference: %v", err)
+	}
+	for lane := range lanes {
+		wantHidden[lane] = append([]float32(nil), hidden[lane]...)
+		wantTokens[lane] = greedyArgmax(logits[lane])
+	}
+	variants := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "full-copy-cpu-scan", run: func() error {
+			if err := ws.gpu.decodeModeTile(m, kvs, tokens, hidden, logits, true, 4); err != nil {
+				return err
+			}
+			for lane := range lanes {
+				next[lane] = greedyArgmax(logits[lane])
+			}
+			return nil
+		}},
+		{name: "mapped-cpu-scan", run: func() error {
+			return ws.gpu.decodeGreedyMode(m, kvs, tokens, gotHidden, next, true, 4, false)
+		}},
+		{name: "gpu-argmax", run: func() error {
+			return ws.gpu.decodeGreedyMode(m, kvs, tokens, gotHidden, next, true, 4, true)
+		}},
+	}
+	for _, variant := range variants {
+		if err := variant.run(); err != nil {
+			b.Fatalf("%s parity warmup: %v", variant.name, err)
+		}
+		for lane := range lanes {
+			if next[lane] != wantTokens[lane] {
+				b.Fatalf("%s lane %d token %d, want %d", variant.name, lane, next[lane], wantTokens[lane])
+			}
+			h := hidden[lane]
+			if variant.name != "full-copy-cpu-scan" {
+				h = gotHidden[lane]
+			}
+			for i := range h {
+				if math.Float32bits(h[i]) != math.Float32bits(wantHidden[lane][i]) {
+					b.Fatalf("%s lane %d hidden[%d] changed bits", variant.name, lane, i)
+				}
+			}
+		}
+	}
+
+	elapsed := make([]time.Duration, len(variants))
+	cpuElapsed := make([]time.Duration, len(variants))
+	b.ReportAllocs()
+	b.ResetTimer()
+	iteration := 0
+	for b.Loop() {
+		for step := range variants {
+			index := step
+			if iteration%2 != 0 {
+				index = len(variants) - 1 - step
+			}
+			cpuBefore := benchmarkProcessCPU(b)
+			start := time.Now()
+			err := variants[index].run()
+			elapsed[index] += time.Since(start)
+			cpuElapsed[index] += benchmarkProcessCPU(b) - cpuBefore
+			if err != nil {
+				b.Fatalf("%s decode: %v", variants[index].name, err)
+			}
+		}
+		iteration++
+	}
+	b.StopTimer()
+	for i, variant := range variants {
+		b.ReportMetric(float64(elapsed[i].Nanoseconds())/float64(b.N)/1e6, variant.name+"-ms/step")
+		b.ReportMetric(float64(cpuElapsed[i].Nanoseconds())/float64(b.N)/1e6, variant.name+"-cpu-ms/step")
+	}
+}
+
+func benchmarkProcessCPU(b *testing.B) time.Duration {
+	b.Helper()
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		b.Fatal(err)
+	}
+	return time.Duration(usage.Utime.Sec)*time.Second + time.Duration(usage.Utime.Usec)*time.Microsecond +
+		time.Duration(usage.Stime.Sec)*time.Second + time.Duration(usage.Stime.Usec)*time.Microsecond
 }

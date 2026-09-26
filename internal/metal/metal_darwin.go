@@ -182,6 +182,7 @@ func Open() (*Device, error) {
 		d.queue = send0(d.dev, selNewQueue)
 	})
 	if d.queue == 0 {
+		d.Close()
 		return nil, errors.New("metal: cannot create a command queue")
 	}
 	return d, nil
@@ -306,7 +307,7 @@ func (d *Device) Wrap(mem []byte) (*Buffer, error) {
 // Bytes returns the buffer's memory, shared with the GPU.
 func (b *Buffer) Bytes() []byte { return b.data }
 
-// Release frees the buffer.
+// Release frees the buffer. All encoders using it must finish Wait first.
 func (b *Buffer) Release() {
 	if b != nil && b.b != 0 {
 		send0(b.b, selRelease)
@@ -324,6 +325,9 @@ type Encoder struct {
 	cmd, enc   uintptr
 	pool       uintptr
 	groups, tg [3]uintptr
+	pipeline   uintptr
+	bound      uint16
+	buffers    [16]struct{ handle, offset uintptr }
 }
 
 // Begin starts a command buffer with one compute encoder. Concurrent
@@ -332,6 +336,7 @@ type Encoder struct {
 func (d *Device) Begin(e *Encoder, concurrent bool) {
 	runtime.LockOSThread()
 	e.d = d
+	e.pipeline, e.bound = 0, 0
 	e.pool, _, _ = call6(poolPush, 0, 0, 0, 0, 0, 0)
 	e.cmd = send0(d.queue, selCommandBuffer)
 	if concurrent {
@@ -343,16 +348,36 @@ func (d *Device) Begin(e *Encoder, concurrent bool) {
 
 // SetPipeline selects the kernel for following dispatches.
 func (e *Encoder) SetPipeline(p *Pipeline) {
+	if e.pipeline == p.p {
+		return
+	}
+	e.pipeline = p.p
 	rawCall6(msgSend, e.enc, selSetPipeline, p.p, 0, 0, 0)
 }
 
 // SetBuffer binds b at byte offset to argument index.
 func (e *Encoder) SetBuffer(b *Buffer, offset, index int) {
+	// Binding state persists across pipeline changes within this encoder.
+	// Keep the common slots inline, private, and pointer-free. Uncached
+	// indices still use Metal's ordinary binding path.
+	if uint(index) < uint(len(e.buffers)) {
+		bit := uint16(1) << uint(index)
+		slot := &e.buffers[index]
+		if e.bound&bit != 0 && slot.handle == b.b && slot.offset == uintptr(offset) {
+			return
+		}
+		slot.handle, slot.offset = b.b, uintptr(offset)
+		e.bound |= bit
+	}
 	rawCall6(msgSend, e.enc, selSetBuffer, b.b, uintptr(offset), uintptr(index), 0)
 }
 
 // SetBytes copies n bytes at p into argument index (at most 4 KiB).
 func (e *Encoder) SetBytes(p unsafe.Pointer, n, index int) {
+	// Inline bytes replace the buffer binding at the same argument index.
+	if uint(index) < uint(len(e.buffers)) {
+		e.bound &^= uint16(1) << uint(index)
+	}
 	rawCall6(msgSend, e.enc, selSetBytes, uintptr(p), uintptr(n), uintptr(index), 0)
 }
 

@@ -46,6 +46,38 @@ func (e *Evaluator) NewDecodeBatchWorkspace(capacity int) (*DecodeBatchWorkspace
 // until the call returns.
 func (e *Evaluator) DecodeBatchInto(kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, ws *DecodeBatchWorkspace) error {
 	defer runtime.KeepAlive(ws)
+	if err := e.validateDecodeBatch(kvs, tokens, hidden, logits, nil, ws); err != nil {
+		return err
+	}
+	if err := ws.gpu.decode(e.m, kvs, tokens, hidden, logits); err != nil {
+		return err
+	}
+	for lane, kv := range kvs {
+		kv.tokens = append(kv.tokens, tokens[lane])
+	}
+	return nil
+}
+
+// DecodeBatchGreedyInto advances each private prefix by one token and returns
+// the exact first-maximum token for its next step. It writes post-final-norm
+// hidden states but does not copy the full vocabulary logits to the caller.
+// The full-logit DecodeBatchInto API remains available for callers that need
+// every score. Prefixes advance only after the GPU decode succeeds.
+func (e *Evaluator) DecodeBatchGreedyInto(kvs []*PrefixKV, tokens []int, hidden [][]float32, nextTokens []int, ws *DecodeBatchWorkspace) error {
+	defer runtime.KeepAlive(ws)
+	if err := e.validateDecodeBatch(kvs, tokens, hidden, nil, nextTokens, ws); err != nil {
+		return err
+	}
+	if err := ws.gpu.decodeGreedy(e.m, kvs, tokens, hidden, nextTokens); err != nil {
+		return err
+	}
+	for lane, kv := range kvs {
+		kv.tokens = append(kv.tokens, tokens[lane])
+	}
+	return nil
+}
+
+func (e *Evaluator) validateDecodeBatch(kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, nextTokens []int, ws *DecodeBatchWorkspace) error {
 	if e == nil || e.m == nil {
 		return errors.New("qwen3: nil evaluator")
 	}
@@ -53,8 +85,9 @@ func (e *Evaluator) DecodeBatchInto(kvs []*PrefixKV, tokens []int, hidden, logit
 		return errors.New("qwen3: nil, closed, or foreign decode batch workspace")
 	}
 	n := len(kvs)
-	if n == 0 || n != len(tokens) || n != len(hidden) || n != len(logits) {
-		return fmt.Errorf("qwen3: decode batch has %d prefixes, %d tokens, %d hidden rows, and %d logits rows", n, len(tokens), len(hidden), len(logits))
+	if n == 0 || n != len(tokens) || n != len(hidden) || (logits == nil) == (nextTokens == nil) ||
+		logits != nil && n != len(logits) || nextTokens != nil && n != len(nextTokens) {
+		return fmt.Errorf("qwen3: decode batch has %d prefixes, %d tokens, %d hidden rows, %d logits rows, and %d next tokens", n, len(tokens), len(hidden), len(logits), len(nextTokens))
 	}
 	if n > ws.capacity {
 		return fmt.Errorf("qwen3: decode batch has %d lanes, workspace capacity is %d", n, ws.capacity)
@@ -75,26 +108,30 @@ func (e *Evaluator) DecodeBatchInto(kvs []*PrefixKV, tokens []int, hidden, logit
 		if tokens[lane] < 0 || tokens[lane] >= c.vocab {
 			return fmt.Errorf("qwen3: token %d in decode lane %d is outside vocabulary", tokens[lane], lane)
 		}
-		if len(hidden[lane]) != c.hidden || len(logits[lane]) != c.vocab {
-			return fmt.Errorf("qwen3: decode lane %d has hidden/logits widths %d/%d, want %d/%d", lane, len(hidden[lane]), len(logits[lane]), c.hidden, c.vocab)
+		if len(hidden[lane]) != c.hidden || logits != nil && len(logits[lane]) != c.vocab {
+			return fmt.Errorf("qwen3: decode lane %d has hidden/logits widths %d/%d, want %d/%d", lane, len(hidden[lane]), rowLen(logits, lane), c.hidden, c.vocab)
 		}
-		if decodeFloatRowsOverlap(hidden[lane], logits[lane]) {
+		if nextTokens != nil && (decodeIntRowsOverlap(nextTokens, tokens) || decodeIntRowsOverlap(nextTokens, kv.tokens[:cap(kv.tokens)]) || decodeIntFloatOverlap(nextTokens, hidden[lane])) {
+			return errors.New("qwen3: decode batch destinations overlap inputs")
+		}
+		if logits != nil && decodeFloatRowsOverlap(hidden[lane], logits[lane]) {
 			return errors.New("qwen3: decode batch destinations overlap")
 		}
 		for prev := 0; prev < lane; prev++ {
-			if decodeFloatRowsOverlap(hidden[lane], hidden[prev]) || decodeFloatRowsOverlap(hidden[lane], logits[prev]) ||
-				decodeFloatRowsOverlap(logits[lane], hidden[prev]) || decodeFloatRowsOverlap(logits[lane], logits[prev]) {
+			if decodeFloatRowsOverlap(hidden[lane], hidden[prev]) ||
+				logits != nil && (decodeFloatRowsOverlap(hidden[lane], logits[prev]) || decodeFloatRowsOverlap(logits[lane], hidden[prev]) || decodeFloatRowsOverlap(logits[lane], logits[prev])) {
 				return errors.New("qwen3: decode batch destinations overlap")
 			}
 		}
 	}
-	if err := ws.gpu.decode(e.m, kvs, tokens, hidden, logits); err != nil {
-		return err
-	}
-	for lane, kv := range kvs {
-		kv.tokens = append(kv.tokens, tokens[lane])
-	}
 	return nil
+}
+
+func rowLen(rows [][]float32, index int) int {
+	if rows == nil {
+		return 0
+	}
+	return len(rows[index])
 }
 
 // Close releases scratch owned by ws. Repeated calls are harmless.
@@ -105,6 +142,7 @@ func (ws *DecodeBatchWorkspace) Close() error {
 	ws.gpu.release()
 	ws.gpu = nil
 	ws.capacity = 0
+	ws.owner = nil
 	return nil
 }
 
@@ -117,4 +155,38 @@ func decodeFloatRowsOverlap(a, b []float32) bool {
 	a1 := a0 + uintptr(len(a))*unsafe.Sizeof(float32(0))
 	b1 := b0 + uintptr(len(b))*unsafe.Sizeof(float32(0))
 	return a0 < b1 && b0 < a1
+}
+
+func decodeIntRowsOverlap(a, b []int) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	a0 := uintptr(unsafe.Pointer(unsafe.SliceData(a)))
+	b0 := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	a1 := a0 + uintptr(len(a))*unsafe.Sizeof(int(0))
+	b1 := b0 + uintptr(len(b))*unsafe.Sizeof(int(0))
+	return a0 < b1 && b0 < a1
+}
+
+func decodeIntFloatOverlap(a []int, b []float32) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	a0 := uintptr(unsafe.Pointer(unsafe.SliceData(a)))
+	b0 := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	a1 := a0 + uintptr(len(a))*unsafe.Sizeof(int(0))
+	b1 := b0 + uintptr(len(b))*unsafe.Sizeof(float32(0))
+	return a0 < b1 && b0 < a1
+}
+
+// greedyArgmax matches the decoder's strict-greater-than scan: ties retain
+// their first index, and comparisons with NaNs never update the current best.
+func greedyArgmax(values []float32) int {
+	best, at := values[0], 0
+	for i := 1; i < len(values); i++ {
+		if values[i] > best {
+			best, at = values[i], i
+		}
+	}
+	return at
 }

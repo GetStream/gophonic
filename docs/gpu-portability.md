@@ -179,6 +179,28 @@ startup or memory penalty.
 - Keep the existing CPU and native Metal defaults until real workload results
   justify a change. A portable adapter's existence is not model availability.
 
+## Qualification result on Apple
+
+The pinned pure-Go provider passes actual Metal compute tests for BF16 and
+Q8B projections, independent workspaces, projection banks, and dependent
+compute-pass ordering. CI also executes the shaders through lavapipe Vulkan
+with CGO disabled. Lavapipe validates the Vulkan execution path; it does not
+measure NVIDIA or AMD hardware throughput.
+
+The optimized portable Q8B path still misses the replacement gate on the
+local M4 Max. A matched, nonzero 28-projection stream measured a 463 µs
+native median with zero Go allocations; portable dispatches took roughly
+0.7–0.8 ms and about 2,120 allocations. A single same-input projection bank
+narrowed this to 529–536 µs and 394 allocations, but is not a full decoder.
+An isolated FFI-signature cache reduced allocations without improving
+latency and was rejected. Raw samples, methodology, and precision caveats
+are in the [GPU benchmark notes](benchmarks/gpu/README.md).
+
+Therefore the full portable decoder/encoder replacement is not promoted.
+The portable package remains an internal qualification layer; the public
+Apple path retains native Metal. Additional graph integration requires a
+qualified execution path, not a silent performance regression.
+
 ## Migration sequence
 
 1. Prove the pinned dependency can compile, dispatch, order dependent compute,

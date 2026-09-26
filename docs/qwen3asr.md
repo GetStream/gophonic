@@ -84,6 +84,62 @@ and Qwen3-0.6B. Single-token attention reads the cache in blocks of eight
 keys, with four simdgroups sharing each head's keys, so its loads and
 reductions overlap.
 
+## Explicit concurrent-call batches
+
+`NewBatchTranscriber(model, capacity, workers)` owns 1–8 private lanes and
+batches compatible next-token projections. It currently requires `FormatGPU`
+on Apple Metal. Decoder activations remain FP32 and the existing Q8B weights
+and scales are unchanged. Each lane keeps its own encoder state, scratch,
+transcript, and K/V cache. At token boundaries, a coordinator temporarily owns
+the blocked lanes' decode buffers and reuses immutable weights across them.
+The model must outlive the batch transcriber. The greedy batch path returns
+one selected token per lane; callers needing every vocabulary score retain
+the full-logit decoder API. Selection preserves the first maximum and does
+not change weight or activation precision.
+
+```go
+batch, err := qwen3asr.NewBatchTranscriber(model, 4, 1)
+if err != nil {
+    return err
+}
+defer batch.Close()
+
+// Each input is mono 16 kHz PCM. One output belongs to each input.
+inputs := [][]float32{callerA, callerB, callerC, callerD}
+outputs := make([]speech.Transcript, len(inputs))
+err = batch.Transcribe(ctx, inputs, nil, outputs)
+```
+
+Options may be nil or contain one `speech.Options` per input. Forced language,
+context, segments, and partial transcripts follow the ordinary transcriber.
+Inputs and partial transcripts stay immutable during the call; outputs must
+have independent backing storage. Calls on one batch transcriber must not
+overlap, including `Close`. Cancellation waits for all lanes to return their
+buffers before returning to the caller. A single input takes the ordinary
+scalar decode path, as does the tail after all but one lane have finished.
+
+This API targets throughput for a ready group of calls. It does not wait for
+new requests or implement server admission scheduling. A long prefill or a
+slow lane can hold the group at a token boundary; use independent transcribers
+when calls need separate latency deadlines. The ordinary `Transcriber` and
+provider defaults are unchanged. Qualification methodology and measured
+results are in [GPU benchmark notes](benchmarks/gpu/README.md).
+
+Each lane stores its persistent hidden/logits arrays in one bounded, aligned
+arena; its numeric payload is outside Go GC pacing on Unix. GPU workspaces
+allocate scratch once and reuse it. Private-prefix decoding
+no longer reserves an unused second K/V cache: for Qwen3-ASR-1.7B this avoids
+448 MiB of requested buffer capacity per lane. The split-K scratch bound is
+also reduced from 16 MiB to 4 MiB. These are buffer-capacity savings, not a
+measurement of process RSS or physical residency.
+
+Close each transcriber before releasing its model. Close stops workers,
+releases native buffers and mapped arenas, and drops model and high-water
+scratch references so a retained closed handle does not pin those objects.
+Compiled libraries are released after pipeline creation. Model release
+frees encoder and decoder pipelines and weight buffers. Neither close nor
+release may overlap inference.
+
 ## Measurements
 
 Apple M4 Max, warm lane, PCM to text, Qwen3-ASR-1.7B, zero allocations

@@ -358,13 +358,17 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 // Release frees what the Weights hold outside the Go heap: GPU buffers and
 // mapped files. The Weights are unusable afterwards.
 func (m *Weights) Release() {
+	if m == nil {
+		return
+	}
 	_ = m.memory.Close()
 	m.memory = nil
 	m.releaseGPU()
 	for _, unmap := range m.unmap {
 		unmap()
 	}
-	m.unmap, m.embed = nil, nil
+	m.unmap, m.embed, m.finalNorm, m.layers = nil, nil, nil, nil
+	m.head = linear{}
 }
 
 // Config is the geometry of a Qwen3 model.

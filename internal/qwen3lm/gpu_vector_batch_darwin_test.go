@@ -249,6 +249,91 @@ func TestGPUQ8BVectorGemvParity(t *testing.T) {
 	}
 }
 
+func TestGPUGreedyArgmaxStable(t *testing.T) {
+	dev, err := metal.Open()
+	if err != nil {
+		t.Skip(err)
+	}
+	defer dev.Close()
+	c := &modelConfig{hidden: 2048, heads: 16, kvHeads: 8, headDim: 128, intermediate: 6144}
+	lib, err := dev.Compile(gpuDecodeBatchSourceFor(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Release()
+	pipeline, err := dev.Pipeline(lib, "greedy_argmax_rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipeline.Release()
+
+	const rows, vocab, stride = 10, 257, 260
+	input, err := dev.Buffer(4 * rows * stride)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Release()
+	output, err := dev.Buffer(4 * rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Release()
+	values := floats(input.Bytes())
+	for row := range rows {
+		rowValues := values[row*stride : (row+1)*stride]
+		for i := range vocab {
+			rowValues[i] = float32(i) * -1
+		}
+		// Padded entries must never participate in the argmax.
+		for i := vocab; i < stride; i++ {
+			rowValues[i] = float32(math.Inf(1))
+		}
+	}
+	cases := []struct {
+		name string
+		set  func([]float32)
+	}{
+		{"first-tie", func(v []float32) { v[7], v[19] = 42, 42 }},
+		{"positive-infinity-tie", func(v []float32) { v[2], v[11] = float32(math.Inf(1)), float32(math.Inf(1)) }},
+		{"all-negative-infinity", func(v []float32) {
+			clear(v[:vocab])
+			for i := range vocab {
+				v[i] = float32(math.Inf(-1))
+			}
+		}},
+		{"nan-at-zero", func(v []float32) { v[0], v[2] = float32(math.NaN()), 99 }},
+		{"later-nan-ignored", func(v []float32) { v[1], v[8], v[9] = 20, float32(math.NaN()), 19 }},
+		{"signed-zero-first-negative", func(v []float32) { v[0], v[4] = float32(math.Copysign(0, -1)), 0 }},
+		{"signed-zero-first-positive", func(v []float32) { v[0], v[4] = 0, float32(math.Copysign(0, -1)) }},
+		{"positive-infinity-wins", func(v []float32) { v[1], v[200] = float32(math.Inf(-1)), float32(math.Inf(1)) }},
+		{"last-valid-index", func(v []float32) { v[256] = 1 }},
+		{"subnormal-positive-wins", func(v []float32) { v[0], v[1] = math.Float32frombits(0x80000001), math.Float32frombits(1) }},
+	}
+	for row, test := range cases {
+		rowValues := values[row*stride : (row+1)*stride]
+		clear(rowValues[:vocab])
+		test.set(rowValues)
+	}
+	args := greedyArgmaxArgs{vocab: vocab, stride: stride}
+	var enc metal.Encoder
+	dev.Begin(&enc, false)
+	enc.SetPipeline(pipeline)
+	enc.SetBuffer(input, 0, 0)
+	enc.SetBuffer(output, 0, 1)
+	enc.SetBytes(unsafe.Pointer(&args), 8, 2)
+	enc.Dispatch(metal.Size{X: rows, Y: 1, Z: 1}, metal.Size{X: 256, Y: 1, Z: 1})
+	if err := enc.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	got := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(output.Bytes()))), rows)
+	for row, test := range cases {
+		want := greedyArgmax(values[row*stride : row*stride+vocab])
+		if int(got[row]) != want {
+			t.Errorf("%s: GPU token %d, CPU token %d", test.name, got[row], want)
+		}
+	}
+}
+
 func gpuVectorError(want, got []float32) (maxAbs, rel float64, finite bool) {
 	finite = len(want) == len(got)
 	if !finite {

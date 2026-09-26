@@ -100,9 +100,7 @@ func (kv *PrefixKV) Close() error {
 		kv.gpu = nil
 	}
 	err := kv.memory.Close()
-	kv.memory = nil
-	kv.packs, kv.tokens = nil, nil
-	kv.capacity = 0
+	*kv = PrefixKV{}
 	return err
 }
 
@@ -455,11 +453,10 @@ func (ws *Workspace) Close() error {
 		ws.gpu = nil
 	}
 	ws.pool.close()
-	ws.pool = nil
 	err := ws.memory.Close()
-	ws.memory = nil
-	ws.h, ws.norm, ws.q, ws.ctx, ws.attn, ws.gate, ws.up, ws.keys, ws.values = nil, nil, nil, nil, nil, nil, nil, nil, nil
-	ws.capacity = 0
+	// Workers have stopped. Retired handles must not retain the model,
+	// packed tiles, attention scratch, or views into unmapped arenas.
+	*ws = Workspace{}
 	return err
 }
 

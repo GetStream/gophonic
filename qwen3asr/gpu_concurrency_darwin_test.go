@@ -71,67 +71,87 @@ func BenchmarkGPUConcurrentTranscribe(b *testing.B) {
 	pcm := clipPCM(b, "jfk")
 	for _, count := range []int{1, 2, 4, 8} {
 		b.Run(fmt.Sprintf("lanes=%d", count), func(b *testing.B) {
-			jobs := make([]chan struct{}, count)
-			results := make(chan error, count)
-			var stopped sync.WaitGroup
-			defer func() {
-				for _, jobs := range jobs {
-					if jobs != nil {
-						close(jobs)
-					}
-				}
-				stopped.Wait()
-			}()
-			for i := range count {
-				tr, err := NewTranscriber(m, 1)
-				if err != nil {
-					b.Fatal(err)
-				}
-				var dst speech.Transcript
-				if err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst); err != nil {
-					tr.Close()
-					b.Fatal(err)
-				}
-				want := slices.Clone(dst.Text)
-				jobs[i] = make(chan struct{}, 1)
-				stopped.Add(1)
-				go func(jobs <-chan struct{}) {
-					defer stopped.Done()
-					defer tr.Close()
-					for range jobs {
-						err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst)
-						if err == nil && !bytes.Equal(dst.Text, want) {
-							err = fmt.Errorf("concurrent transcript changed")
-						}
-						results <- err
-					}
-				}(jobs[i])
+			inputs := make([][]float32, count)
+			for i := range inputs {
+				inputs[i] = pcm
 			}
-			run := func() {
-				for _, jobs := range jobs {
-					jobs <- struct{}{}
-				}
-				var first error
-				for range count {
-					if err := <-results; first == nil {
-						first = err
-					}
-				}
-				if first != nil {
-					b.Fatal(first)
-				}
-			}
-			// Warm the concurrent schedule as well as each individual lane.
-			// Thread-local driver/runtime setup belongs outside the measurement.
-			for range 2 {
-				run()
-			}
+			calls := newGPUConcurrentCalls(b, m, inputs)
 			b.ReportAllocs()
 			for b.Loop() {
-				run()
+				if err := calls.run(); err != nil {
+					b.Fatal(err)
+				}
 			}
 			b.ReportMetric(float64(b.N*count)/b.Elapsed().Seconds(), "calls/s")
 			b.ReportMetric(float64(count), "calls/op")
 		})
 	}
+}
+
+// gpuConcurrentCalls is the same persistent independent-worker baseline for
+// the standalone and interleaved benchmarks. All transcript checks are inside
+// run, and both serial and concurrent warmup are outside measurement.
+type gpuConcurrentCalls struct {
+	jobs    []chan struct{}
+	results chan error
+	stopped sync.WaitGroup
+	want    [][]byte
+}
+
+func newGPUConcurrentCalls(tb testing.TB, m *Model, inputs [][]float32) *gpuConcurrentCalls {
+	tb.Helper()
+	r := &gpuConcurrentCalls{jobs: make([]chan struct{}, len(inputs)), results: make(chan error, len(inputs)), want: make([][]byte, len(inputs))}
+	tb.Cleanup(func() {
+		for _, jobs := range r.jobs {
+			if jobs != nil {
+				close(jobs)
+			}
+		}
+		r.stopped.Wait()
+	})
+	for i, pcm := range inputs {
+		tr, err := NewTranscriber(m, 1)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		var dst speech.Transcript
+		if err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst); err != nil {
+			tr.Close()
+			tb.Fatal(err)
+		}
+		want := slices.Clone(dst.Text)
+		r.want[i] = want
+		r.jobs[i] = make(chan struct{}, 1)
+		r.stopped.Add(1)
+		go func(jobs <-chan struct{}) {
+			defer r.stopped.Done()
+			defer tr.Close()
+			for range jobs {
+				err := tr.Transcribe(context.Background(), pcm, speech.Options{}, &dst)
+				if err == nil && !bytes.Equal(dst.Text, want) {
+					err = fmt.Errorf("concurrent transcript changed")
+				}
+				r.results <- err
+			}
+		}(r.jobs[i])
+	}
+	for range 2 {
+		if err := r.run(); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	return r
+}
+
+func (r *gpuConcurrentCalls) run() error {
+	for _, jobs := range r.jobs {
+		jobs <- struct{}{}
+	}
+	var first error
+	for range r.jobs {
+		if err := <-r.results; first == nil {
+			first = err
+		}
+	}
+	return first
 }

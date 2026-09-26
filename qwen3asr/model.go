@@ -243,14 +243,21 @@ func (m *Model) Languages() []string {
 	return names
 }
 
-// Release frees resources the decoder holds outside the Go heap. The model
-// is unusable afterwards.
+// Release frees the model's native resources and drops references to loaded
+// weights and tokenizer storage. All transcribers must be closed first. The
+// model is unusable afterwards; repeated releases are harmless.
 func (m *Model) Release() {
+	if m == nil {
+		return
+	}
 	if m.enc != nil {
 		_ = m.enc.memory.Close()
 	}
-	m.lm.Release()
+	if m.lm != nil {
+		m.lm.Release()
+	}
 	if m.genc != nil {
 		m.genc.release()
 	}
+	*m = Model{}
 }

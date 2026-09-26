@@ -438,7 +438,23 @@ func (e *Engine) SubmitIndependentReadback(dispatches []Dispatch, src *wgpu.Buff
 func (e *Engine) mapReadback(staging *wgpu.Buffer, size uint64, dst []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	return copyMappedReadback(ctx, staging, size, dst)
+}
+
+type readbackMapping interface {
+	Map(context.Context, wgpu.MapMode, uint64, uint64) error
+	MappedRange(uint64, uint64) (*wgpu.MappedRange, error)
+	Unmap() error
+}
+
+func copyMappedReadback(ctx context.Context, staging readbackMapping, size uint64, dst []byte) error {
 	if err := staging.Map(ctx, wgpu.MapModeRead, 0, size); err != nil {
+		// Buffer.Map can return on context cancellation while the underlying
+		// mapping remains pending. Unmap cancels that request so this staging
+		// buffer can be reused or released safely.
+		if unmapErr := staging.Unmap(); unmapErr != nil && !errors.Is(unmapErr, wgpu.ErrMapNotMapped) {
+			return errors.Join(fmt.Errorf("gpuportable: map readback: %w", err), fmt.Errorf("gpuportable: cancel pending readback map: %w", unmapErr))
+		}
 		return fmt.Errorf("gpuportable: map readback: %w", err)
 	}
 	defer staging.Unmap()

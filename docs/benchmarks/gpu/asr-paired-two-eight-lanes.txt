@@ -1,0 +1,35 @@
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (6.12s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.07s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.23s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.20s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (6.17s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.32s)
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/qwen3asr
+cpu: Apple M4 Max
+BenchmarkGPUPairedTranscribe
+BenchmarkGPUPairedTranscribe/jfk/lanes=2
+BenchmarkGPUPairedTranscribe/jfk/lanes=2-16         	       4	1161940594 ns/op	         3.568 batch-calls/s	        21.05 batch-cpu-ms/call	       560.5 batch-ms/wave	        34.56 independent-cpu-ms/call	       601.4 independent-ms/wave	         1.073 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=2-16         	       4	1318681531 ns/op	         3.268 batch-calls/s	        22.40 batch-cpu-ms/call	       611.9 batch-ms/wave	        29.98 independent-cpu-ms/call	       706.8 independent-ms/wave	         1.155 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=2-16         	       4	1153815146 ns/op	         3.694 batch-calls/s	        19.29 batch-cpu-ms/call	       541.4 batch-ms/wave	        25.76 independent-cpu-ms/call	       612.4 independent-ms/wave	         1.131 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       4	3184393938 ns/op	         5.774 batch-calls/s	        18.66 batch-cpu-ms/call	      1386 batch-ms/wave	        37.06 independent-cpu-ms/call	      1799 independent-ms/wave	         1.298 speedup	     224 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       4	4936841323 ns/op	         3.818 batch-calls/s	        49.22 batch-cpu-ms/call	      2095 batch-ms/wave	        71.54 independent-cpu-ms/call	      2842 independent-ms/wave	         1.356 speedup	     504 B/op	       4 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       4	5973093469 ns/op	         3.027 batch-calls/s	        27.05 batch-cpu-ms/call	      2643 batch-ms/wave	        39.75 independent-cpu-ms/call	      3331 independent-ms/wave	         1.260 speedup	     364 B/op	       3 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=2
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16       	       4	1212112990 ns/op	         3.098 batch-calls/s	        17.93 batch-cpu-ms/call	       645.6 batch-ms/wave	        19.66 independent-cpu-ms/call	       566.5 independent-ms/wave	         0.8774 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16       	       4	1622245625 ns/op	         2.468 batch-calls/s	        20.22 batch-cpu-ms/call	       810.3 batch-ms/wave	        21.61 independent-cpu-ms/call	       811.9 independent-ms/wave	         1.002 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16       	       4	1178279292 ns/op	         3.590 batch-calls/s	        14.85 batch-cpu-ms/call	       557.0 batch-ms/wave	        17.26 independent-cpu-ms/call	       621.2 independent-ms/wave	         1.115 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       4	4548835906 ns/op	         3.764 batch-calls/s	        19.24 batch-cpu-ms/call	      2125 batch-ms/wave	        25.07 independent-cpu-ms/call	      2423 independent-ms/wave	         1.140 speedup	     224 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       4	3852844333 ns/op	         4.219 batch-calls/s	        15.85 batch-cpu-ms/call	      1896 batch-ms/wave	        18.83 independent-cpu-ms/call	      1957 independent-ms/wave	         1.032 speedup	     476 B/op	       4 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       4	3994017031 ns/op	         4.329 batch-calls/s	        18.84 batch-cpu-ms/call	      1848 batch-ms/wave	        19.95 independent-cpu-ms/call	      2146 independent-ms/wave	         1.161 speedup	     196 B/op	       1 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	273.102s

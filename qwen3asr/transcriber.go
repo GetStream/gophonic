@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/GetStream/gophonic/internal/arena"
 	"github.com/GetStream/gophonic/internal/mel"
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
@@ -52,6 +53,9 @@ type Transcriber struct {
 	lm              *qwen3lm.Workspace
 	kv              *qwen3lm.PrefixKV
 	tokWS           qwen3lm.TokenizerWorkspace
+	nextToken       int
+	decodeBatch     *batchDecodeLane // exclusive token-step handoff, when owned by a BatchTranscriber
+	decodeMemory    *arena.Arena     // private hidden/logits payload, outside GC pacing on Unix
 
 	pcm      []float32 // normalized or padded copy of the input, when needed
 	features []float32
@@ -74,8 +78,8 @@ type Transcriber struct {
 // NewTranscriber opens a lane over m with workers CPU workers, including
 // the caller; zero picks GOMAXPROCS, at most 8 for the encoder.
 func NewTranscriber(m *Model, workers int) (*Transcriber, error) {
-	if m == nil {
-		return nil, errors.New("qwen3asr: nil model")
+	if m == nil || m.enc == nil || m.eval == nil || m.lm == nil {
+		return nil, errors.New("qwen3asr: nil or released model")
 	}
 	if workers < 0 || workers > 64 {
 		return nil, fmt.Errorf("qwen3asr: invalid worker count %d", workers)
@@ -99,7 +103,14 @@ func NewTranscriber(m *Model, workers int) (*Transcriber, error) {
 		return nil, err
 	}
 	c := m.lm.Config()
-	t.lm, t.hidden, t.logits = lm, make([]float32, c.Hidden), make([]float32, c.Vocab)
+	memory, err := arena.New(c.Hidden, c.Vocab)
+	if err != nil {
+		_ = lm.Close()
+		t.closeEncoder()
+		return nil, err
+	}
+	t.lm, t.decodeMemory = lm, memory
+	t.hidden, t.logits = memory.Take(c.Hidden), memory.Take(c.Vocab)
 	return t, nil
 }
 
@@ -113,7 +124,8 @@ func (t *Transcriber) closeEncoder() {
 	}
 }
 
-// Close releases the lane's workers. It is safe to call more than once.
+// Close releases the lane's workers and numeric arenas. It must not overlap
+// Transcribe. It is safe to call more than once.
 func (t *Transcriber) Close() error {
 	if t == nil || t.closed {
 		return nil
@@ -125,6 +137,12 @@ func (t *Transcriber) Close() error {
 		err = e
 	}
 	t.kv = nil
+	if e := t.decodeMemory.Close(); err == nil {
+		err = e
+	}
+	// A closed handle must not keep the model, frontend, draft logits, or
+	// any other high-water scratch reachable. All workers have stopped.
+	*t = Transcriber{closed: true}
 	return err
 }
 
@@ -135,6 +153,7 @@ func (t *Transcriber) Close() error {
 // Qwen3-ASR produces no timestamps, so a Segments request yields one segment
 // per piece, and Words is unsupported.
 func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech.Options, dst *speech.Transcript) error {
+	defer runtime.KeepAlive(t)
 	if t == nil || t.closed {
 		return speech.ErrClosed
 	}
@@ -400,6 +419,7 @@ func (t *Transcriber) draftFrom(partial *speech.Transcript, forced string) error
 // decoding goes on from the first it would not. The key-value cache keeps
 // the prompt prefix that does not depend on the audio for the next call.
 func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
+	defer runtime.KeepAlive(t)
 	ev := t.m.eval
 	prompt := len(t.ids)
 	t.ids = append(t.ids, t.draft...)
@@ -445,11 +465,11 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 	if done {
 		return nil
 	}
+	if err := ev.LogitsInto(t.hidden, t.logits, t.lm); err != nil {
+		return err
+	}
+	next := argmax(t.logits)
 	for {
-		if err := ev.LogitsInto(t.hidden, t.logits, t.lm); err != nil {
-			return err
-		}
-		next := argmax(t.logits)
 		if next == t.m.ids.eos[0] || next == t.m.ids.eos[1] {
 			return nil
 		}
@@ -460,8 +480,19 @@ func (t *Transcriber) generate(ctx context.Context, maxNew int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := ev.HiddenLastExtendInto(t.kv, len(t.kv.Tokens()), t.gen[len(t.gen)-1:], t.hidden, t.lm); err != nil {
-			return fmt.Errorf("qwen3asr: decode: %w", err)
+		if t.decodeBatch != nil {
+			if err := t.decodeBatch.advance(ctx); err != nil {
+				return fmt.Errorf("qwen3asr: batch decode: %w", err)
+			}
+			next = t.nextToken
+		} else {
+			if err := ev.HiddenLastExtendInto(t.kv, len(t.kv.Tokens()), t.gen[len(t.gen)-1:], t.hidden, t.lm); err != nil {
+				return fmt.Errorf("qwen3asr: decode: %w", err)
+			}
+			if err := ev.LogitsInto(t.hidden, t.logits, t.lm); err != nil {
+				return err
+			}
+			next = argmax(t.logits)
 		}
 	}
 }

@@ -184,6 +184,58 @@ GEMV_KERNELS(_q4, Q4)
 GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B, true)
 
 #ifdef QWEN3_DECODE_BATCH
+struct GreedyArgs {
+	uint vocab;
+	uint stride;
+};
+
+// A stable first-maximum reduction over one padded logits row. NaNs after
+// index zero are ignored because scalar argmax's strict `>` comparison does
+// the same; a NaN at index zero keeps index zero as the scalar result.
+kernel void greedy_argmax_rows(device const float *x [[buffer(0)]], device uint *tokens [[buffer(1)]],
+		constant GreedyArgs &a [[buffer(2)]], uint row [[threadgroup_position_in_grid]],
+		uint lane [[thread_index_in_threadgroup]]) {
+	constexpr uint threads = 256;
+	constexpr uint none = 0xFFFFFFFFu;
+	constexpr uint sign = 0x80000000u;
+	threadgroup uint keys[threads];
+	threadgroup uint indices[threads];
+	ulong base = (ulong)row * a.stride;
+	uint bestKey = 0;
+	uint bestIndex = none;
+	for (uint i = lane; i < a.vocab; i += threads) {
+		float value = x[base + i];
+		uint bits = as_type<uint>(value);
+		uint magnitude = bits & ~sign;
+		if (magnitude <= 0x7F800000u) { // ignore NaNs; preserve signed-zero ties
+			uint key = magnitude == 0 ? sign : ((bits & sign) != 0 ? ~bits : bits ^ sign);
+			if (bestIndex == none || key > bestKey || (key == bestKey && i < bestIndex)) {
+				bestKey = key;
+				bestIndex = i;
+			}
+		}
+	}
+	keys[lane] = bestKey;
+	indices[lane] = bestIndex;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	for (uint step = threads / 2; step != 0; step >>= 1) {
+		if (lane < step) {
+			uint key = keys[lane + step];
+			uint index = indices[lane + step];
+			if (index != none && (indices[lane] == none || key > keys[lane] ||
+					(key == keys[lane] && index < indices[lane]))) {
+				keys[lane] = key;
+				indices[lane] = index;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+	if (lane == 0) {
+		uint firstMagnitude = as_type<uint>(x[base]) & ~sign;
+		tokens[row] = firstMagnitude > 0x7F800000u ? 0 : indices[0];
+	}
+}
+
 // gemvQ8BVector reads each packed Q8B row and scale once for V independent
 // FP32 input vectors. Each vector keeps the same code/scale bytes and the
 // same per-row K iteration and accumulation order as gemv.

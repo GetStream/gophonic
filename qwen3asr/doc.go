@@ -20,7 +20,9 @@
 // weights in blocks of 32. With FormatF16 both run on the CPU's SME matrix
 // units with every BF16 weight exact. The encoders round activations to FP16
 // for their matrix products, which accumulate in FP32. Warm transcriptions
-// allocate nothing.
+// through an ordinary Transcriber allocate nothing. BatchTranscriber offers
+// explicit groups of up to eight GPU calls with private per-call K/V state
+// and FP32 next-token projections that reuse immutable weights across lanes.
 //
 // Outputs match the official qwen-asr package: the tests compare features,
 // encoder rows, prompt ids, first-step logits, and transcripts with its FP32
