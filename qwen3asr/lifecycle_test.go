@@ -41,23 +41,23 @@ func TestTranscriberCloseRetiresStorage(t *testing.T) {
 	}
 }
 
-func TestModelReleaseRetiresStorage(t *testing.T) {
+func TestModelCloseRetiresStorage(t *testing.T) {
 	memory, err := arena.New(16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer memory.Close()
-	m := &Model{enc: &encoder{memory: memory}, lm: &qwen3lm.Weights{}, languages: map[string]bool{"English": true}}
-	m.Release()
-	if memory.Bytes() != 0 || m.enc != nil || m.lm != nil || m.languages != nil {
+	m := &Model{enc: &encoder{memory: memory}, lm: &qwen3lm.Weights{}, languages: speech.Languages(speech.English)}
+	m.Close()
+	if memory.Bytes() != 0 || m.enc != nil || m.lm != nil || m.languages != 0 {
 		t.Fatal("released model retains weights or native storage")
 	}
-	m.Release()
-	(*Model)(nil).Release()
-	if _, err := NewTranscriber(m, 1); err == nil {
+	m.Close()
+	(*Model)(nil).Close()
+	if _, err := NewTranscriber(m, LaneOptions{Threads: 1}); err == nil {
 		t.Fatal("released model opened a transcriber")
 	}
-	if _, err := NewBatchTranscriber(m, 2, 1); err == nil {
+	if _, err := NewBatchTranscriber(m, 2, LaneOptions{Threads: 1}); err == nil {
 		t.Fatal("released model opened a batch transcriber")
 	}
 }

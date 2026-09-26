@@ -79,7 +79,7 @@ var models sync.Map // format → *Model
 func loadModel(t testing.TB, format string) *Model {
 	t.Helper()
 	dir := testmodels.Path(t, testmodels.Qwen3ASR)
-	if (format == FormatGPU || format == qwen3lm.WeightsGPU) && !qwen3lm.GPUAvailable() {
+	if (format == qwen3lm.WeightsGPUQ8 || format == qwen3lm.WeightsGPU) && !qwen3lm.GPUAvailable() {
 		t.Skip("no Metal GPU")
 	}
 	if m, ok := models.Load(format); ok {
@@ -110,10 +110,10 @@ func cosine(a, b []float32) (cos, maxAbs float64) {
 // exactly.
 func TestFrontendEncoderAndPromptMatchReference(t *testing.T) {
 	ref := loadReference(t)
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		t.Run(format, func(t *testing.T) {
 			m := loadModel(t, format)
-			tr, err := NewTranscriber(m, 0)
+			tr, err := NewTranscriber(m, LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,10 +163,10 @@ func TestFrontendEncoderAndPromptMatchReference(t *testing.T) {
 // first logits stay within Q8_0-level error.
 func TestTranscriptsMatchReference(t *testing.T) {
 	ref := loadReference(t)
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		t.Run(format, func(t *testing.T) {
 			m := loadModel(t, format)
-			tr, err := NewTranscriber(m, 0)
+			tr, err := NewTranscriber(m, LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,10 +176,10 @@ func TestTranscriptsMatchReference(t *testing.T) {
 				if err := tr.Transcribe(context.Background(), clipPCM(t, name), speech.Options{}, &dst); err != nil {
 					t.Fatal(err)
 				}
-				if string(dst.Text) != want.Text || dst.Language != want.Language {
+				if string(dst.Text) != want.Text || dst.Language.Name() != want.Language {
 					t.Errorf("%s: %q (%s), want %q (%s)", name, dst.Text, dst.Language, want.Text, want.Language)
 				}
-				if format == FormatF16 && !slices.Equal(tr.gen, want.Generated[:len(want.Generated)-1]) {
+				if format == qwen3lm.WeightsF16 && !slices.Equal(tr.gen, want.Generated[:len(want.Generated)-1]) {
 					t.Errorf("%s: generated %v, want %v", name, tr.gen, want.Generated)
 				}
 				// First-step logits of a fresh prefill against the reference's
@@ -196,7 +196,7 @@ func TestTranscriptsMatchReference(t *testing.T) {
 					t.Fatal(err)
 				}
 				tolerance := 0.05 // exact weights, FP16 activations
-				if format == FormatGPU {
+				if format == qwen3lm.WeightsGPUQ8 {
 					tolerance = 1.5
 				}
 				if top := int(want.LogitsTop[0][0]); argmax(tr.logits) != top {
@@ -213,16 +213,16 @@ func TestTranscriptsMatchReference(t *testing.T) {
 }
 
 func TestWarmTranscribeDoesNotAllocate(t *testing.T) {
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		t.Run(format, func(t *testing.T) {
-			tr, err := NewTranscriber(loadModel(t, format), 0)
+			tr, err := NewTranscriber(loadModel(t, format), LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer tr.Close()
 			pcm := clipPCM(t, "zh")
 			var dst speech.Transcript
-			opts := speech.Options{Language: "zh", Context: "交易", Segments: true}
+			opts := speech.Options{Language: speech.Chinese, Context: "交易", Segments: true}
 			if err := tr.Transcribe(context.Background(), pcm, opts, &dst); err != nil {
 				t.Fatal(err)
 			}
@@ -238,7 +238,7 @@ func TestWarmTranscribeDoesNotAllocate(t *testing.T) {
 }
 
 func TestOptions(t *testing.T) {
-	tr, err := NewTranscriber(loadModel(t, FormatF16), 0)
+	tr, err := NewTranscriber(loadModel(t, qwen3lm.WeightsF16), LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,10 +248,10 @@ func TestOptions(t *testing.T) {
 	var dst speech.Transcript
 	// A forced language is appended to the prompt; the model then writes
 	// the text alone.
-	if err := tr.Transcribe(context.Background(), pcm, speech.Options{Language: "zh", Segments: true}, &dst); err != nil {
+	if err := tr.Transcribe(context.Background(), pcm, speech.Options{Language: speech.Chinese, Segments: true}, &dst); err != nil {
 		t.Fatal(err)
 	}
-	if string(dst.Text) != ref.Clips["zh"].Text || dst.Language != "Chinese" {
+	if string(dst.Text) != ref.Clips["zh"].Text || dst.Language != speech.Chinese {
 		t.Errorf("forced Chinese: %q (%s)", dst.Text, dst.Language)
 	}
 	suffix, _ := tr.m.tok.EncodeInto("assistant\nlanguage Chinese<asr_text>", make([]int, 0, 64), &tr.tokWS)
@@ -261,7 +261,7 @@ func TestOptions(t *testing.T) {
 	if len(dst.Segments) != 1 || dst.Segments[0].End != float64(len(pcm))/sampleRate || dst.Segments[0].TextEnd != len(dst.Text) {
 		t.Errorf("segments %+v", dst.Segments)
 	}
-	for _, opts := range []speech.Options{{Language: "Klingon"}, {Words: true}} {
+	for _, opts := range []speech.Options{{Language: speech.Language(200)}, {Words: true}} {
 		if err := tr.Transcribe(context.Background(), pcm, opts, &dst); !errors.Is(err, speech.ErrUnsupported) {
 			t.Errorf("%+v: error %v, want ErrUnsupported", opts, err)
 		}

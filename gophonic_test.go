@@ -5,10 +5,12 @@ package gophonic_test
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -45,10 +47,10 @@ func TestOpenWhisper(t *testing.T) {
 	if model.Name() != "whisper" || !gophonic.Supports[speech.Transcriber](model) {
 		t.Fatalf("Open = %s providing %v, want whisper transcription", model.Name(), model.Provides())
 	}
-	if _, err := model.NewTurnDetector(); !errors.Is(err, speech.ErrUnsupported) {
-		t.Fatalf("NewTurnDetector error = %v, want speech.ErrUnsupported", err)
+	if _, err := gophonic.Lane[speech.TurnDetector](model); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Lane[TurnDetector] error = %v, want speech.ErrUnsupported", err)
 	}
-	lane, err := model.NewTranscriber()
+	lane, err := gophonic.Lane[speech.Transcriber](model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,13 +60,13 @@ func TestOpenWhisper(t *testing.T) {
 	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Words: true}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out.Text), "ask not what your country can do for you") || out.Language != "English" {
+	if !strings.Contains(string(out.Text), "ask not what your country can do for you") || out.Language != speech.English {
 		t.Fatalf("transcript %q (%s)", out.Text, out.Language)
 	}
 	if len(out.Segments) == 0 || len(out.Words) < 20 {
 		t.Fatalf("%d segments, %d words", len(out.Segments), len(out.Words))
 	}
-	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Language: "de"}, &out); !errors.Is(err, speech.ErrUnsupported) {
+	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Language: speech.German}, &out); !errors.Is(err, speech.ErrUnsupported) {
 		t.Fatalf("German on an English model: error = %v, want speech.ErrUnsupported", err)
 	}
 }
@@ -84,7 +86,7 @@ func TestRegisteredFormat(t *testing.T) {
 		Name:  "custom",
 		Match: func(p string) bool { return strings.HasSuffix(p, ".custom") },
 		Open: func(p string, opts gophonic.Options) (*gophonic.Model, error) {
-			m := gophonic.NewModel("custom", func() error { closed++; return nil })
+			m := gophonic.NewModel("custom", p, func() error { closed++; return nil })
 			gophonic.Provide(m, func() (speech.TurnDetector, error) { return fixedDetector{}, nil })
 			// Any interface is a capability, including one gophonic never
 			// heard of.
@@ -98,22 +100,22 @@ func TestRegisteredFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Name() != "custom" || len(model.Provides()) != 2 || !gophonic.Supports[moderator](model) {
-		t.Fatalf("Open = %s providing %v", model.Name(), model.Provides())
+	if model.Name() != "custom" || model.Path() != path || len(model.Provides()) != 2 || !gophonic.Supports[moderator](model) {
+		t.Fatalf("Open = %s at %s providing %v", model.Name(), model.Path(), model.Provides())
 	}
 	mod, err := gophonic.Lane[moderator](model)
 	if err != nil || !mod.Flag("anything") {
 		t.Fatalf("moderator lane: %v", err)
 	}
-	detector, err := model.NewTurnDetector()
+	detector, err := gophonic.Lane[speech.TurnDetector](model)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := detector.PredictInto(nil, 16000, 1); err != nil || !p.Complete {
-		t.Fatalf("PredictInto = %+v, %v", p, err)
+	if p, err := detector.Predict(nil, 16000, 1); err != nil || !p.Complete {
+		t.Fatalf("Predict = %+v, %v", p, err)
 	}
-	if _, err := model.NewTranscriber(); !errors.Is(err, speech.ErrUnsupported) {
-		t.Fatalf("NewTranscriber error = %v, want speech.ErrUnsupported", err)
+	if _, err := gophonic.Lane[speech.Transcriber](model); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Lane[Transcriber] error = %v, want speech.ErrUnsupported", err)
 	}
 	if model.Close() != nil || model.Close() != nil || closed != 1 {
 		t.Fatalf("Close ran %d times", closed)
@@ -127,7 +129,7 @@ type fixedDetector struct{}
 
 func (fixedDetector) Flag(string) bool { return true }
 
-func (fixedDetector) PredictInto([]float32, int, int) (speech.Prediction, error) {
+func (fixedDetector) Predict([]float32, int, int) (speech.Prediction, error) {
 	return speech.Prediction{Probability: 1, Complete: true}, nil
 }
 
@@ -190,4 +192,46 @@ func TestOpenQwen3ZeroShot(t *testing.T) {
 			t.Errorf("%q: %v, want %q", text, probs, labels[want])
 		}
 	}
+}
+
+// A weight format Open does not know fails before any model loads.
+func TestOpenChecksFormat(t *testing.T) {
+	if _, err := gophonic.Open("anything", gophonic.Options{Format: "fp8"}); !errors.Is(err, speech.ErrUnsupported) {
+		t.Fatalf("Open with an unknown format: %v, want speech.ErrUnsupported", err)
+	}
+}
+
+// A format's model must provide what the format declares: Open fails, and
+// closes the model, when it does not.
+func TestOpenChecksProvides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "model.liar")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	gophonic.Register(gophonic.Format{
+		Name:  "liar",
+		Match: func(p string) bool { return strings.HasSuffix(p, ".liar") },
+		Open: func(p string, _ gophonic.Options) (*gophonic.Model, error) {
+			m := gophonic.NewModel("liar", p, func() error { closed = true; return nil })
+			return gophonic.Provide(m, func() (moderator, error) { return fixedDetector{}, nil }), nil
+		},
+		Provides: []reflect.Type{reflect.TypeFor[moderator](), reflect.TypeFor[speech.Transcriber]()},
+	})
+	if _, err := gophonic.Open(path, gophonic.Options{}); err == nil || !closed {
+		t.Fatalf("Open of a model that lacks a declared lane: %v, closed %v", err, closed)
+	}
+}
+
+func readFloatFixture(t testing.TB, path string) []float32 {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]float32, len(data)/4)
+	for i := range values {
+		values[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
+	}
+	return values
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/GetStream/gophonic/internal/cputest"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -18,14 +19,14 @@ func TestCPUConcurrentThroughput(t *testing.T) {
 	if os.Getenv("STT_SERVER_OUTPUT") == "" {
 		t.Skip("set STT_SERVER_OUTPUT")
 	}
-	m := loadModel(t, FormatF16)
+	m := loadModel(t, qwen3lm.WeightsF16)
 	clip := "zh"
 	if os.Getenv("STT_SERVER_CLIP") == "jfk" {
 		clip = "jfk"
 	}
 	pcm := clipPCM(t, clip)
 	cputest.Run(t, func(index, workers int) cputest.Lane {
-		tr, err := NewTranscriber(m, workers)
+		tr, err := NewTranscriber(m, LaneOptions{Threads: workers})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -85,7 +85,7 @@ func (op *encoderRows) ApplyRows(start, end int) {
 	}
 }
 
-func (w *EncoderWorkspace) rows(op encoderRows, rows int) error {
+func (w *encoderWorkspace) rows(op encoderRows, rows int) error {
 	w.rowOp = op
 	err := w.gemm.Rows(&w.rowOp, rows, 16)
 	w.rowOp = encoderRows{}

@@ -76,12 +76,13 @@ Apple provider default remain unchanged.
 
 Public parity tests compare **exact fingerprints** of encoder output, final
 hidden state, recomputed final logits, draft verification, generated tokens,
-text, and language against independent lanes with the same call history.
+text, language, and turn prediction against independent lanes with the same call history.
 The greedy path intentionally does not copy full logits on each step; the
 internal decoder tests separately compare selected tokens and full-logit
 results from identical private prefixes. They pass for English
 and Chinese fixtures, varying active counts (including empty lanes), forced
-language/context, segments, partial transcripts, cancellation/recovery, and
+language/context, allowed-language sets, mixed constrained/unrestricted lanes,
+segments, partial transcripts, cancellation/recovery, and
 forced collections between calls. Invalid/aliased outputs are rejected before
 worker dispatch. This is observed equivalence on these fixtures, not a
 corpus-wide accuracy claim.
@@ -130,13 +131,30 @@ GOPHONIC_MODELS=/path/to/models \
   -benchtime=4x -count=3 -v
 ```
 
+The [final pre-integration run](asr-final-premerge-paired.txt) measured all
+1/2/4/8-lane cases at commit `187a5a8`, with GPU selection enabled: eight
+English calls reached 1.334–1.402× throughput and roughly 38–40% lower process
+CPU time per call; mixed eight-call waves reached 1.224–1.337× and roughly
+26–35% lower process CPU per call. English two-call waves remained variable
+(0.956–1.023×). These measurements precede integration of main `63fd4c4`;
+keep them separate from subsequent integration measurements.
+
+The [post-merge public parity run](asr-merged-parity.txt) and
+[native decoder/lifecycle checks](native-merged-tests.txt) pass against the
+integration of main `63fd4c4`. The public test includes turn prediction and
+language constraints. One-step decoder heads now allocate no unused input
+tables or sum-of-squares buffers; an exact first-step comparison against the
+multi-step path verifies unchanged scores and token selection.
+
 ## Token selection and resource lifetime
 
 The final native greedy batch selects token IDs on the GPU immediately
 after the unchanged Q8B head, within its existing command buffer. For this
 151,936-token vocabulary it avoids copying 607,744 bytes of logits per lane
 per step and scanning them on the CPU; vocabulary-result readback becomes
-one 32-bit token ID per lane. Hidden-state output remains unchanged. The
+one 32-bit token ID per lane. Language/script-constrained groups retain the
+full-logit path so their allowed-token selection stays exact. Hidden-state
+output remains unchanged. The
 selection kernel compares integer keys derived from the existing FP32 bits,
 with explicit NaN and signed-zero handling, to preserve scalar first-maximum
 semantics even with Metal fast-math enabled. Actual-device tests cover ties,

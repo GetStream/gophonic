@@ -128,13 +128,13 @@ func TestEncoderMatchesOfficialPyTorch(t *testing.T) {
 		name  string
 		count int
 	}{
-		{"jfk.encoder.conv1.f32le", MelFrames * AudioState},
-		{"jfk.encoder.conv2.f32le", AudioFrames * AudioState},
-		{"jfk.encoder.block0.f32le", AudioFrames * AudioState},
-		{"jfk.encoder.block1.f32le", AudioFrames * AudioState},
-		{"jfk.encoder.block2.f32le", AudioFrames * AudioState},
-		{"jfk.encoder.block3.f32le", AudioFrames * AudioState},
-		{"jfk.encoder.f32le", AudioFrames * AudioState},
+		{"jfk.encoder.conv1.f32le", MelFrames * audioState},
+		{"jfk.encoder.conv2.f32le", audioFrames * audioState},
+		{"jfk.encoder.block0.f32le", audioFrames * audioState},
+		{"jfk.encoder.block1.f32le", audioFrames * audioState},
+		{"jfk.encoder.block2.f32le", audioFrames * audioState},
+		{"jfk.encoder.block3.f32le", audioFrames * audioState},
+		{"jfk.encoder.f32le", audioFrames * audioState},
 	}
 	references := make([][]float32, len(stages))
 	for i, stage := range stages {
@@ -147,12 +147,12 @@ func TestEncoderMatchesOfficialPyTorch(t *testing.T) {
 	var singleWorker []float32
 	for _, workers := range []int{1, 8} {
 		t.Run(fmt.Sprintf("workers%d", workers), func(t *testing.T) {
-			workspace, err := NewEncoderWorkspaceWithWorkers(workers)
+			workspace, err := newEncoderWorkspaceWithWorkers(workers)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer workspace.Close()
-			got := make([]float32, AudioFrames*AudioState)
+			got := make([]float32, audioFrames*audioState)
 			nextStage := 0
 			var stageErr error
 			err = m.encodeInto(mel, got, workspace, func(stageIndex int, values []float32) {
@@ -182,7 +182,7 @@ func TestEncoderMatchesOfficialPyTorch(t *testing.T) {
 				if !slices.Equal(got, singleWorker) {
 					t.Fatal("worker count changed encoder results")
 				}
-				if err := m.EncodeInto(mel, got, workspace); err != nil {
+				if err := m.encode(mel, got, workspace); err != nil {
 					t.Fatal(err)
 				}
 				if !slices.Equal(got, singleWorker) {
@@ -203,11 +203,11 @@ func TestEncoderWarmCallDoesNotAllocate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := NewEncoderWorkspace()
+	w := newTinyEncoderWorkspace()
 	defer w.Close()
-	dst := make([]float32, AudioFrames*AudioState)
+	dst := make([]float32, audioFrames*audioState)
 	allocs := testing.AllocsPerRun(1, func() {
-		if err := m.EncodeInto(mel, dst, w); err != nil {
+		if err := m.encode(mel, dst, w); err != nil {
 			panic(err)
 		}
 	})
@@ -253,7 +253,7 @@ func compareEncoderStage(name string, got, want []float32) error {
 }
 
 func TestEncoderWorkspaceClose(t *testing.T) {
-	w := NewEncoderWorkspace()
+	w := newTinyEncoderWorkspace()
 	if !w.valid() {
 		t.Fatal("new workspace is missing required scratch")
 	}
@@ -261,7 +261,7 @@ func TestEncoderWorkspaceClose(t *testing.T) {
 	if w.valid() || !w.closed {
 		t.Fatal("closed workspace remains usable")
 	}
-	if err := (*Model)(nil).EncodeInto(nil, nil, w); err != errNilModel {
+	if err := (*Model)(nil).encode(nil, nil, w); err != errNilModel {
 		t.Fatalf("nil model error = %v, want %v", err, errNilModel)
 	}
 }

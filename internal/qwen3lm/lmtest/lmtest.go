@@ -19,18 +19,26 @@ import (
 	"github.com/thesyncim/vibejson"
 )
 
+// Geometry is a Qwen3 decoder's shape.
+type Geometry struct {
+	Hidden, Layers, Heads, KVHeads, HeadDim, Inter, Vocab, MaxPos int
+}
+
 // Shape is a small Qwen3 geometry that still exercises grouped-query
 // attention, partial output panels, odd tile counts, and attention wider
 // than the hidden state (as in Qwen3-0.6B and Qwen3-4B).
-var Shape = struct {
-	Hidden, Layers, Heads, KVHeads, HeadDim, Inter, Vocab, MaxPos int
-}{Hidden: 96, Layers: 2, Heads: 8, KVHeads: 2, HeadDim: 24, Inter: 136, Vocab: 23, MaxPos: 320}
+var Shape = Geometry{Hidden: 96, Layers: 2, Heads: 8, KVHeads: 2, HeadDim: 24, Inter: 136, Vocab: 23, MaxPos: 320}
+
+// GPUShape is the smallest geometry the GPU backend runs: 128-wide heads
+// and 64-aligned widths.
+var GPUShape = Geometry{Hidden: 256, Layers: 2, Heads: 2, KVHeads: 1, HeadDim: 128, Inter: 512, Vocab: 96, MaxPos: 320}
 
 // Checkpoint is a random checkpoint written by Write.
 type Checkpoint struct {
 	Dir     string
 	Tensors map[string][]float32 // BF16-rounded values
 	Shapes  map[string][]int
+	Geometry
 }
 
 // Write writes a random Qwen3 snapshot (config and one
@@ -44,12 +52,17 @@ func Write(t testing.TB, seed int64) *Checkpoint {
 // that nests the decoder stores it. Tensors keeps the Qwen3 names.
 func WriteNamed(t testing.TB, seed int64, rename func(string) string) *Checkpoint {
 	t.Helper()
+	return WriteShape(t, seed, Shape, rename)
+}
+
+// WriteShape is WriteNamed with geometry s.
+func WriteShape(t testing.TB, seed int64, s Geometry, rename func(string) string) *Checkpoint {
+	t.Helper()
 	if rename == nil {
 		rename = func(name string) string { return name }
 	}
-	s := Shape
 	rng := rand.New(rand.NewSource(seed))
-	ck := &Checkpoint{Dir: t.TempDir(), Tensors: map[string][]float32{}, Shapes: map[string][]int{}}
+	ck := &Checkpoint{Dir: t.TempDir(), Tensors: map[string][]float32{}, Shapes: map[string][]int{}, Geometry: s}
 	add := func(name string, scale float64, offset float64, shape ...int) {
 		n := 1
 		for _, d := range shape {
@@ -135,7 +148,23 @@ func (ck *Checkpoint) ReferenceHidden(ids []int) []float32 {
 // ReferenceHiddenEmbeds is ReferenceHidden with the i-th occurrence of
 // token taking row i of rows as its input embedding.
 func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32) []float32 {
-	s := Shape
+	hidden, _ := ck.forward(ids, token, rows, -1, -1)
+	return hidden
+}
+
+// ReferenceAttention returns the attention probabilities of the last of
+// ids over every position, in layer layer and query head head.
+func (ck *Checkpoint) ReferenceAttention(ids []int, layer, head int) []float64 {
+	_, probs := ck.forward(ids, -1, nil, layer, head)
+	return probs
+}
+
+// forward evaluates ids, returning the last position's final-normalized
+// state and, when layer is not negative, its attention probabilities in
+// that layer and query head.
+func (ck *Checkpoint) forward(ids []int, token int, rows []float32, layer, head int) ([]float32, []float64) {
+	s := ck.Geometry
+	var probs []float64
 	w := func(name string) []float32 { return ck.Tensors[name] }
 	matvec := func(m []float32, x []float64, n, k int) []float64 {
 		out := make([]float64, n)
@@ -217,6 +246,12 @@ func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32
 					scores[j] = math.Exp(scores[j] - maxScore)
 					sum += scores[j]
 				}
+				if l == layer && hh == head && i == n-1 {
+					probs = make([]float64, len(scores))
+					for j, v := range scores {
+						probs[j] = v / sum
+					}
+				}
 				for j := range scores {
 					for d := range s.HeadDim {
 						ctx[hh*s.HeadDim+d] += scores[j] / sum * v[j][g*s.HeadDim+d]
@@ -244,13 +279,13 @@ func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32
 	for i, v := range out {
 		res[i] = float32(v)
 	}
-	return res
+	return res, probs
 }
 
 // ReferenceLogits applies lm_head.weight to a final-normalized state in
 // float64.
 func (ck *Checkpoint) ReferenceLogits(hidden []float32) []float32 {
-	s := Shape
+	s := ck.Geometry
 	head := ck.Tensors["lm_head.weight"]
 	out := make([]float32, s.Vocab)
 	for i := range out {

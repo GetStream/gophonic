@@ -12,20 +12,20 @@ import (
 )
 
 var (
-	ErrGreedyNilPolicy      = errors.New("whisper: nil greedy policy")
-	ErrGreedyLogitsShape    = errors.New("whisper: greedy logits are smaller than the vocabulary")
-	ErrGreedyOutputTooSmall = errors.New("whisper: greedy logits output is smaller than the vocabulary")
-	ErrGreedyPromptTooLong  = errors.New("whisper: greedy prompt exceeds the text context")
-	ErrGreedyTokenRange     = errors.New("whisper: greedy prompt token is outside the vocabulary")
-	ErrGreedyNoCandidate    = errors.New("whisper: no token remains after greedy filtering")
+	errGreedyNilPolicy      = errors.New("whisper: nil greedy policy")
+	errGreedyLogitsShape    = errors.New("whisper: greedy logits are smaller than the vocabulary")
+	errGreedyOutputTooSmall = errors.New("whisper: greedy logits output is smaller than the vocabulary")
+	errGreedyPromptTooLong  = errors.New("whisper: greedy prompt exceeds the text context")
+	errGreedyTokenRange     = errors.New("whisper: greedy prompt token is outside the vocabulary")
+	errGreedyNoCandidate    = errors.New("whisper: no token remains after greedy filtering")
 )
 
-// GreedyOptions configures Whisper's deterministic, temperature-zero decoder.
+// greedyOptions configures Whisper's deterministic, temperature-zero decoder.
 // The zero value follows the reference filters: suppress blank and non-speech
 // tokens, use the transcribe task, and limit the first timestamp to one second.
 // Set WithoutTimestamps to add NoTimestamps to the initial context and skip
 // timestamp rules.
-type GreedyOptions struct {
+type greedyOptions struct {
 	Language string
 	Task     string
 
@@ -39,14 +39,14 @@ type GreedyOptions struct {
 	MaxInitialTimestampSeconds   float64
 }
 
-// GreedyPolicy applies the pinned OpenAI Whisper suppression and timestamp
+// greedyPolicy applies the pinned OpenAI Whisper suppression and timestamp
 // rules before selecting the first maximum logit. It owns immutable suppression
 // tables and the sample-begin position recorded by PromptInto. Give each worker
 // its own policy when prompts differ; Tokenizer values themselves are safe to
 // share between workers.
-type GreedyPolicy struct {
-	tokenizer                *Tokenizer
-	options                  GreedyOptions
+type greedyPolicy struct {
+	tokenizer                *tokenizer
+	options                  greedyOptions
 	suppressed               []bool
 	suppressedIDs            []int // the true entries of suppressed, in order
 	sampleBegin              int
@@ -56,13 +56,13 @@ type GreedyPolicy struct {
 	initialTimestampLimit    bool
 }
 
-// NewGreedyPolicy builds the token suppression table once. Its select path
+// newGreedyPolicy builds the token suppression table once. Its select path
 // performs no heap allocations.
-func NewGreedyPolicy(tokenizer *Tokenizer, options GreedyOptions) (*GreedyPolicy, error) {
+func newGreedyPolicy(tokenizer *tokenizer, options greedyOptions) (*greedyPolicy, error) {
 	if tokenizer == nil {
-		return nil, ErrTokenizerNil
+		return nil, errTokenizerNil
 	}
-	p := &GreedyPolicy{
+	p := &greedyPolicy{
 		tokenizer:         tokenizer,
 		options:           options,
 		suppressed:        make([]bool, tokenizer.VocabSize()),
@@ -73,7 +73,7 @@ func NewGreedyPolicy(tokenizer *Tokenizer, options GreedyOptions) (*GreedyPolicy
 		if language == "" {
 			language = "en"
 		}
-		if _, ok := tokenizer.LanguageToken(language); !ok {
+		if _, ok := tokenizer.languageToken(language); !ok {
 			return nil, errors.New("whisper: unsupported greedy language")
 		}
 		if options.Task != "" && options.Task != "transcribe" && options.Task != "translate" {
@@ -100,7 +100,7 @@ func NewGreedyPolicy(tokenizer *Tokenizer, options GreedyOptions) (*GreedyPolicy
 	}
 	for _, id := range options.SuppressTokens {
 		if id < 0 || id >= tokenizer.VocabSize() {
-			return nil, ErrGreedyTokenRange
+			return nil, errGreedyTokenRange
 		}
 		p.suppressed[id] = true
 	}
@@ -131,12 +131,12 @@ func NewGreedyPolicy(tokenizer *Tokenizer, options GreedyOptions) (*GreedyPolicy
 // length. prompt contains previous-window context tokens; prefix contains fixed
 // text tokens for the current window. Both are already tokenized. EnglishOnly
 // starts with [SOT] unless WithoutTimestamps is set.
-func (p *GreedyPolicy) PromptInto(dst []int, prompt, prefix []int) (int, error) {
+func (p *greedyPolicy) PromptInto(dst []int, prompt, prefix []int) (int, error) {
 	if p == nil {
-		return len(dst), ErrGreedyNilPolicy
+		return len(dst), errGreedyNilPolicy
 	}
-	if len(prompt) > TextContext/2-1 {
-		prompt = prompt[len(prompt)-(TextContext/2-1):]
+	if len(prompt) > textContext/2-1 {
+		prompt = prompt[len(prompt)-(textContext/2-1):]
 	}
 	need := 1 // SOT
 	if len(prompt) != 0 {
@@ -149,20 +149,20 @@ func (p *GreedyPolicy) PromptInto(dst []int, prompt, prefix []int) (int, error) 
 		need++
 	}
 	need += len(prefix)
-	if need > TextContext || len(dst)+need > cap(dst) {
-		if need > TextContext {
-			return len(dst), ErrGreedyPromptTooLong
+	if need > textContext || len(dst)+need > cap(dst) {
+		if need > textContext {
+			return len(dst), errGreedyPromptTooLong
 		}
-		return len(dst), ErrGreedyOutputTooSmall
+		return len(dst), errGreedyOutputTooSmall
 	}
 	for _, id := range prompt {
 		if id < 0 || id >= p.tokenizer.VocabSize() {
-			return len(dst), ErrGreedyTokenRange
+			return len(dst), errGreedyTokenRange
 		}
 	}
 	for _, id := range prefix {
 		if id < 0 || id >= p.tokenizer.VocabSize() {
-			return len(dst), ErrGreedyTokenRange
+			return len(dst), errGreedyTokenRange
 		}
 	}
 	if len(prompt) != 0 {
@@ -175,7 +175,7 @@ func (p *GreedyPolicy) PromptInto(dst []int, prompt, prefix []int) (int, error) 
 		if language == "" {
 			language = "en"
 		}
-		languageID, _ := p.tokenizer.LanguageToken(language)
+		languageID, _ := p.tokenizer.languageToken(language)
 		dst = append(dst, languageID)
 		task := p.options.Task
 		if task == "" {
@@ -195,20 +195,20 @@ func (p *GreedyPolicy) PromptInto(dst []int, prompt, prefix []int) (int, error) 
 	return p.sampleBegin, nil
 }
 
-// SelectNextInto copies logits into dst, applies Whisper's filters in place,
+// selectNextInto copies logits into dst, applies Whisper's filters in place,
 // then returns the first token with the maximum remaining logit. dst may alias
 // logits. history is the current prompt plus generated IDs. It must include the
 // complete context written by the most recent PromptInto call.
-func (p *GreedyPolicy) SelectNextInto(dst, logits []float32, history []int) (int, error) {
+func (p *greedyPolicy) selectNextInto(dst, logits []float32, history []int) (int, error) {
 	if p == nil {
-		return 0, ErrGreedyNilPolicy
+		return 0, errGreedyNilPolicy
 	}
 	vocab := p.tokenizer.VocabSize()
 	if len(logits) < vocab {
-		return 0, ErrGreedyLogitsShape
+		return 0, errGreedyLogitsShape
 	}
 	if len(dst) < vocab {
-		return 0, ErrGreedyOutputTooSmall
+		return 0, errGreedyOutputTooSmall
 	}
 	if &dst[0] != &logits[0] {
 		copy(dst[:vocab], logits[:vocab])
@@ -225,12 +225,12 @@ func (p *GreedyPolicy) SelectNextInto(dst, logits []float32, history []int) (int
 	}
 	bestID := argmaxFinite(dst[:vocab])
 	if bestID < 0 {
-		return 0, ErrGreedyNoCandidate
+		return 0, errGreedyNoCandidate
 	}
 	return bestID, nil
 }
 
-func (p *GreedyPolicy) applyTimestampRules(logits []float32, history []int) {
+func (p *greedyPolicy) applyTimestampRules(logits []float32, history []int) {
 	t := p.tokenizer
 	begin := t.TimestampBegin()
 	if t.NoTimestamps() < len(logits) {
@@ -309,7 +309,7 @@ func maskLogits(logits []float32, start, end int) {
 	}
 }
 
-func nonSpeechTokenIDs(tokenizer *Tokenizer) ([]int, error) {
+func nonSpeechTokenIDs(tokenizer *tokenizer) ([]int, error) {
 	ids := make([]int, 0, 96)
 	seen := make([]bool, tokenizer.VocabSize())
 	add := func(id int) {
@@ -372,7 +372,7 @@ func nonSpeechTokenIDs(tokenizer *Tokenizer) ([]int, error) {
 	return ids, nil
 }
 
-func suppressSymbol(tokenizer *Tokenizer, text string, always bool, add func(int)) (bool, error) {
+func suppressSymbol(tokenizer *tokenizer, text string, always bool, add func(int)) (bool, error) {
 	ids := make([]int, 0, 32)
 	encoded, err := tokenizer.EncodeInto(ids, text)
 	if err != nil {

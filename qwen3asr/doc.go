@@ -15,10 +15,10 @@
 // recognition with context text, and cuts audio longer than 20 minutes at
 // quiet points.
 //
-// With FormatGPU, the default where a Metal GPU is present, both run on the
-// Apple GPU: the encoder with every BF16 weight exact, the decoder with int8
-// weights in blocks of 32. With FormatF16 both run on the CPU's SME matrix
-// units with every BF16 weight exact. The encoders round activations to FP16
+// In the "gpu-q8" format, the default where a Metal GPU is present, both
+// run on the Apple GPU: the encoder with every BF16 weight exact, the
+// decoder with int8 weights in blocks of 32. In "f16" both run on the CPU's
+// SME matrix units with every BF16 weight exact. The encoders round activations to FP16
 // for their matrix products, which accumulate in FP32. Warm transcriptions
 // through an ordinary Transcriber allocate nothing. BatchTranscriber offers
 // explicit groups of up to eight GPU calls with private per-call K/V state

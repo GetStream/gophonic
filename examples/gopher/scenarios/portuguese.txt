@@ -1,0 +1,3 @@
+# A question in Portuguese is answered in Portuguese.
+user(pt): Gopher, qual é a capital de Portugal?
+gopher(pt): says in Portuguese that the capital of Portugal is Lisbon

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	AudioFFNSize = AudioState * 4
+	audioFFNSize = audioState * 4
 )
 
 var (
@@ -27,9 +27,9 @@ var (
 	errEncoderGEMM       = errors.New("whisper: failed to initialize packed encoder projections")
 )
 
-// EncoderWorkspace owns temporary storage for one concurrent encoder call.
+// encoderWorkspace owns temporary storage for one concurrent encoder call.
 // Allocate one workspace per concurrent caller and reuse it between calls.
-type EncoderWorkspace struct {
+type encoderWorkspace struct {
 	memory      *arena.Arena
 	conv1       []float32
 	convColumns []float32 // time-major mel with a zero row at each end
@@ -39,7 +39,7 @@ type EncoderWorkspace struct {
 	k           []float32
 	v           []float32
 	feedForward []float32
-	dims        Dims
+	dims        modelDims
 	packedModel *Model
 	weights     encoderWeights
 	packed      []packedEncoderBlock
@@ -57,24 +57,24 @@ type packedEncoderBlock struct {
 	mlpIn, mlpOut          *whispergemm.PackedB
 }
 
-// NewEncoderWorkspace prepares a reusable encoder with at most eight workers,
-// capped by GOMAXPROCS. The first EncodeInto packs the model's weights; repeated
+// newTinyEncoderWorkspace prepares a reusable encoder with at most eight workers,
+// capped by GOMAXPROCS. The first encode packs the model's weights; repeated
 // calls with the same model allocate no memory. Close releases its workers.
-func NewEncoderWorkspace() *EncoderWorkspace {
+func newTinyEncoderWorkspace() *encoderWorkspace {
 	workers := min(runtime.GOMAXPROCS(0), 8)
-	w, _ := NewEncoderWorkspaceWithWorkers(workers)
+	w, _ := newEncoderWorkspaceWithWorkers(workers)
 	return w
 }
 
-// NewEncoderWorkspaceWithWorkers creates an encoder workspace with a bounded
+// newEncoderWorkspaceWithWorkers creates an encoder workspace with a bounded
 // pool of reusable GEMM workers. Workers includes the caller goroutine and must
 // be between 1 and 64. Close the workspace to release its workers.
-func NewEncoderWorkspaceWithWorkers(workers int) (*EncoderWorkspace, error) {
-	return newEncoderWorkspace(TinyENDims, workers)
+func newEncoderWorkspaceWithWorkers(workers int) (*encoderWorkspace, error) {
+	return newEncoderWorkspace(tinyENDims, workers)
 }
 
 // newEncoderWorkspace sizes the scratch for one model's dimensions.
-func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
+func newEncoderWorkspace(d modelDims, workers int) (*encoderWorkspace, error) {
 	if !d.valid() {
 		return nil, errEncoderWeights
 	}
@@ -84,26 +84,26 @@ func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
 	}
 	state := d.AudioState
 	memory, err := arena.New((MelFrames+1)*state, (MelFrames+2)*MelBins,
-		AudioFrames*state, AudioFrames*state, AudioFrames*state, AudioFrames*state, AudioFrames*4*state)
+		audioFrames*state, audioFrames*state, audioFrames*state, audioFrames*state, audioFrames*4*state)
 	if err != nil {
 		_ = gemm.Close()
 		return nil, err
 	}
-	w := &EncoderWorkspace{
+	w := &encoderWorkspace{
 		dims:        d,
 		memory:      memory,
 		conv1Pad:    memory.Take((MelFrames + 1) * state),
 		convColumns: memory.Take((MelFrames + 2) * MelBins),
-		normalized:  memory.Take(AudioFrames * state),
-		q:           memory.Take(AudioFrames * state),
-		k:           memory.Take(AudioFrames * state),
-		v:           memory.Take(AudioFrames * state),
-		feedForward: memory.Take(AudioFrames * 4 * state),
+		normalized:  memory.Take(audioFrames * state),
+		q:           memory.Take(audioFrames * state),
+		k:           memory.Take(audioFrames * state),
+		v:           memory.Take(audioFrames * state),
+		feedForward: memory.Take(audioFrames * 4 * state),
 		gemm:        gemm,
 	}
 	// Validated dimensions are small and positive, so these cannot fail.
 	w.conv1 = w.conv1Pad[state:]
-	w.attention, err = newAudioAttention(AudioFrames, state, d.AudioHeads, workers)
+	w.attention, err = newAudioAttention(audioFrames, state, d.AudioHeads, workers)
 	if err != nil {
 		w.Close()
 		return nil, err
@@ -112,7 +112,7 @@ func newEncoderWorkspace(d Dims, workers int) (*EncoderWorkspace, error) {
 }
 
 // Close drops the workspace buffers. A closed workspace cannot be reused.
-func (w *EncoderWorkspace) Close() {
+func (w *encoderWorkspace) Close() {
 	if w == nil || w.closed {
 		return
 	}
@@ -140,15 +140,15 @@ func (w *EncoderWorkspace) Close() {
 	w.memory = nil
 }
 
-// EncodeInto runs Whisper tiny.en's audio encoder. mel is the flattened,
+// encode runs Whisper tiny.en's audio encoder. mel is the flattened,
 // channel-major [80,3000] log-mel tensor produced by the Whisper frontend. dst
 // receives [1500,384] features in time-major order. The model and workspace
 // must not be mutated or shared with another concurrent call, respectively.
-func (m *Model) EncodeInto(mel, dst []float32, w *EncoderWorkspace) error {
+func (m *Model) encode(mel, dst []float32, w *encoderWorkspace) error {
 	return m.encodeInto(mel, dst, w, nil)
 }
 
-func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(stage int, values []float32)) error {
+func (m *Model) encodeInto(mel, dst []float32, w *encoderWorkspace, trace func(stage int, values []float32)) error {
 	defer runtime.KeepAlive(w)
 	if m == nil {
 		return errNilModel
@@ -164,7 +164,7 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 	}
 	d := w.dims
 	state := d.AudioState
-	outLen := AudioFrames * state
+	outLen := audioFrames * state
 	if len(dst) < outLen {
 		return errEncoderOutputSize
 	}
@@ -205,22 +205,22 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 	} else if err := w.activate(w.conv1, weights.conv1B, MelFrames, state); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(w.conv2Weight, dst, state, w.conv1Pad, 2*state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(w.conv2Weight, dst, state, w.conv1Pad, 2*state, audioFrames); err != nil {
 		return err
 	}
 	if trace != nil {
-		nn.AddRowBias(dst, weights.conv2B, AudioFrames, state)
+		nn.AddRowBias(dst, weights.conv2B, audioFrames, state)
 		trace(1, dst)
-		if err := w.activate(dst, nil, AudioFrames, state); err != nil {
+		if err := w.activate(dst, nil, audioFrames, state); err != nil {
 			return err
 		}
-	} else if err := w.activate(dst, weights.conv2B, AudioFrames, state); err != nil {
+	} else if err := w.activate(dst, weights.conv2B, audioFrames, state); err != nil {
 		return err
 	}
-	if err := w.rows(encoderRows{kind: rowsPosition, dst: dst, src: weights.positions, width: state}, AudioFrames); err != nil {
+	if err := w.rows(encoderRows{kind: rowsPosition, dst: dst, src: weights.positions, width: state}, audioFrames); err != nil {
 		return err
 	}
-	if err := w.rows(encoderRows{kind: rowsNorm, dst: dst, out: w.normalized, normW: weights.blocks[0].attnNormW, normB: weights.blocks[0].attnNormB, width: state}, AudioFrames); err != nil {
+	if err := w.rows(encoderRows{kind: rowsNorm, dst: dst, out: w.normalized, normW: weights.blocks[0].attnNormW, normB: weights.blocks[0].attnNormB, width: state}, audioFrames); err != nil {
 		return err
 	}
 
@@ -250,16 +250,16 @@ func (m *Model) encodeInto(mel, dst []float32, w *EncoderWorkspace, trace func(s
 // dst. It leaves LayerNorm(dst; nextW, nextB) there for the following stage.
 // With unfused set, the trace path also needs the raw block output, which dst
 // always holds.
-func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderBlock, w *EncoderWorkspace, nextW, nextB []float32, unfused bool) error {
+func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderBlock, w *encoderWorkspace, nextW, nextB []float32, unfused bool) error {
 	_ = unfused
 	state, ffn := w.dims.AudioState, 4*w.dims.AudioState
-	if err := w.gemm.Mul(packed.query, w.q, state, w.normalized, state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.query, w.q, state, w.normalized, state, audioFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.key, w.k, state, w.normalized, state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.key, w.k, state, w.normalized, state, audioFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.value, w.v, state, w.normalized, state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.value, w.v, state, w.normalized, state, audioFrames); err != nil {
 		return err
 	}
 	// Q and V biases are added inside the attention preparation pass. Each
@@ -267,24 +267,24 @@ func encodeBlock(dst []float32, block encoderBlockWeights, packed packedEncoderB
 	if err := w.attention.runBiased(w.q, w.k, w.v, w.q, block.queryB, block.valueB, w.gemm); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.out, w.normalized, state, w.q, state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.out, w.normalized, state, w.q, state, audioFrames); err != nil {
 		return err
 	}
 	if err := w.rows(encoderRows{kind: rowsResidual, dst: dst, src: w.normalized, bias: block.outB, out: w.normalized,
-		normW: block.mlpNormW, normB: block.mlpNormB, width: state}, AudioFrames); err != nil {
+		normW: block.mlpNormW, normB: block.mlpNormB, width: state}, audioFrames); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.mlpIn, w.feedForward, ffn, w.normalized, state, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.mlpIn, w.feedForward, ffn, w.normalized, state, audioFrames); err != nil {
 		return err
 	}
-	if err := w.activate(w.feedForward, block.mlpInB, AudioFrames, ffn); err != nil {
+	if err := w.activate(w.feedForward, block.mlpInB, audioFrames, ffn); err != nil {
 		return err
 	}
-	if err := w.gemm.Mul(packed.mlpOut, w.normalized, state, w.feedForward, ffn, AudioFrames); err != nil {
+	if err := w.gemm.Mul(packed.mlpOut, w.normalized, state, w.feedForward, ffn, audioFrames); err != nil {
 		return err
 	}
 	return w.rows(encoderRows{kind: rowsResidual, dst: dst, src: w.normalized, bias: block.mlpOutB, out: w.normalized,
-		normW: nextW, normB: nextB, width: state}, AudioFrames)
+		normW: nextW, normB: nextB, width: state}, audioFrames)
 }
 
 // packedEncoderWeights is immutable after publication on Model.
@@ -293,7 +293,7 @@ type packedEncoderWeights struct {
 	packed                   []packedEncoderBlock
 }
 
-func (w *EncoderWorkspace) preparePacked(model *Model, weights encoderWeights) error {
+func (w *encoderWorkspace) preparePacked(model *Model, weights encoderWeights) error {
 	p, err := model.packedEncoder(weights)
 	if err != nil {
 		return err
@@ -435,7 +435,7 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 	}
 	if len(w.conv1W) != state*MelBins*3 || len(w.conv1B) != state ||
 		len(w.conv2W) != state*state*3 || len(w.conv2B) != state ||
-		len(w.positions) != AudioFrames*state || len(w.finalNormW) != state || len(w.finalNormB) != state {
+		len(w.positions) != audioFrames*state || len(w.finalNormW) != state || len(w.finalNormB) != state {
 		return encoderWeights{}, false
 	}
 	for i := range w.blocks {
@@ -462,14 +462,14 @@ func bindEncoderWeights(m *Model) (encoderWeights, bool) {
 	return w, true
 }
 
-func (w *EncoderWorkspace) valid() bool {
+func (w *encoderWorkspace) valid() bool {
 	state := w.dims.AudioState
 	return state > 0 && len(w.conv1) >= MelFrames*state && len(w.conv1Pad) >= (MelFrames+1)*state &&
 		len(w.convColumns) >= (MelFrames+2)*MelBins &&
-		len(w.normalized) >= AudioFrames*state &&
-		len(w.q) >= AudioFrames*state &&
-		len(w.k) >= AudioFrames*state && len(w.v) >= AudioFrames*state &&
-		len(w.feedForward) >= AudioFrames*4*state && w.attention != nil && w.gemm != nil
+		len(w.normalized) >= audioFrames*state &&
+		len(w.q) >= audioFrames*state &&
+		len(w.k) >= audioFrames*state && len(w.v) >= audioFrames*state &&
+		len(w.feedForward) >= audioFrames*4*state && w.attention != nil && w.gemm != nil
 }
 
 func conv1DChannelMajor(src, dst, weights, bias []float32, frames, inChannels, outChannels int) {

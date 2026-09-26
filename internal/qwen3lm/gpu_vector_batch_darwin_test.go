@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/GetStream/gophonic/internal/metal"
+	"github.com/GetStream/gophonic/internal/safetensors"
 	"github.com/GetStream/gophonic/internal/testmodels"
 	"github.com/thesyncim/vibejson"
 )
@@ -548,7 +549,15 @@ func loadOfficialASRQ8B(tb testing.TB, withHead bool) *Weights {
 	cfg.Thinker.Text.RopeScaling = nil
 	opts := LoadOptions{Format: WeightsGPUQ8, Prefix: "thinker.model.", Config: &cfg.Thinker.Text}
 	if withHead {
+		st, err := safetensors.Open(path)
+		if err != nil {
+			tb.Fatal(err)
+		}
 		opts.Head = "thinker.lm_head.weight"
+		if !st.Has(opts.Head) {
+			opts.Head = "thinker.model.embed_tokens.weight"
+		}
+		st.Close()
 	}
 	m, err := Load(path, opts)
 	if err != nil {

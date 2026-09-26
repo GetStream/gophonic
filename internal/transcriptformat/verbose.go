@@ -14,7 +14,9 @@ import (
 // with words when includeWords is set. samples is the 16 kHz duration.
 func AppendVerboseJSON(dst []byte, t *speech.Transcript, includeWords bool, samples int) []byte {
 	dst = append(dst, `{"task":"transcribe","language":"`...)
-	for _, c := range []byte(t.Language) {
+	name := t.Language.Name()
+	for i := range len(name) {
+		c := name[i]
 		if 'A' <= c && c <= 'Z' {
 			c += 'a' - 'A'
 		}

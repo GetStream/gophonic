@@ -12,6 +12,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -51,15 +52,15 @@ func continuationFingerprint(tr *Transcriber, out *speech.Transcript) [32]byte {
 		h.Write(bits[:])
 	}
 	h.Write(out.Text)
-	h.Write([]byte(out.Language))
+	h.Write([]byte{byte(out.Language)})
 	var outHash [32]byte
 	h.Sum(outHash[:0])
 	return outHash
 }
 
 func TestDecoderContinuationGrowingPCMExact(t *testing.T) {
-	m := loadModel(t, FormatF16)
-	tr, err := NewTranscriber(m, 8)
+	m := loadModel(t, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{Threads: 8})
 	if err != nil {
 		t.Fatal(err)
 	}

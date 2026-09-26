@@ -35,6 +35,7 @@ type BatchTranscriber struct {
 	tokens  [8]int
 	hidden  [8][]float32
 	next    [8]int
+	logits  [8][]float32
 }
 
 type batchWorker struct {
@@ -77,19 +78,19 @@ func (lane *batchDecodeLane) advance(ctx context.Context) error {
 	}
 }
 
-// NewBatchTranscriber opens capacity private lanes (1–8), using workers CPU
-// workers per lane. The initial batched decoder supports FormatGPU (Q8B
-// Metal); unsupported formats return an error without changing precision.
+// NewBatchTranscriber opens capacity private lanes (1–8), configured by opts.
+// The initial batched decoder supports "gpu-q8" (Q8B Metal); unsupported
+// formats return an error without changing precision.
 // A batch containing only one call uses the ordinary scalar decode path.
-func NewBatchTranscriber(m *Model, capacity, workers int) (*BatchTranscriber, error) {
-	if m == nil {
-		return nil, errors.New("qwen3asr: nil model")
+func NewBatchTranscriber(m *Model, capacity int, opts LaneOptions) (*BatchTranscriber, error) {
+	if m == nil || m.enc == nil || m.eval == nil || m.lm == nil {
+		return nil, errors.New("qwen3asr: nil or closed model")
 	}
 	if capacity < 1 || capacity > 8 {
 		return nil, fmt.Errorf("qwen3asr: batch capacity %d outside [1,8]", capacity)
 	}
-	if workers < 0 || workers > 64 {
-		return nil, fmt.Errorf("qwen3asr: invalid worker count %d", workers)
+	if opts.Threads < 0 || opts.Threads > 64 {
+		return nil, fmt.Errorf("qwen3asr: invalid thread count %d", opts.Threads)
 	}
 	decode, err := m.eval.NewDecodeBatchWorkspace(capacity)
 	if err != nil {
@@ -101,7 +102,7 @@ func NewBatchTranscriber(m *Model, capacity, workers int) (*BatchTranscriber, er
 	}
 	for i := range b.lanes {
 		lane := &b.lanes[i]
-		lane.tr, err = NewTranscriber(m, workers)
+		lane.tr, err = NewTranscriber(m, opts)
 		if err != nil {
 			for j := range i {
 				_ = b.lanes[j].tr.Close()
@@ -205,15 +206,30 @@ func (b *BatchTranscriber) Transcribe(ctx context.Context, pcm [][]float32, opts
 			first = b.m.eval.HiddenLastExtendInto(tr.kv, len(tr.kv.Tokens()), tr.gen[len(tr.gen)-1:], tr.hidden, tr.lm)
 			if first == nil {
 				first = b.m.eval.LogitsInto(tr.hidden, tr.logits, tr.lm)
-				tr.nextToken = argmax(tr.logits)
+				tr.nextToken = tr.pick(tr.logits, tr.gen)
 			}
 		} else if first == nil {
+			constrained := false
 			for row, index := range b.pending[:pending] {
 				tr := b.lanes[index].tr
 				b.prefix[row], b.tokens[row] = tr.kv, tr.gen[len(tr.gen)-1]
-				b.hidden[row] = tr.hidden
+				b.hidden[row], b.logits[row] = tr.hidden, tr.logits
+				constrained = constrained || tr.limits != nil
 			}
-			first = b.m.eval.DecodeBatchGreedyInto(b.prefix[:pending], b.tokens[:pending], b.hidden[:pending], b.next[:pending], b.decode)
+			// Language and script constraints need their allowed-score sets.
+			// Preserve that selection exactly; unrestricted batches return only
+			// token IDs and avoid vocabulary readback.
+			if constrained {
+				first = b.m.eval.DecodeBatchInto(b.prefix[:pending], b.tokens[:pending], b.hidden[:pending], b.logits[:pending], b.decode)
+				if first == nil {
+					for row, index := range b.pending[:pending] {
+						tr := b.lanes[index].tr
+						b.next[row] = tr.pick(tr.logits, tr.gen)
+					}
+				}
+			} else {
+				first = b.m.eval.DecodeBatchGreedyInto(b.prefix[:pending], b.tokens[:pending], b.hidden[:pending], b.next[:pending], b.decode)
+			}
 			if first == nil {
 				for row, index := range b.pending[:pending] {
 					b.lanes[index].tr.nextToken = b.next[row]
@@ -221,6 +237,7 @@ func (b *BatchTranscriber) Transcribe(ctx context.Context, pcm [][]float32, opts
 			}
 			clear(b.prefix[:pending])
 			clear(b.hidden[:pending])
+			clear(b.logits[:pending])
 		}
 		for _, index := range b.pending[:pending] {
 			b.lanes[index].step.reply <- first
@@ -266,5 +283,6 @@ func (b *BatchTranscriber) Close() error {
 	b.m, b.decode, b.lanes, b.messages = nil, nil, nil, nil
 	clear(b.prefix[:])
 	clear(b.hidden[:])
+	clear(b.logits[:])
 	return first
 }

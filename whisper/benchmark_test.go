@@ -25,16 +25,16 @@ func BenchmarkOfficialTinyENEncoder(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	w := NewEncoderWorkspace()
+	w := newTinyEncoderWorkspace()
 	defer w.Close()
-	out := make([]float32, AudioFrames*AudioState)
-	if err := m.EncodeInto(mel, out, w); err != nil {
+	out := make([]float32, audioFrames*audioState)
+	if err := m.encode(mel, out, w); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if err := m.EncodeInto(mel, out, w); err != nil {
+		if err := m.encode(mel, out, w); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -52,7 +52,7 @@ func BenchmarkOfficialTinyENTranscribe(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	worker, err := NewTranscriber(m)
+	worker, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func BenchmarkOfficialTinyENWindow(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	worker, err := NewTranscriber(m)
+	worker, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func BenchmarkOfficialTinyENTimestamps(b *testing.B) {
 	}
 	for _, mode := range []string{"segments", "words"} {
 		b.Run(mode, func(b *testing.B) {
-			worker, err := NewTranscriber(model)
+			worker, err := NewTranscriber(model, LaneOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -26,7 +26,7 @@ if err != nil {
 }
 defer model.Close()
 if gophonic.Supports[speech.Transcriber](model) {
-	lane, err := gophonic.Lane[speech.Transcriber](model) // or model.NewTranscriber()
+	lane, err := gophonic.Lane[speech.Transcriber](model)
 	// ...
 }
 ```
@@ -58,17 +58,38 @@ Whisper, Smart Turn, and TinyMelNet `.gophonic` bundles; `Register` adds more
 ([Add a backend](#add-a-backend)). It returns `ErrUnknownFormat` for anything
 no format claims. `Model.Close` releases the model's resources, such as GPU
 memory, once its lanes are closed. `Model.Name` reports the architecture
-(`"qwen3-asr"`, `"qwen3"`, `"whisper"`, `"smart-turn"`, `"tinymel"`).
+(`"qwen3-asr"`, `"qwen3-tts"`, `"qwen3"`, `"whisper"`, `"smart-turn"`,
+`"tinymel"`), and `Model.Path` the path it was loaded from.
 
 `Detect` reports the format `Open` would use without loading anything, and
 a format's `Provides` lists the lane types its models provide when that is
-known up front, which is how the server picks a model for a request.
+known up front, which is how the server picks a model for a request. `Open`
+checks that the model it loads provides them.
+
+`Options.Format` picks the weight format of the Qwen models, one vocabulary
+for all of them:
+
+| `Options.Format` | Weights |
+| --- | --- |
+| `gophonic.FormatF16` (`"f16"`) | every BF16 weight exactly, on the CPU's matrix units |
+| `gophonic.FormatInt8` (`"int8"`) | int8 rows in a rotated basis, on the CPU |
+| `gophonic.FormatGPU` (`"gpu"`) | int8 rows in a rotated basis, on the Apple GPU |
+| `gophonic.FormatGPUQ8` (`"gpu-q8"`) | int8 blocks of 32, on the Apple GPU |
+| `gophonic.FormatGPUQ4` (`"gpu-q4"`) | 4-bit blocks of 32, on the Apple GPU: lower fidelity |
+
+Empty picks the fastest format of llama.cpp Q8_0 fidelity on the machine:
+the Apple GPU where Metal is present, `f16` elsewhere. Whisper and the turn
+detectors have one format and ignore it; an unknown name fails with
+`speech.ErrUnsupported`. The model packages take the same names in their
+own `Options.Format`.
 
 `Options.Threads` bounds each lane's CPU workers, including the caller: a
 Qwen3-ASR transcriber uses that many (default `min(GOMAXPROCS, 16)`, at most
 8 for the encoder), a Whisper transcriber that many execution slots (default
-`min(GOMAXPROCS, 8)`), and a TinyMelNet detector `Threads-1` helper
-goroutines (default none). Smart Turn uses `GOMAXPROCS-1` helpers regardless.
+`min(GOMAXPROCS, 8)`), a Qwen3-TTS model's codec decoder that many, and a
+TinyMelNet detector `Threads-1` helper goroutines (default none). Smart Turn
+uses `GOMAXPROCS-1` helpers regardless. In the model packages the same
+bound is each lane's `LaneOptions.Threads`.
 
 ## Loading and the weight cache
 
@@ -91,9 +112,9 @@ The GPU formats of Qwen3 and Qwen3-ASR, the defaults on Apple silicon, load
 this way; the CPU formats still convert at every load, and Whisper and the
 turn detectors load their small converted bundles directly.
 
-Entries live in the user cache directory (`~/Library/Caches/gophonic` on
-macOS, `~/.cache/gophonic` on Linux), or in `$GOPHONIC_CACHE`; setting it to
-an empty string disables the cache. An entry is keyed by the checkpoint's
+Entries live in `gophonic.CacheDir()`: the user cache directory
+(`~/Library/Caches/gophonic` on macOS, `~/.cache/gophonic` on Linux), or
+`$GOPHONIC_CACHE`; setting it to an empty string disables the cache. An entry is keyed by the checkpoint's
 path, the names, sizes, and modification times of its files, the weight
 format, and a layout version, so a changed checkpoint or a new gophonic
 release rebuilds it; building an entry removes the one it replaces. One
@@ -133,14 +154,14 @@ their last leases are released.
 ## Transcription
 
 ```go
-lane, err := model.NewTranscriber()
+lane, err := gophonic.Lane[speech.Transcriber](model)
 if err != nil {
 	return err
 }
 defer lane.Close()
 
 var t speech.Transcript
-opts := speech.Options{Language: "en", Segments: true, Words: true}
+opts := speech.Options{Language: speech.English, Segments: true, Words: true}
 if err := lane.Transcribe(ctx, mono16kPCM, opts, &t); err != nil {
 	return err
 }
@@ -155,12 +176,30 @@ length and writes the result into `dst`:
 | Field | Contents |
 | --- | --- |
 | `Text` | The transcript bytes; offsets in segments and words index it |
-| `Language` | English name of the detected or requested language |
+| `Language` | The detected or requested language, or `speech.Unknown` |
 | `Segments` | Timed spans, when `Options.Segments` or `Options.Words` is set |
 | `Words` | Aligned words with a confidence, when `Options.Words` is set |
+| `Turn` | Whether the speaker's turn ends where the audio does, when `Options.Turn` is set |
 
-`Options.Language` takes an ISO 639-1 code or an English name
-(`speech.LanguageName` normalizes both). An option the model cannot honor, such
+Languages are values: `speech.Language` is a small integer
+(`speech.English`, `speech.Portuguese`, …) with `Code()` and `Name()`, and
+`speech.LanguageSet` a set of them, one bit each. `speech.ParseLanguage`
+reads a code or an English name in any case, and `speech.ParseLanguages` a
+comma-separated list; neither allocates per language.
+`Options.Language` forces a language; `Options.Languages` instead limits
+the languages that may be spoken: Qwen3-ASR detects the likeliest of them
+and writes only in their scripts, so noise in an English and Portuguese
+call cannot come out as Chinese. A lane prepares each set once, and tells
+it is the same set with one comparison, so alternating sets costs
+nothing. `Options.Partial` continues an earlier
+transcript of the start of the same audio, checking it in one pass and
+decoding only where it differs; the result is the same.
+
+`Options.Turn` judges the end of the speaker's turn from the transcriber's
+own state, at no extra cost: Qwen3-ASR-1.7B carries a head trained on
+labeled human and synthetic speech cut at pauses
+([`qwen3asr/tools/turn.py`](../qwen3asr/tools/turn.py) reproduces it).
+Transcribers without one fail with `speech.ErrUnsupported`. An option the model cannot honor, such
 as a language it does not know or a `Context` prompt it cannot use, fails with
 an error that wraps `speech.ErrUnsupported`; the Whisper English models accept
 only English and no context. A closed lane returns an error wrapping
@@ -191,13 +230,13 @@ no conversion. The CLI decodes Ogg Opus directly at 16 kHz with `gopus`.
 ## Turn detection
 
 ```go
-detector, err := model.NewTurnDetector()
+detector, err := gophonic.Lane[speech.TurnDetector](model)
 if err != nil {
 	return err
 }
 defer detector.Close()
 
-prediction, err := detector.PredictInto(pcm, 48000, 2) // on each VAD pause
+prediction, err := detector.Predict(pcm, 48000, 2) // on each VAD pause
 if err != nil {
 	return err
 }
@@ -206,30 +245,91 @@ if prediction.Complete {
 }
 ```
 
-`PredictInto` takes interleaved mono or stereo PCM at 8–96 kHz. Audio must be
+`Predict` takes interleaved mono or stereo PCM at 8–96 kHz. Audio must be
 nonempty, contain complete frames, and be finite where it is read.
 `Prediction.Probability` is the model's probability that the turn is complete;
 `Complete` applies that model's threshold (Smart Turn `> 0.5`, TinyMelNet
 `> 0.57`). The result does not borrow lane storage.
 
+## Speech synthesis
+
+A `speech.Synthesizer` lane speaks one utterance at a time, pushed as text
+and pulled as audio: `Begin` starts an utterance, `Write` adds its text as a
+language model writes it, `End` completes it, and `Read` returns samples as
+they are decoded. Text and audio may be on two goroutines, and neither
+waits for the other.
+
+```go
+tts, err := gophonic.Lane[speech.Synthesizer](model)
+if err != nil {
+	return err
+}
+defer tts.Close()
+
+err = tts.Begin(ctx, speech.SpeakOptions{Voice: "ryan", Language: speech.English})
+go func() { // a Synthesizer is an io.Writer: the model writes at its own pace
+	session.Reply(ctx, chat.Options{}, tts)
+	tts.End()
+}()
+frame := make([]float32, tts.SampleRate()/50)
+for played := 0; ; {
+	n, err := tts.Read(frame)
+	if err == io.EOF {
+		break
+	}
+	play(frame[:n])
+	played += n
+	spoken(tts.Voiced(played)) // bytes of the reply spoken so far
+}
+```
+
+`Voiced(n)` reports how many bytes of the text the utterance's first `n`
+samples speak: it never decreases as `n` grows and is all of the text once
+the utterance ends. Captions follow the voice with it, an interrupted agent
+keeps only what was heard, and subtitles time each word by it. `Begin` drops an utterance in progress, and cancelling its context
+cuts it: `Read` then returns the context's error. `speech.Synthesize` speaks
+a whole text in one call. A warm utterance allocates nothing, on any of the
+lane's goroutines.
+
+Package `speechtest` checks any implementation against this contract
+(`speechtest.TestSynthesizer`) and provides `Tone`, a synthesizer whose audio
+and `Voiced` are exact, for testing code that drives one.
+
 ## Model packages
+
+### qwen3tts
+
+Qwen3-TTS-12Hz-1.7B-CustomVoice's lane decodes each 80 ms frame on the CPU
+while the GPU generates the next, and caches the voice prompt (speaker,
+language, and `SpeakOptions.Style`) across utterances. A frame is the
+talker's step and fifteen of the code predictor's, one per codebook; the
+predictor's run whole on the GPU, heads, sampling, and all, in one
+submission, so a frame takes 10.3 ms on an M4 Max, where a round trip per
+codebook took 14.4. Its `Voiced` is the
+talker's own position in the text: one attention head of the talker (layer
+3, head 0) weighs most the text token being spoken, as Whisper's alignment
+heads follow the audio, and each frame is read with it for the cost of one
+head's softmax. Against Whisper's word timings of the speech, streamed a
+word at a time, it is 0.27 words from the word being spoken on average and
+two at worst (`TestVoicedFollowsWords`).
 
 ### qwen3asr
 
 ```go
 model, err := qwen3asr.Load("models/Qwen3-ASR-1.7B", qwen3asr.Options{})
 if err != nil { return err }
-lane, err := qwen3asr.NewTranscriber(model, 0) // 0: default workers
+lane, err := qwen3asr.NewTranscriber(model, qwen3asr.LaneOptions{})
 if err != nil { return err }
 defer lane.Close()
 
-err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: "de", Context: "Bundestag"}, &t)
+err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: speech.German, Context: "Bundestag"}, &t)
 ```
 
-`Options.Format` picks the decoder: `qwen3asr.FormatGPU` (int8 blocks on the
-Apple GPU, the default where Metal is present) or `qwen3asr.FormatF16` (every
-BF16 weight exactly, on the CPU). `speech.Options.Language` forces one of
-`Model.Languages()` and skips detection; `Context` primes recognition with
+`Options.Format` picks the decoder's weights: `"gpu-q8"` (int8 blocks on
+the Apple GPU, with the encoder on the GPU too; the default where Metal is
+present), `"f16"` (every BF16 weight exactly, on the CPU), or any other
+format of the table above. `speech.Options.Language` forces one of
+`Model.Languages()`, a `speech.LanguageSet`, and skips detection; `Context` primes recognition with
 names and terms. Qwen3-ASR produces no timestamps: `Segments` yields one
 segment per decoded piece (the whole clip, or each piece of audio longer
 than 20 minutes), and `Words` fails with `speech.ErrUnsupported`. Input whose
@@ -241,7 +341,7 @@ decoded audio. See [Qwen3-ASR](qwen3asr.md).
 ```go
 model, err := whisper.Load("tiny.en.gophonic")
 if err != nil { return err }
-worker, err := whisper.NewTranscriber(model) // or NewTranscriberWithWorkers
+worker, err := whisper.NewTranscriber(model, whisper.LaneOptions{})
 if err != nil { return err }
 defer worker.Close()
 
@@ -273,7 +373,7 @@ Whisper's UTF-8 replacement rule, so the output is always valid UTF-8.
 | Read a file | `Load(path)` | `Load(path)` |
 | Read an `io.Reader` | `ReadWeights(r)` | `ReadWeights(r)` |
 | Scratch | `NewWorkspace()` | `NewWorkspace()`, `NewWorkspaceWithWorkers(n)` |
-| `speech.TurnDetector` lane | `NewSession(model)` | `NewSession(model, helpers)` |
+| `speech.TurnDetector` lane | `NewDetector(model)` | `NewDetector(model, LaneOptions{Threads: n})` |
 
 Both models offer three prediction entry points on a workspace:
 
@@ -299,19 +399,63 @@ Smart Turn's frontend on its own workspace.
 ### qwen3
 
 See the [package README](../qwen3/README.md): `Open`, `Embed`, `Question`,
-`Context`, and the low-level `Evaluator` for pretokenized batches.
+and `Context`. One `qwen3.Model` serves all of them and `chat.Generator`
+from one copy of the weights, each prepared at its first use: the first
+session loads the language-model head (620 MB for Qwen3-8B), the first
+question or embedding its workspace and caches.
+
+Qwen3 models provide `chat.Generator`, conversations that keep their
+context evaluated between replies. `Session.Reply` writes the reply to an
+`io.Writer` as it is decoded. A session may offer tools: a `chat.Tool` is
+a spec (what the model sees) and a `Call`; `chat.Func` makes one of a Go
+function whose arguments struct is its schema. The model calls tools in
+Qwen3's own format, calls reach `Session.Calls` rather than the reply's
+text, and results join the conversation as `chat.ToolResult` messages.
+`chat.Answer` is the loop: reply, run the calls, reply again knowing them.
+
+```go
+tools := []chat.Tool{chat.Func("now", "The current time.",
+	func(ctx context.Context, args struct{}) (string, error) { return time.Now().String(), nil })}
+s, err := gen.NewSession("You are a helpful assistant.", chat.Specs(tools)...)
+s.Add(chat.User, "What time is it?")
+err = chat.Answer(ctx, s, tools, chat.Options{}, os.Stdout, 4)
+```
+
+A call's fixed parts, `{"name": "now", "arguments":`, are drafted and checked
+in one pass, sampling each position as decoding one token at a time would.
+
+### mcp
+
+Package `mcp` offers a Model Context Protocol server's tools as
+`[]chat.Tool`, so a model calls them as it calls a `chat.Func`: in
+`chat.Answer`, in a duplex agent, or through the server's chat endpoint.
+`Start` runs a server and speaks JSON-RPC over its standard input and
+output (MCP's stdio transport, revision 2025-06-18); `Connect` speaks it
+over any reader and writer. `Tools` lists every page of the server's tools
+with their JSON Schemas. A call returns the text of the result, and a
+result the server marks as an error comes back as an error for the model
+to read. Calls run concurrently on one connection. A call whose context
+ends is cancelled at the server, and `Close` ends the server.
+
+```go
+server, err := mcp.Start(ctx, exec.Command("npx", "-y", "@modelcontextprotocol/server-filesystem", dir))
+defer server.Close()
+tools, err := server.Tools(ctx)
+s, err := gen.NewSession("You are a helpful assistant.", chat.Specs(tools)...)
+err = chat.Answer(ctx, s, tools, chat.Options{}, os.Stdout, 4)
+```
 
 ## The turn detectors' frontend
 
-A detector trained on the same features can reuse the frontend without any
-model scratch:
+A detector trained on the same features can reuse the frontend, which
+lives in package `speech` and holds no model scratch:
 
 ```go
-frontend := gophonic.NewWhisperFeatureWorkspace()
+frontend := speech.NewTurnFeatures()
 defer frontend.Close()
-features := make([]float32, 80*800)
+features := make([]float32, speech.TurnFeatureBands*speech.TurnFeatureFrames)
 
-err := gophonic.ExtractWhisperFeaturesInto(pcm, 48000, 2, features, frontend)
+err := frontend.Into(pcm, 48000, 2, features)
 ```
 
 It accepts mono or stereo PCM at 8–96 kHz and writes the normalized,
@@ -362,7 +506,7 @@ func OpenSession(model *Model, threshold float32) (*Session, error) {
 	return &Session{model: model, scratch: NewScratch(), threshold: threshold}, nil
 }
 
-func (s *Session) PredictInto(pcm []float32, rate, channels int) (speech.Prediction, error) {
+func (s *Session) Predict(pcm []float32, rate, channels int) (speech.Prediction, error) {
 	if s == nil || s.closed {
 		return speech.Prediction{}, speech.ErrClosed
 	}
@@ -382,13 +526,14 @@ func (s *Session) Close() error {
 }
 ```
 
-A backend trained on Whisper's turn-detector features can hold a
-`WhisperFeatureWorkspace` in its scratch and call `ExtractWhisperFeaturesInto`
-before its own model. The interfaces perform no loading, feature conversion,
+A backend trained on the turn detectors' features can hold a
+`speech.TurnFeatures` in its scratch and call its `Into` before its own
+model, importing nothing but `speech`. The interfaces perform no loading, feature conversion,
 or allocation management on a backend's behalf; its implementation
 establishes its own numerical and allocation guarantees. The
-[conformance test](../external_test.go) implements `speech.TurnDetector` from
-outside the module's packages with only the standalone frontend.
+[conformance test](../speech/turnfeatures_test.go) implements
+`speech.TurnDetector` from outside package `speech` with only the
+standalone frontend.
 
 ## Ownership, lifetime, and allocations
 

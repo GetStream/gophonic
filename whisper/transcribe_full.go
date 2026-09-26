@@ -91,10 +91,10 @@ func (t *Transcriber) transcribeFullInto(pcm []float32, dst []byte, segments []S
 			copy(target, source)
 			clear(target[segmentFrames:])
 		}
-		if err := t.model.EncodeInto(t.mel, t.audio, t.encoder); err != nil {
+		if err := t.model.encode(t.mel, t.audio, t.encoder); err != nil {
 			return dst, segments, words, err
 		}
-		if err := t.model.BeginDecode(t.audio, t.decoder); err != nil {
+		if err := t.model.beginDecode(t.audio, t.decoder); err != nil {
 			return dst, segments, words, err
 		}
 		promptLen, err := t.policy.PromptInto(t.tokens[:0], t.history, nil)
@@ -113,8 +113,8 @@ func (t *Transcriber) transcribeFullInto(pcm []float32, dst []byte, segments []S
 		}
 		logprob := float64(0)
 		textEnd := promptLen
-		for generated := 0; generated < TextContext/2 && len(t.tokens) <= TextContext; generated++ {
-			next, err := t.policy.SelectNextInto(t.logits, t.logits, t.tokens)
+		for generated := 0; generated < textContext/2 && len(t.tokens) <= textContext; generated++ {
+			next, err := t.policy.selectNextInto(t.logits, t.logits, t.tokens)
 			if err != nil {
 				return dst, segments, words, err
 			}
@@ -128,10 +128,10 @@ func (t *Transcriber) transcribeFullInto(pcm []float32, dst []byte, segments []S
 				break
 			}
 			textEnd = len(t.tokens)
-			if generated+1 >= TextContext/2 || len(t.tokens) > TextContext {
+			if generated+1 >= textContext/2 || len(t.tokens) > textContext {
 				break
 			}
-			if err := t.model.LogitsForTokenInto(next, len(t.tokens)-1, t.decoder, t.logits); err != nil {
+			if err := t.model.logitsForTokenInto(next, len(t.tokens)-1, t.decoder, t.logits); err != nil {
 				return dst, segments, words, err
 			}
 		}
@@ -240,7 +240,7 @@ func (t *Transcriber) appendOneSegmentAt(dst []byte, tokens []int, hasPair bool,
 	need := 0
 	for _, id := range tokens {
 		if id < 0 || id >= t.tokenizer.VocabSize() {
-			return dst, segments, ErrTokenizerTokenRange
+			return dst, segments, errTokenizerTokenRange
 		}
 		if id < t.tokenizer.EOT() {
 			need += len(t.tokenizer.decoder[id])
@@ -259,7 +259,7 @@ func (t *Transcriber) appendOneSegmentAt(dst []byte, tokens []int, hasPair bool,
 		return dst, segments, nil
 	}
 	offset := len(dst)
-	decoded, err := t.tokenizer.DecodeInto(dst, tokens)
+	decoded, err := t.tokenizer.decodeInto(dst, tokens)
 	if err != nil {
 		return dst, segments, err
 	}

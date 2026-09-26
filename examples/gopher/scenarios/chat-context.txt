@@ -1,0 +1,10 @@
+# What people type in the call's chat is context: never read aloud on
+# its own, remembered when asked. Qwen3-8B reads the message back at the
+# note's moment despite the prompt; Qwen3.6-35B-A3B keeps it. (The
+# message was "the deploy is moved", which Gopher's voice says so that
+# the recognizer hears "deployers" half the time: a test of the ear, not
+# of the memory.)
+chat: Ana: the launch moves to Thursday at 3
+gopher: silent
+user: Gopher, what did Ana write in the chat?
+gopher: says that Ana wrote that the launch moves to Thursday at 3

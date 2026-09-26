@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -15,9 +16,9 @@ import (
 // one's transcript, ends with the transcript of the whole audio in one call;
 // so does continuing a wrong transcript, or one in another language.
 func TestPartialTranscriptsContinueToTheOfflineResult(t *testing.T) {
-	for _, format := range []string{FormatGPU, FormatF16} {
+	for _, format := range []string{qwen3lm.WeightsGPUQ8, qwen3lm.WeightsF16} {
 		t.Run(format, func(t *testing.T) {
-			tr, err := NewTranscriber(loadModel(t, format), 0)
+			tr, err := NewTranscriber(loadModel(t, format), LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -62,9 +63,9 @@ func TestPartialTranscriptsContinueToTheOfflineResult(t *testing.T) {
 					t.Fatalf("%s: a warm continuation allocated %.1f times", clip, n)
 				}
 				for _, wrong := range []speech.Transcript{
-					{Text: []byte("Completely different words than anyone said."), Language: "English"},
-					{Text: []byte("完全不同的话。"), Language: "Chinese"},
-					{Text: offline.Text, Language: "French"},
+					{Text: []byte("Completely different words than anyone said."), Language: speech.English},
+					{Text: []byte("完全不同的话。"), Language: speech.Chinese},
+					{Text: offline.Text, Language: speech.French},
 				} {
 					if err := tr.Transcribe(ctx, pcm, speech.Options{Partial: &wrong}, &cur); err != nil {
 						t.Fatal(err)

@@ -1,0 +1,97 @@
+Native Metal qualification after integrating main 63fd4c4; CGO_ENABLED=0 GOEXPERIMENT=simd.
+=== RUN   TestDecodeMatchesReference
+--- PASS: TestDecodeMatchesReference (0.46s)
+=== RUN   TestDecodeSamples
+    decode_darwin_test.go:172: token 6: drawn 0.330, expected 0.326
+    decode_darwin_test.go:172: token 90: drawn 0.166, expected 0.168
+    decode_darwin_test.go:172: token 17: drawn 0.158, expected 0.153
+    decode_darwin_test.go:172: token 43: drawn 0.120, expected 0.124
+    decode_darwin_test.go:172: token 44: drawn 0.118, expected 0.117
+    decode_darwin_test.go:172: token 0: drawn 0.108, expected 0.112
+--- PASS: TestDecodeSamples (1.58s)
+=== RUN   TestDecodeConcurrentLanes
+--- PASS: TestDecodeConcurrentLanes (0.08s)
+=== RUN   TestDecoderCloseDropsEvaluator
+--- PASS: TestDecoderCloseDropsEvaluator (0.00s)
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=1
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=2
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=3
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=4
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=5
+=== RUN   TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=8
+--- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens (1.33s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=1 (0.04s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=2 (0.06s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=3 (0.11s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=4 (0.12s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=5 (0.18s)
+    --- PASS: TestOfficialGPUDecodeBatchMatchesIndependentTokens/active=8 (0.32s)
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1/gpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2/gpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3/gpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4/gpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5/gpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8/mapped-cpu-argmax
+=== RUN   TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8/gpu-argmax
+--- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits (0.77s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1 (0.03s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1/mapped-cpu-argmax (0.01s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=1/gpu-argmax (0.01s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2 (0.05s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2/mapped-cpu-argmax (0.02s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=2/gpu-argmax (0.02s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3 (0.08s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3/mapped-cpu-argmax (0.03s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=3/gpu-argmax (0.03s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4 (0.09s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4/mapped-cpu-argmax (0.03s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=4/gpu-argmax (0.03s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5 (0.14s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5/mapped-cpu-argmax (0.05s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=5/gpu-argmax (0.05s)
+    --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8 (0.15s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8/mapped-cpu-argmax (0.05s)
+        --- PASS: TestOfficialGPUDecodeBatchGreedyMatchesFullLogits/active=8/gpu-argmax (0.06s)
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/invalid-token
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/duplicate-prefix
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/foreign-prefix
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/bad-output-width
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/overlapping-outputs
+=== RUN   TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/cross-lane-overlap
+--- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation (0.05s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/invalid-token (0.00s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/duplicate-prefix (0.00s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/foreign-prefix (0.00s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/bad-output-width (0.00s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/overlapping-outputs (0.00s)
+    --- PASS: TestGPUDecodeBatchRejectsInvalidInputsBeforeMutation/cross-lane-overlap (0.00s)
+=== RUN   TestOfficialASRWorkspaceKVIsLazy
+--- PASS: TestOfficialASRWorkspaceKVIsLazy (0.20s)
+=== RUN   TestLoadHeadLater
+--- PASS: TestLoadHeadLater (0.10s)
+=== RUN   TestPrefixKVCloseRetiresOwner
+--- PASS: TestPrefixKVCloseRetiresOwner (0.00s)
+=== RUN   TestWorkspaceCloseRetiresModelAndScratch
+--- PASS: TestWorkspaceCloseRetiresModelAndScratch (0.00s)
+=== RUN   TestWeightsReleaseRetiresPayloadAndRejectsLazyHead
+--- PASS: TestWeightsReleaseRetiresPayloadAndRejectsLazyHead (0.00s)
+=== RUN   TestDecodeReplacesInvalidUTF8LikePython
+--- PASS: TestDecodeReplacesInvalidUTF8LikePython (0.00s)
+=== RUN   TestDecodeAppendDoesNotAllocate
+--- PASS: TestDecodeAppendDoesNotAllocate (0.05s)
+PASS
+ok  	github.com/GetStream/gophonic/internal/qwen3lm	4.972s

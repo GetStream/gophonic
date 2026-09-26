@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,5 +162,95 @@ func TestChatChannelWatch(t *testing.T) {
 	}
 	if got[1] != (delivery{"alice", "Alice", "hello from alice"}) {
 		t.Fatalf("live delivery: got %+v", got[1])
+	}
+}
+
+// Captions in the chat: what people say is posted; an answer is one
+// message, edited as it grows, where Gopher may edit its messages, and a
+// message a sentence where it may not.
+func TestLiveCaptions(t *testing.T) {
+	for _, edits := range []bool{true, false} {
+		var mu sync.Mutex
+		var log []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Message struct {
+					Text string `json:"text"`
+				} `json:"message"`
+			}
+			if err := vibejson.Unmarshal(mustBody(t, r), &body); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			mu.Lock()
+			log = append(log, r.URL.Path+" "+body.Message.Text)
+			mu.Unlock()
+			w.Write([]byte(`{"message":{"id":"m1"}}`))
+		}))
+		withBases(t, server.URL, "")
+		l := newLiveCaptions(&chatChannel{apiKey: "key", token: "tok", path: "/channels/videocall/test", edits: edits})
+		l.say("Ana: tell me a joke")
+		time.Sleep(50 * time.Millisecond)
+		answer := []string{"Why", "Why did the", "Why did the chicken cross? To", "Why did the chicken cross? To get to the other side"}
+		for i, s := range answer {
+			l.answer(s, i == len(answer)-1)
+			time.Sleep(50 * time.Millisecond)
+		}
+		want := []string{"/channels/videocall/test/message Ana: tell me a joke", "/channels/videocall/test/message Gopher: Why",
+			"/messages/m1 Gopher: Why did the", "/messages/m1 Gopher: Why did the chicken cross? To",
+			"/messages/m1 Gopher: Why did the chicken cross? To get to the other side"}
+		if !edits {
+			want = []string{"/channels/videocall/test/message Ana: tell me a joke",
+				"/channels/videocall/test/message Gopher: Why did the chicken cross?",
+				"/channels/videocall/test/message Gopher: To get to the other side"}
+		}
+		mu.Lock()
+		if strings.Join(log, "|") != strings.Join(want, "|") {
+			t.Errorf("edits %v: chat\n%q\nwant\n%q", edits, log, want)
+		}
+		mu.Unlock()
+		server.Close()
+	}
+}
+
+// open learns from the channel's capabilities whether Gopher may edit.
+func TestChatChannelOpen(t *testing.T) {
+	for _, tc := range []struct {
+		capabilities string
+		edits        bool
+	}{
+		{`["send-message","update-own-message"]`, true},
+		{`["send-message","quote-message"]`, false}, // Pronto's videocall
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"channel":{"id":"test","own_capabilities":` + tc.capabilities + `},"messages":[]}`))
+		}))
+		withBases(t, server.URL, "")
+		c := &chatChannel{apiKey: "key", token: "tok", path: "/channels/videocall/test"}
+		if err := c.open(); err != nil || c.edits != tc.edits {
+			t.Errorf("%s: edits %v, %v", tc.capabilities, c.edits, err)
+		}
+		server.Close()
+	}
+}
+
+func TestSentences(t *testing.T) {
+	var s sentences
+	for _, step := range []struct {
+		text  string
+		final bool
+		want  string
+	}{
+		{"It costs", false, ""},
+		{"It costs 3.5", false, ""},
+		{"It costs 3.5 euros.", false, "It costs 3.5 euros."},
+		{"It costs 3.5 euros. Wait…", false, "Wait…"},
+		{"It costs 3.5 euros. Wait… is that", false, ""},
+		{"It costs 3.5 euros. Wait… is that right", true, "is that right"},
+		{"你好。我是", false, "你好。"}, // a new reply
+		{"你好。我是地鼠", true, "我是地鼠"},
+	} {
+		if got := s.next(step.text, step.final); got != step.want {
+			t.Fatalf("next(%q, %v) = %q, want %q", step.text, step.final, got, step.want)
+		}
 	}
 }

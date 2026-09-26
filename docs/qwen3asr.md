@@ -10,8 +10,8 @@ the safetensors shards, and the slow-tokenizer files as published.
 
 ```go
 model, err := qwen3asr.Load("models/Qwen3-ASR-1.7B", qwen3asr.Options{})
-lane, err := qwen3asr.NewTranscriber(model, 0) // or gophonic.Open(...).NewTranscriber()
-err = lane.Transcribe(ctx, pcm16k, speech.Options{Language: "zh", Context: "交易所"}, &transcript)
+lane, err := qwen3asr.NewTranscriber(model, qwen3asr.LaneOptions{}) // or gophonic.Open(...).NewTranscriber()
+err = lane.Transcribe(ctx, pcm16k, speech.Options{Language: speech.Chinese, Context: "交易所"}, &transcript)
 ```
 
 ## Pipeline
@@ -63,11 +63,11 @@ flowchart LR
 
 | `Options.Format` | Weights | Activations | Where |
 | --- | --- | --- | --- |
-| `FormatGPU` (`"gpu-q8"`, the default with a Metal GPU) | int8 in blocks of 32 with an FP16 scale, Hadamard-rotated inputs | FP32 | Apple GPU |
-| `FormatF16` (`"f16"`, the default elsewhere) | every BF16 weight exactly, as scaled FP16 | FP16 per row | CPU, SME |
+| `"gpu-q8"` (the default with a Metal GPU) | int8 in blocks of 32 with an FP16 scale, Hadamard-rotated inputs | FP32 | Apple GPU |
+| `"f16"` (the default elsewhere) | every BF16 weight exactly, as scaled FP16 | FP16 per row | CPU, SME |
 
-The format also places the encoder: `FormatGPU` runs it on the GPU,
-`FormatF16` on the CPU; both keep its weights exact.
+The format also places the encoder: `"gpu-q8"` runs it on the GPU,
+`"f16"` on the CPU; both keep its weights exact.
 
 `gpu-q8` is new to `internal/qwen3lm`. Qwen3-1.7B rows do not quantize well
 with a single scale per row: the per-row `gpu` format keeps the decoder's
@@ -86,8 +86,8 @@ reductions overlap.
 
 ## Explicit concurrent-call batches
 
-`NewBatchTranscriber(model, capacity, workers)` owns 1–8 private lanes and
-batches compatible next-token projections. It currently requires `FormatGPU`
+`NewBatchTranscriber(model, capacity, laneOptions)` owns 1–8 private lanes and
+batches compatible next-token projections. It currently requires `"gpu-q8"`
 on Apple Metal. Decoder activations remain FP32 and the existing Q8B weights
 and scales are unchanged. Each lane keeps its own encoder state, scratch,
 transcript, and K/V cache. At token boundaries, a coordinator temporarily owns
@@ -98,7 +98,7 @@ the full-logit decoder API. Selection preserves the first maximum and does
 not change weight or activation precision.
 
 ```go
-batch, err := qwen3asr.NewBatchTranscriber(model, 4, 1)
+batch, err := qwen3asr.NewBatchTranscriber(model, 4, qwen3asr.LaneOptions{Threads: 1})
 if err != nil {
     return err
 }
@@ -110,8 +110,11 @@ outputs := make([]speech.Transcript, len(inputs))
 err = batch.Transcribe(ctx, inputs, nil, outputs)
 ```
 
-Options may be nil or contain one `speech.Options` per input. Forced language,
-context, segments, and partial transcripts follow the ordinary transcriber.
+Options may be nil or contain one `speech.Options` per input. Language sets,
+forced language, context, segments, partial transcripts, and turn prediction
+follow the ordinary transcriber. Language-constrained groups retain full
+logit rows for their exact allowed-language/script selection; unrestricted
+groups use GPU token selection.
 Inputs and partial transcripts stay immutable during the call; outputs must
 have independent backing storage. Calls on one batch transcriber must not
 overlap, including `Close`. Cancellation waits for all lanes to return their

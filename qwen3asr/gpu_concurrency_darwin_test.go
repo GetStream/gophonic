@@ -20,14 +20,14 @@ import (
 // serial numeric fingerprints. Only the model weights are shared; every
 // transcriber owns its encoder, decoder scratch, output, and prefix cache.
 func TestGPUConcurrentTranscribers(t *testing.T) {
-	m := loadModel(t, FormatGPU)
+	m := loadModel(t, "gpu-q8")
 	var tr [2]*Transcriber
 	var pcm [2][]float32
 	var out [2]speech.Transcript
 	var want [2][32]byte
 	for i, clip := range []string{"jfk", "zh"} {
 		var err error
-		tr[i], err = NewTranscriber(m, 1)
+		tr[i], err = NewTranscriber(m, LaneOptions{Threads: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func TestGPUConcurrentTranscribers(t *testing.T) {
 // through independent persistent workers. One operation completes one call
 // per lane; calls/s reports aggregate throughput, not single-call latency.
 func BenchmarkGPUConcurrentTranscribe(b *testing.B) {
-	m := loadModel(b, FormatGPU)
+	m := loadModel(b, "gpu-q8")
 	pcm := clipPCM(b, "jfk")
 	for _, count := range []int{1, 2, 4, 8} {
 		b.Run(fmt.Sprintf("lanes=%d", count), func(b *testing.B) {
@@ -110,7 +110,7 @@ func newGPUConcurrentCalls(tb testing.TB, m *Model, inputs [][]float32) *gpuConc
 		r.stopped.Wait()
 	})
 	for i, pcm := range inputs {
-		tr, err := NewTranscriber(m, 1)
+		tr, err := NewTranscriber(m, LaneOptions{Threads: 1})
 		if err != nil {
 			tb.Fatal(err)
 		}

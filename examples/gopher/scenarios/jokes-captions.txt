@@ -1,0 +1,5 @@
+# A long reply is spoken to the end, and its captions follow the voice
+# rather than appearing all at once.
+user: Gopher, tell me three short jokes.
+gopher: speaks within 10s
+gopher: captions follow the voice

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
 )
 
@@ -68,7 +69,7 @@ func TestEmbeddingCacheMatchesModel(t *testing.T) {
 
 func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 	ck := lmtest.Write(t, 5)
-	m, err := LoadWeights(ck.Dir, "")
+	m, err := qwen3lm.LoadWeights(ck.Dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 	}
 	embed()
 	want := make([]float32, lmtest.Shape.Hidden)
-	e, _ := NewEvaluator(m)
+	e, _ := qwen3lm.NewEvaluator(m)
 	ws, _ := e.NewWorkspace(1)
 	for i, seq := range ids {
 		if err := e.HiddenLastInto(seq, want, ws); err != nil {
@@ -124,7 +125,7 @@ func TestEncoderCacheServesRepeatsWithoutAllocating(t *testing.T) {
 // caller's destinations in order, and that a growing input reuses its prefix.
 func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
 	ck := lmtest.Write(t, 7)
-	m, err := LoadWeights(ck.Dir, "")
+	m, err := qwen3lm.LoadWeights(ck.Dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestEncoderMixesPrefixAndBatchedInputs(t *testing.T) {
 			}
 		}
 		embed(ids)
-		e, _ := NewEvaluator(m)
+		e, _ := qwen3lm.NewEvaluator(m)
 		ws, _ := e.NewWorkspace(1)
 		want := make([]float32, lmtest.Shape.Hidden)
 		for i, seq := range ids {

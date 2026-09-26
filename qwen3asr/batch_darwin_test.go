@@ -24,8 +24,8 @@ import (
 // finish immediately, shrinking batches, draft verification, and repeated use.
 // Separate scalar lanes follow the same call history as the batched lanes.
 func TestGPUBatchTranscribeMatchesIndependent(t *testing.T) {
-	m := loadModel(t, FormatGPU)
-	batch, err := NewBatchTranscriber(m, 8, 1)
+	m := loadModel(t, "gpu-q8")
+	batch, err := NewBatchTranscriber(m, 8, LaneOptions{Threads: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +33,14 @@ func TestGPUBatchTranscribeMatchesIndependent(t *testing.T) {
 	var scalar [8]*Transcriber
 	var got, want, previous [8]speech.Transcript
 	for i := range scalar {
-		scalar[i], err = NewTranscriber(m, 1)
+		scalar[i], err = NewTranscriber(m, LaneOptions{Threads: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer scalar[i].Close()
 	}
 	jfk, zh := clipPCM(t, "jfk"), clipPCM(t, "zh")
-	for round, count := range []int{2, 4, 8, 3, 1, 4} {
+	for round, count := range []int{2, 4, 8, 3, 1, 4, 4, 3} {
 		var inputs [8][]float32
 		var opts [8]speech.Options
 		for i := range count {
@@ -52,16 +52,23 @@ func TestGPUBatchTranscribeMatchesIndependent(t *testing.T) {
 				inputs[i] = nil
 			}
 			opts[i].Segments = i%2 == 0
+			opts[i].Turn = true
 			if round == 3 {
 				opts[i].Context = "Names mentioned in this recording: Kennedy."
 				if i%2 == 0 {
-					opts[i].Language = "en"
+					opts[i].Language = speech.English
 				} else {
-					opts[i].Language = "zh"
+					opts[i].Language = speech.Chinese
 				}
 			}
 			if round == 5 {
 				opts[i].Partial = &previous[i]
+			}
+			if round == 6 {
+				opts[i].Languages = speech.Languages(speech.English, speech.Chinese)
+			}
+			if round == 7 && i == 0 {
+				opts[i].Language = speech.English // mixed constrained/unrestricted lanes
 			}
 			if err := scalar[i].Transcribe(context.Background(), inputs[i], opts[i], &want[i]); err != nil {
 				t.Fatal(err)
@@ -73,8 +80,8 @@ func TestGPUBatchTranscribeMatchesIndependent(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := range count {
-			if !bytes.Equal(got[i].Text, want[i].Text) || got[i].Language != want[i].Language || !slices.Equal(got[i].Segments, want[i].Segments) || !slices.Equal(batch.lanes[i].tr.gen, scalar[i].gen) {
-				t.Fatalf("round %d lane %d: batch %q (%s), scalar %q (%s); token or segment mismatch", round, i, got[i].Text, got[i].Language, want[i].Text, want[i].Language)
+			if !bytes.Equal(got[i].Text, want[i].Text) || got[i].Language != want[i].Language || got[i].Turn != want[i].Turn || !slices.Equal(got[i].Segments, want[i].Segments) || !slices.Equal(batch.lanes[i].tr.gen, scalar[i].gen) {
+				t.Fatalf("round %d lane %d: batch %q (%v), scalar %q (%v); token or segment mismatch", round, i, got[i].Text, got[i].Language, want[i].Text, want[i].Language)
 			}
 			// The greedy batch path returns only the selected token instead of
 			// copying full vocabulary rows. Recompute both final logit rows
@@ -109,8 +116,8 @@ func (c *cancelDuringBatch) Err() error {
 }
 
 func TestGPUBatchTranscribeErrorsAndReuse(t *testing.T) {
-	m := loadModel(t, FormatGPU)
-	batch, err := NewBatchTranscriber(m, 4, 1)
+	m := loadModel(t, "gpu-q8")
+	batch, err := NewBatchTranscriber(m, 4, LaneOptions{Threads: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +204,11 @@ func TestGPUBatchTranscribeErrorsAndReuse(t *testing.T) {
 // Same fixtures, warmup, and wave definition as the independent-worker
 // benchmark. Transcript comparisons remain inside both timed loops.
 func BenchmarkGPUBatchTranscribe(b *testing.B) {
-	m := loadModel(b, FormatGPU)
+	m := loadModel(b, "gpu-q8")
 	pcm := clipPCM(b, "jfk")
 	for _, count := range []int{1, 2, 4, 8} {
 		b.Run(fmt.Sprintf("lanes=%d", count), func(b *testing.B) {
-			batch, err := NewBatchTranscriber(m, count, 1)
+			batch, err := NewBatchTranscriber(m, count, LaneOptions{Threads: 1})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -244,7 +251,7 @@ func BenchmarkGPUBatchTranscribe(b *testing.B) {
 // full PCM-to-text call per lane; ns/op is the whole pair, not one inference.
 // Reported allocation counts cover both methods together.
 func BenchmarkGPUPairedTranscribe(b *testing.B) {
-	m := loadModel(b, FormatGPU)
+	m := loadModel(b, "gpu-q8")
 	jfk, zh := clipPCM(b, "jfk"), clipPCM(b, "zh")
 	for _, workload := range []string{"jfk", "mixed"} {
 		for _, count := range []int{1, 2, 4, 8} {
@@ -257,7 +264,7 @@ func BenchmarkGPUPairedTranscribe(b *testing.B) {
 					}
 				}
 				independent := newGPUConcurrentCalls(b, m, inputs)
-				batch, err := NewBatchTranscriber(m, count, 1)
+				batch, err := NewBatchTranscriber(m, count, LaneOptions{Threads: 1})
 				if err != nil {
 					b.Fatal(err)
 				}

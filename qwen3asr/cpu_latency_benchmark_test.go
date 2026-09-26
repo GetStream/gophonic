@@ -13,16 +13,17 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
 // BenchmarkCPUWorkers exercises the entire warm public transcription path.
 func BenchmarkCPUWorkers(b *testing.B) {
-	m := loadModel(b, FormatF16)
+	m := loadModel(b, qwen3lm.WeightsF16)
 	pcm := clipPCM(b, "jfk")
 	for _, workers := range []int{1, 2, 4, 8, 12, 16} {
 		b.Run(fmt.Sprint(workers), func(b *testing.B) {
-			tr, err := NewTranscriber(m, workers)
+			tr, err := NewTranscriber(m, LaneOptions{Threads: workers})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -49,10 +50,10 @@ func BenchmarkCPUWorkers(b *testing.B) {
 // Its untimed fingerprint lets separately built revisions compare the exact
 // encoder output, generated tokens, final hidden state, and final logits.
 func BenchmarkCPUTranscribe(b *testing.B) {
-	m := loadModel(b, FormatF16)
+	m := loadModel(b, qwen3lm.WeightsF16)
 	for _, clip := range []string{"jfk", "zh"} {
 		b.Run(clip, func(b *testing.B) {
-			tr, err := NewTranscriber(m, 0)
+			tr, err := NewTranscriber(m, LaneOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}

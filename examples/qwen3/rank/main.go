@@ -38,7 +38,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load CLM head: %w", err)
 	}
-	m, err := qwen3.Open(*qwenPath, qwen3.Options{Weights: *weights, Threads: *threads})
+	m, err := qwen3.Open(*qwenPath, qwen3.Options{Format: *weights, Threads: *threads})
 	if err != nil {
 		return fmt.Errorf("load Qwen3: %w", err)
 	}

@@ -21,10 +21,8 @@ func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech
 	if t == nil || t.closed {
 		return ErrTranscriberClosed
 	}
-	if l := opts.Language; l != "" {
-		if name, _ := speech.LanguageName(l); name != "English" {
-			return fmt.Errorf("whisper: English model cannot transcribe %q: %w", l, speech.ErrUnsupported)
-		}
+	if l := opts.Language; l != speech.Unknown && l != speech.English {
+		return fmt.Errorf("whisper: English model cannot transcribe %v: %w", l, speech.ErrUnsupported)
 	}
 	if opts.Context != "" {
 		return fmt.Errorf("whisper: context prompts: %w", speech.ErrUnsupported)
@@ -48,7 +46,7 @@ func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech
 		return err
 	}
 	dst.Text = text
-	dst.Language = "English"
+	dst.Language = speech.English
 	for _, s := range segments {
 		dst.Segments = append(dst.Segments, speech.Segment{Start: s.Start, End: s.End,
 			TextStart: s.TextStart, TextEnd: s.TextEnd, WordStart: s.WordStart, WordEnd: s.WordEnd})

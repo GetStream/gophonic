@@ -6,6 +6,8 @@ package qwen3asr
 import (
 	"math"
 	"testing"
+
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 )
 
 func TestEncoderPrefixInvalidation(t *testing.T) {
@@ -82,8 +84,8 @@ func TestEncoderSuffixRejectsUnalignedPrefix(t *testing.T) {
 // that change the final activation tile, the chunk padding, and attention
 // windows. The per-frame values are identical as their row stride grows.
 func TestEncoderPrefixMatchesFullExactly(t *testing.T) {
-	m := loadModel(t, FormatF16)
-	tr, err := NewTranscriber(m, 8)
+	m := loadModel(t, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{Threads: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +132,8 @@ func TestEncoderPrefixMatchesFullExactly(t *testing.T) {
 }
 
 func TestEncoderPrefixGrowingPCMMatchesFullExactly(t *testing.T) {
-	m := loadModel(t, FormatF16)
-	tr, err := NewTranscriber(m, 8)
+	m := loadModel(t, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{Threads: 8})
 	if err != nil {
 		t.Fatal(err)
 	}

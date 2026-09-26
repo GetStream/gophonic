@@ -1,0 +1,6 @@
+# A fact the model should look up rather than guess: the search tool reads
+# Wikipedia, and the answer comes from what it found. Numbers are spelled
+# out so that the synthesized question is heard as meant.
+user: Gopher, who won the football World Cup in twenty twenty-two?
+gopher: speaks within 20s
+gopher: says that Argentina won the World Cup
