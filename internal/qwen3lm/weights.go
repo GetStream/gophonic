@@ -469,6 +469,9 @@ func (m *Weights) Config() Config {
 // Format reports the projection weight format.
 func (m *Weights) Format() string { return m.format }
 
+// GPU reports whether the weights run on the GPU.
+func (m *Weights) GPU() bool { return m.gpu != nil }
+
 // WeightBytes reports the resident bytes of packed projection weights,
 // including the language-model head when loaded.
 func (m *Weights) WeightBytes() int64 {

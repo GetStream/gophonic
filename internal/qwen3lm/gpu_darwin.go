@@ -63,7 +63,9 @@ type gpuModel struct {
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
 	attendFlash, gemvHead        *metal.Pipeline
-	probe                        *metal.Pipeline       // one head's attention, for a Probe
+	probe                        *metal.Pipeline // one head's attention, for a Probe
+	decodeHead, decodeSample     *metal.Pipeline // a Decoder's steps
+	decodeGather                 *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
@@ -163,6 +165,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		dst  **metal.Pipeline
 		name string
 	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.probe, "probe1"}, {&g.rotate, "rotate"},
+		{&g.decodeHead, "decode_head"}, {&g.decodeSample, "decode_sample"}, {&g.decodeGather, "decode_gather"},
 		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
@@ -649,10 +652,13 @@ type gpuWorkspace struct {
 	logitRows                               int // rows the logits buffer holds
 	headArgs                                gemvArgs
 	tail                                    []float32 // a single sequence's last states, when set
-	probe                                   *Probe    // the head a one-token pass reads, when set
-	probeOut                                *metal.Buffer
-	probeArgs                               probeArgs
-	oneSeq                                  [1][]int
+	// A Decoder run's tokens and logits, grown to the largest run.
+	decodeTokens, decodeLogits *metal.Buffer
+	decodeArgs                 decodeArgs
+	probe                      *Probe // the head a one-token pass reads, when set
+	probeOut                   *metal.Buffer
+	probeArgs                  probeArgs
+	oneSeq                     [1][]int
 	// A mixture of experts: the router's logits, each row's experts and
 	// weights, and the arguments of its kernels. Batches group their (row,
 	// slot) pairs by expert: each expert's count, each pair's rank among its
@@ -1392,6 +1398,187 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 	}
 }
 
+// gpuDecoder is a Decoder's heads and tables in GPU memory, FP16: heads
+// [steps][padded][hidden], with the final norm's weight and the rotation
+// folded in; tables [tables][rows][hidden], rotated, with each row's sum of
+// squares. It is read-only: a run's tokens and logits are its workspace's.
+type gpuDecoder struct {
+	heads, tables, sumsq *metal.Buffer
+	rows, padded         int
+}
+
+// decodeArgs is DecodeArgs in gpu.metal.
+type decodeArgs struct {
+	k, rows, parts uint32
+	eps            float32
+	topK           uint32
+	invTemp        float32
+	seed, draw     [2]uint32
+	step           uint32
+	_              uint32
+}
+
+func (g *gpuModel) newDecoder(heads, tables [][]float32, rows int, finalNorm []float32) (*gpuDecoder, error) {
+	h := g.cfg.hidden
+	d := &gpuDecoder{rows: rows, padded: (rows + 31) / 32 * 32}
+	for _, b := range []struct {
+		dst **metal.Buffer
+		n   int
+	}{
+		{&d.heads, 2 * len(heads) * d.padded * h},
+		{&d.tables, 2 * max(1, len(tables)) * rows * h},
+		{&d.sumsq, 4 * max(1, len(tables)) * rows},
+	} {
+		var err error
+		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
+			d.release()
+			return nil, err
+		}
+	}
+	halves := func(b *metal.Buffer) []uint16 {
+		return unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(b.Bytes()))), len(b.Bytes())/2)
+	}
+	hw, tw, sq := halves(d.heads), halves(d.tables), floats(d.sumsq.Bytes())
+	// Rows are rotated as the residual is, a matrix to a goroutine.
+	var wg sync.WaitGroup
+	prepare := func(src []float32, dst []uint16, norm []float32, sums []float32) {
+		defer wg.Done()
+		row := make([]float32, h)
+		for r := range rows {
+			copy(row, src[r*h:(r+1)*h])
+			if norm != nil {
+				for i := range row {
+					row[i] *= norm[i]
+				}
+			}
+			g.hidden.apply(row)
+			var ss float32
+			for i, v := range row {
+				dst[r*h+i] = q8gemm.F32ToF16(v)
+				v = safetensors.F16ToF32(dst[r*h+i])
+				ss += v * v
+			}
+			if sums != nil {
+				sums[r] = ss
+			}
+		}
+	}
+	for i, m := range heads {
+		wg.Add(1)
+		go prepare(m, hw[i*d.padded*h:], finalNorm, nil)
+	}
+	for i, m := range tables {
+		wg.Add(1)
+		go prepare(m, tw[i*rows*h:], nil, sq[i*rows:])
+	}
+	wg.Wait()
+	return d, nil
+}
+
+func (d *gpuDecoder) release() {
+	for _, b := range []*metal.Buffer{d.heads, d.tables, d.sumsq} {
+		if b != nil {
+			b.Release()
+		}
+	}
+}
+
+// decode encodes a Decoder's run in one command buffer: the input rows as
+// a pass does, then for each step the head over the last state, the draw,
+// and, but for the last, the drawn token's row as a one-token pass.
+func (w *gpuWorkspace) decode(m *Weights, d *gpuDecoder, pre *gpuPrefix, past int, ids []int, embeds Embeds, s Sampling, tokens []int, logits []float32) error {
+	g, c, e := w.g, &m.cfg, &w.enc
+	h := c.hidden
+	if len(ids) > w.rows {
+		return fmt.Errorf("qwen3: %d input tokens exceed the GPU context %d", len(ids), w.rows)
+	}
+	for _, b := range []struct {
+		buf **metal.Buffer
+		n   int
+	}{{&w.decodeTokens, 4 * len(tokens)}, {&w.decodeLogits, 4 * len(tokens) * d.padded}} {
+		if *b.buf == nil || len((*b.buf).Bytes()) < b.n {
+			nb, err := g.dev.Buffer(b.n)
+			if err != nil {
+				return err
+			}
+			if *b.buf != nil {
+				(*b.buf).Release()
+			}
+			*b.buf = nb
+		}
+	}
+	stride := 4 * pre.capacity * c.kvDim
+	w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
+	w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+	w.attn.base, w.attn.prefixLen = uint32(past), 0
+	w.past, w.shared = past, false
+	hs, parts := floats(w.h.Bytes()), floats(w.embedParts.Bytes())
+	spliced := 0
+	for t, id := range ids {
+		row := hs[t*h : (t+1)*h]
+		if len(embeds.Rows) != 0 && id == embeds.Token {
+			copy(row, embeds.Rows[spliced*h:])
+			spliced++
+		} else {
+			m.embedRow(id, row)
+		}
+		g.hidden.apply(row)
+		parts[t] = sumSquares(row)
+	}
+	g.dev.Begin(e, false)
+	w.encodeTokens(len(ids))
+	args := &w.decodeArgs
+	*args = decodeArgs{k: uint32(h), rows: uint32(d.rows), parts: w.qkvArgs.parts, eps: w.qkvArgs.eps,
+		topK: uint32(s.TopK), invTemp: 1 / s.Temperature, seed: [2]uint32{uint32(s.Seed), uint32(s.Seed >> 32)}}
+	size := int(unsafe.Sizeof(*args))
+	last := len(ids) - 1 // the row of the state the next head reads
+	for i := range tokens {
+		draw := s.Draw + uint64(i)
+		args.step, args.draw = uint32(i), [2]uint32{uint32(draw), uint32(draw >> 32)}
+		e.SetPipeline(g.decodeHead)
+		e.SetBuffer(d.heads, 2*i*d.padded*h, 0)
+		e.SetBuffer(w.h, 4*last*h, 1)
+		e.SetBuffer(w.attnParts, 0, 2)
+		e.SetBuffer(w.decodeLogits, 4*i*d.padded, 3)
+		e.SetBytes(unsafe.Pointer(args), size, 4)
+		e.Dispatch(metal.Size{X: d.padded / 32, Y: 1, Z: 1}, metal.Size{X: 256, Y: 1, Z: 1})
+
+		e.SetPipeline(g.decodeSample)
+		e.SetBuffer(w.decodeLogits, 4*i*d.padded, 0)
+		e.SetBuffer(w.decodeTokens, 0, 1)
+		e.SetBytes(unsafe.Pointer(args), size, 4)
+		e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+		if i == len(tokens)-1 {
+			break
+		}
+		e.SetPipeline(g.decodeGather)
+		e.SetBuffer(d.tables, 2*i*d.rows*h, 0)
+		e.SetBuffer(d.sumsq, 4*i*d.rows, 1)
+		e.SetBuffer(w.decodeTokens, 0, 2)
+		e.SetBuffer(w.h, 0, 3)
+		e.SetBuffer(w.embedParts, 0, 4)
+		e.SetBytes(unsafe.Pointer(args), size, 5)
+		e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 256, Y: 1, Z: 1})
+		w.past += last + 1
+		last = 0
+		w.encodeTokens(1)
+	}
+	if err := e.Wait(); err != nil {
+		return err
+	}
+	out := unsafe.Slice((*int32)(unsafe.Pointer(unsafe.SliceData(w.decodeTokens.Bytes()))), len(tokens))
+	for i, t := range out {
+		tokens[i] = int(t)
+	}
+	if logits != nil {
+		all := floats(w.decodeLogits.Bytes())
+		for i := range tokens {
+			copy(logits[i*d.rows:(i+1)*d.rows], all[i*d.padded:])
+		}
+	}
+	return nil
+}
+
 // encodeProbe reads w.probe's head of layer i as attend1 weighed it, before
 // the next layer overwrites the query.
 func (w *gpuWorkspace) encodeProbe(i int) {
@@ -1411,6 +1598,11 @@ func (w *gpuWorkspace) encodeProbe(i int) {
 func (w *gpuWorkspace) release() {
 	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut, w.probeOut} {
 		b.Release()
+	}
+	for _, b := range []*metal.Buffer{w.decodeTokens, w.decodeLogits} {
+		if b != nil {
+			b.Release()
+		}
 	}
 	w.hy.release()
 }

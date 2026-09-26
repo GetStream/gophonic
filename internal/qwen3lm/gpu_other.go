@@ -70,3 +70,15 @@ func GPUAvailable() bool { return false }
 func (w *gpuWorkspace) logitsRowsInto(*Weights, []float32, []float32, int) error {
 	return errors.New("qwen3: GPU backend unavailable")
 }
+
+type gpuDecoder struct{}
+
+func (g *gpuModel) newDecoder([][]float32, [][]float32, int, []float32) (*gpuDecoder, error) {
+	return nil, errors.New("qwen3: no GPU")
+}
+
+func (d *gpuDecoder) release() {}
+
+func (w *gpuWorkspace) decode(*Weights, *gpuDecoder, *gpuPrefix, int, []int, Embeds, Sampling, []int, []float32) error {
+	return errors.New("qwen3: no GPU")
+}

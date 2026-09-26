@@ -358,6 +358,223 @@ kernel void probe1(device const float *qkv [[buffer(0)]], device const float *kc
 	}
 }
 
+// ---- Decoding: heads, sampling, and inputs on the GPU ----
+
+struct DecodeArgs {
+	uint k;         // the state's width
+	uint rows;      // tokens a head scores
+	uint parts;     // the residual's partial sums of squares
+	float eps;
+	uint topK;      // tokens drawn among; 1 takes the likeliest
+	float invTemp;  // 1 / temperature
+	uint2 seed;     // the run's seed
+	uint2 draw;     // the draw's counter
+	uint step;      // the token this step writes or reads
+};
+
+// decode_head writes a head's logits for the last state: rows of W (FP16,
+// the final norm's weight and the rotation folded in) times the residual
+// x, normalized by its partial sums of squares, as a layer's input is.
+// Simdgroup s of threadgroup g computes rows 4(8g+s) to 4(8g+s)+3.
+kernel void decode_head(device const half *W [[buffer(0)]], device const float *x [[buffer(1)]],
+		device const float *parts [[buffer(2)]], device float *logits [[buffer(3)]],
+		constant DecodeArgs &a [[buffer(4)]], uint tg [[threadgroup_position_in_grid]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	float s = 0;
+	for (uint i = lane; i < a.parts; i += 32)
+		s += parts[i];
+	float inv = rsqrt(simd_sum(s) / a.k + a.eps);
+	uint row0 = (tg * 8 + sg) * 4;
+	device const float4 *xv = (device const float4 *)x;
+	float acc[4] = {0, 0, 0, 0};
+	for (uint i = lane; i < a.k / 4; i += 32) {
+		float4 xi = xv[i];
+		for (uint r = 0; r < 4; r++)
+			acc[r] += dot(float4(((device const half4 *)(W + (ulong)(row0 + r) * a.k))[i]), xi);
+	}
+	for (uint r = 0; r < 4; r++) {
+		float v = simd_sum(acc[r]) * inv;
+		if (lane == 0)
+			logits[row0 + r] = v;
+	}
+}
+
+// orderKey maps a float to a uint of the same order.
+inline uint orderKey(float f) {
+	uint u = as_type<uint>(f);
+	return (u & 0x80000000u) ? ~u : u | 0x80000000u;
+}
+
+// draw01 is splitmix64 of seed + (draw+1)·γ, as 24 bits in [0, 1).
+inline float draw01(uint2 seed, uint2 draw) {
+	ulong x = (ulong(seed.y) << 32 | seed.x) + ((ulong(draw.y) << 32 | draw.x) + 1) * 0x9E3779B97F4A7C15ul;
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ul;
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EBul;
+	x ^= x >> 31;
+	return float(x >> 40) * 0x1p-24f;
+}
+
+constant constexpr uint ST = 1024, SC = 4; // decode_sample's threads, and logits per thread
+
+// scan returns the sum of v over the threads before this one, and the
+// total in *total, for ST threads.
+inline float scanF(float v, threadgroup float *part, uint sg, uint lane, thread float &total) {
+	float before = simd_prefix_exclusive_sum(v);
+	if (lane == 31)
+		part[sg] = before + v;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	float sgBefore = 0;
+	total = 0;
+	for (uint i = 0; i < ST / 32; i++) {
+		float p = part[i];
+		sgBefore += i < sg ? p : 0;
+		total += p;
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	return sgBefore + before;
+}
+
+inline uint scanU(uint v, threadgroup uint *part, uint sg, uint lane) {
+	uint before = simd_prefix_exclusive_sum(v);
+	if (lane == 31)
+		part[sg] = before + v;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	uint sgBefore = 0;
+	for (uint i = 0; i < sg; i++)
+		sgBefore += part[i];
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	return sgBefore + before;
+}
+
+// decode_sample draws tokens[a.step] from the logits: among the topK
+// likeliest, weighed by exp(logit/temperature), with draw01(seed, draw);
+// ties go to the lower index, so a draw is a function of its inputs. A
+// radix select finds the topK-th largest logit in four 8-bit passes; each
+// thread then weighs its SC consecutive logits, and the thread whose share
+// of the total holds the draw walks its own. A draw that rounding puts past
+// the total takes the likeliest.
+kernel void decode_sample(device const float *logits [[buffer(0)]], device int *tokens [[buffer(1)]],
+		constant DecodeArgs &a [[buffer(4)]], uint tid [[thread_index_in_threadgroup]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup atomic_uint bins[256];
+	threadgroup atomic_uint won;
+	threadgroup uint chosen[2];
+	threadgroup uint partU[ST / 32];
+	threadgroup float partF[ST / 32];
+	uint i0 = tid * SC;
+	uint keys[SC];
+	float vals[SC];
+	for (uint j = 0; j < SC; j++) {
+		bool in = i0 + j < a.rows;
+		vals[j] = in ? logits[i0 + j] : -INFINITY;
+		keys[j] = in ? orderKey(vals[j]) : 0;
+	}
+	// The topK-th largest key, T, and how many keys equal to it are taken.
+	uint prefix = 0, need = a.topK;
+	for (int d = 3; d >= 0; d--) {
+		uint shift = uint(d) * 8, high = d == 3 ? 0 : 0xFFFFFFFFu << (shift + 8);
+		if (tid < 256)
+			atomic_store_explicit(&bins[tid], 0, memory_order_relaxed);
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		for (uint j = 0; j < SC; j++)
+			if (i0 + j < a.rows && (keys[j] & high) == prefix)
+				atomic_fetch_add_explicit(&bins[(keys[j] >> shift) & 255], 1, memory_order_relaxed);
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid == 0) {
+			uint b = 255;
+			for (;; b--) {
+				uint n = atomic_load_explicit(&bins[b], memory_order_relaxed);
+				if (n >= need || b == 0)
+					break;
+				need -= n;
+			}
+			chosen[0] = prefix | (b << shift);
+			chosen[1] = need;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		prefix = chosen[0];
+		need = chosen[1];
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+	// Keys above T are taken, and of those equal to it the need of lowest
+	// index.
+	uint equal = 0;
+	for (uint j = 0; j < SC; j++)
+		equal += i0 + j < a.rows && keys[j] == prefix;
+	uint rank = scanU(equal, partU, sg, lane);
+	bool taken[SC];
+	float top = -INFINITY;
+	uint first = 0xFFFFFFFFu; // this thread's first taken logit
+	for (uint j = 0; j < SC; j++) {
+		bool eq = i0 + j < a.rows && keys[j] == prefix;
+		taken[j] = i0 + j < a.rows && (keys[j] > prefix || (eq && rank < need));
+		rank += eq;
+		top = taken[j] ? max(top, vals[j]) : top;
+	}
+	top = simd_max(top);
+	if (lane == 0)
+		partF[sg] = top;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	for (uint i = 0; i < ST / 32; i++)
+		top = max(top, partF[i]);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	// The likeliest, of lowest index.
+	for (uint j = 0; j < SC && first == 0xFFFFFFFFu; j++)
+		if (taken[j] && vals[j] == top)
+			first = i0 + j;
+	first = simd_min(first);
+	if (lane == 0)
+		partU[sg] = first;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (tid == 0) {
+		for (uint i = 0; i < ST / 32; i++)
+			first = min(first, partU[i]);
+		chosen[0] = first;
+		atomic_store_explicit(&won, 0xFFFFFFFFu, memory_order_relaxed);
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	float w[SC], mine = 0;
+	for (uint j = 0; j < SC; j++) {
+		w[j] = taken[j] ? exp((vals[j] - top) * a.invTemp) : 0;
+		mine += w[j];
+	}
+	float total;
+	float before = scanF(mine, partF, sg, lane, total);
+	float u = draw01(a.seed, a.draw) * total;
+	// Rounding may let two neighbours claim a draw on their boundary: the
+	// lower index wins.
+	if (mine > 0 && u >= before && u < before + mine) {
+		float acc = before;
+		for (uint j = 0; j < SC; j++) {
+			acc += w[j];
+			if (taken[j] && u < acc) {
+				atomic_fetch_min_explicit(&won, i0 + j, memory_order_relaxed);
+				break;
+			}
+		}
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (tid == 0) {
+		uint t = atomic_load_explicit(&won, memory_order_relaxed);
+		tokens[a.step] = int(t != 0xFFFFFFFFu ? t : chosen[0]);
+	}
+}
+
+// decode_gather writes row tokens[a.step] of a table as the next input, and
+// its sum of squares.
+kernel void decode_gather(device const half *table [[buffer(0)]], device const float *sumsq [[buffer(1)]],
+		device const int *tokens [[buffer(2)]], device float *h [[buffer(3)]],
+		device float *parts [[buffer(4)]], constant DecodeArgs &a [[buffer(5)]],
+		uint tid [[thread_position_in_grid]]) {
+	uint t = uint(tokens[a.step]);
+	device const half4 *row = (device const half4 *)(table + (ulong)t * a.k);
+	device float4 *dst = (device float4 *)h;
+	for (uint i = tid; i < a.k / 4; i += 256)
+		dst[i] = float4(row[i]);
+	if (tid == 0)
+		parts[0] = sumsq[t];
+}
+
 // ---- Batched (multi-token) kernels ----
 
 struct MMArgs {
