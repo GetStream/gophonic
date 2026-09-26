@@ -105,7 +105,8 @@ func (o Options) threads() int {
 }
 
 // IsModelDir reports whether dir holds a Qwen3 checkpoint: a config.json
-// whose model_type is qwen3, or qwen3_moe for a mixture of experts.
+// whose model_type is qwen3, qwen3_moe for a mixture of experts, or
+// qwen3_5_moe for the Qwen3.5 family (Qwen3.6-35B-A3B).
 func IsModelDir(dir string) bool {
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
@@ -114,7 +115,14 @@ func IsModelDir(dir string) bool {
 	var c struct {
 		ModelType string `json:"model_type"`
 	}
-	return vibejson.Unmarshal(raw, &c) == nil && (c.ModelType == "qwen3" || c.ModelType == "qwen3_moe")
+	if vibejson.Unmarshal(raw, &c) != nil {
+		return false
+	}
+	switch c.ModelType {
+	case "qwen3", "qwen3_moe", "qwen3_5_moe":
+		return true
+	}
+	return false
 }
 
 // Open loads an official Qwen3 safetensors snapshot directory, such as

@@ -10,8 +10,6 @@ import (
 	"io"
 	"math"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +18,6 @@ import (
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/internal/safetensors"
-	"github.com/thesyncim/vibejson"
 )
 
 // Chat generates text with a Qwen3 model: it is a chat.Generator whose
@@ -47,6 +44,7 @@ type Chat struct {
 	answer  []int    // the assistant header and the empty thinking block
 	// Tool calls: the tokens around a call, and after a tool's result.
 	callOpen, callClose int
+	dialect             dialect // how the model writes tool calls
 	resultEnd           []int
 }
 
@@ -81,7 +79,7 @@ func OpenChat(path string, opts Options) (*Chat, error) {
 		weights.Release()
 		return nil, err
 	}
-	c.own, c.path = true, path
+	c.own, c.path, c.dialect = true, path, dialectOf(path)
 	if !thinks(path) {
 		c.answer = slices.Clone(c.header[chat.Assistant])
 	}
@@ -92,17 +90,8 @@ func OpenChat(path string, opts Options) (*Chat, error) {
 // Qwen3's thinking block, which a non-thinking reply opens empty. The
 // Instruct-2507 models have none: their replies start after the header.
 func thinks(path string) bool {
-	raw, err := os.ReadFile(filepath.Join(path, "tokenizer_config.json"))
-	if err != nil {
-		return true
-	}
-	var cfg struct {
-		Template string `json:"chat_template"`
-	}
-	if vibejson.Unmarshal(raw, &cfg) != nil || cfg.Template == "" {
-		return true
-	}
-	return strings.Contains(cfg.Template, "<think>")
+	t := chatTemplate(path)
+	return t == "" || strings.Contains(t, "<think>")
 }
 
 // Questions returns a Model for embeddings and zero-shot questions that
@@ -238,18 +227,18 @@ func (c *Chat) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, 
 	s := &Session{c: c, hidden: make([]float32, cfg.Hidden), logits: make([]float32, cfg.Vocab), reply: -1}
 	if len(tools) > 0 {
 		var err error
-		if system, err = toolsPrompt(system, tools); err != nil {
+		if system, err = c.dialect.prompt(system, tools); err != nil {
 			return nil, err
 		}
 		// What follows <tool_call> up to each tool's arguments, drafted
 		// whole: "\n{"name": "stay_quiet", "arguments":".
 		for _, t := range tools {
-			text := "\n{\"name\": \"" + t.Name + "\", \"arguments\":"
+			text := c.dialect.scaffold(t.Name)
 			ids, err := c.tokens.EncodeInto(text, make([]int, 0, len(text)), &s.tws)
 			if err != nil {
 				return nil, err
 			}
-			s.tools = append(s.tools, toolDraft{name: t.Name, scaffold: ids})
+			s.tools = append(s.tools, toolDraft{name: t.Name, scaffold: ids, strings: stringParams(t.Parameters)})
 		}
 	}
 	if system != "" {
@@ -294,10 +283,12 @@ type Session struct {
 	seenIDs []int
 }
 
-// toolDraft is a tool's name and the tokens a call to it starts with.
+// toolDraft is a tool's name, the tokens a call to it starts with, and its
+// string parameters.
 type toolDraft struct {
 	name     string
 	scaffold []int
+	strings  []string
 }
 
 var _ chat.Session = (*Session)(nil)
@@ -484,15 +475,15 @@ func (s *Session) penalize(logits []float32, opts chat.Options) {
 
 // record adds the call just written to Calls, if it is well formed.
 func (s *Session) record() {
-	name, args, err := parseCall(s.call)
-	if err != nil {
-		return
-	}
 	i := len(s.calls)
 	if i == len(s.args) {
 		s.args = append(s.args, nil)
 	}
-	s.args[i] = append(s.args[i][:0], args...)
+	name, args, err := s.c.dialect.parse(s.call, s.stringParam, s.args[i][:0])
+	if err != nil {
+		return
+	}
+	s.args[i] = args
 	call := chat.Call{Arguments: s.args[i]}
 	for _, t := range s.tools {
 		if string(name) == t.name {
@@ -503,6 +494,20 @@ func (s *Session) record() {
 		call.Name = string(name)
 	}
 	s.calls = append(s.calls, call)
+}
+
+// stringParam reports whether tool name takes param as a string.
+func (s *Session) stringParam(name, param []byte) bool {
+	for _, t := range s.tools {
+		if t.name == string(name) {
+			for _, p := range t.strings {
+				if p == string(param) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // draft returns, while a tool call is being written, the tokens it is sure

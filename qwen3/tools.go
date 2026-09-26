@@ -20,41 +20,35 @@ import (
 // toolsPrompt returns the system message that offers tools, as Qwen3's chat
 // template renders it.
 func toolsPrompt(system string, tools []chat.ToolSpec) (string, error) {
-	var b strings.Builder
-	if system != "" {
-		b.WriteString(system)
-		b.WriteString("\n\n")
+	return jsonCalls.prompt(system, tools)
+}
+
+// writeTool writes a tool's signature as the templates' tojson does.
+func writeTool(b *strings.Builder, t chat.ToolSpec) error {
+	name, err := vibejson.Marshal(&t.Name)
+	if err != nil {
+		return err
 	}
-	b.WriteString("# Tools\n\nYou may call one or more functions to assist with the user query.\n\n" +
-		"You are provided with function signatures within <tools></tools> XML tags:\n<tools>")
-	for _, t := range tools {
-		name, err := vibejson.Marshal(&t.Name)
-		if err != nil {
-			return "", err
-		}
-		description, err := vibejson.Marshal(&t.Description)
-		if err != nil {
-			return "", err
-		}
-		params := t.Parameters
-		if params == "" {
-			params = `{"type": "object", "properties": {}}`
-		}
-		spaced, err := pythonJSON([]byte(params))
-		if err != nil {
-			return "", fmt.Errorf("qwen3: tool %s: parameters: %w", t.Name, err)
-		}
-		b.WriteString("\n{\"type\": \"function\", \"function\": {\"name\": ")
-		b.Write(name)
-		b.WriteString(", \"description\": ")
-		b.Write(description)
-		b.WriteString(", \"parameters\": ")
-		b.Write(spaced)
-		b.WriteString("}}")
+	description, err := vibejson.Marshal(&t.Description)
+	if err != nil {
+		return err
 	}
-	b.WriteString("\n</tools>\n\nFor each function call, return a json object with function name and arguments " +
-		"within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>")
-	return b.String(), nil
+	params := t.Parameters
+	if params == "" {
+		params = `{"type": "object", "properties": {}}`
+	}
+	spaced, err := pythonJSON([]byte(params))
+	if err != nil {
+		return fmt.Errorf("qwen3: tool %s: parameters: %w", t.Name, err)
+	}
+	b.WriteString("\n{\"type\": \"function\", \"function\": {\"name\": ")
+	b.Write(name)
+	b.WriteString(", \"description\": ")
+	b.Write(description)
+	b.WriteString(", \"parameters\": ")
+	b.Write(spaced)
+	b.WriteString("}}")
+	return nil
 }
 
 // pythonJSON reformats JSON with the separators of Python's json.dumps,
