@@ -161,7 +161,7 @@ if err != nil {
 defer lane.Close()
 
 var t speech.Transcript
-opts := speech.Options{Language: "en", Segments: true, Words: true}
+opts := speech.Options{Language: speech.English, Segments: true, Words: true}
 if err := lane.Transcribe(ctx, mono16kPCM, opts, &t); err != nil {
 	return err
 }
@@ -176,16 +176,22 @@ length and writes the result into `dst`:
 | Field | Contents |
 | --- | --- |
 | `Text` | The transcript bytes; offsets in segments and words index it |
-| `Language` | English name of the detected or requested language |
+| `Language` | The detected or requested language, or `speech.Unknown` |
 | `Segments` | Timed spans, when `Options.Segments` or `Options.Words` is set |
 | `Words` | Aligned words with a confidence, when `Options.Words` is set |
 | `Turn` | Whether the speaker's turn ends where the audio does, when `Options.Turn` is set |
 
-`Options.Language` takes an ISO 639-1 code or an English name
-(`speech.LanguageName` normalizes both). `Options.Languages` instead lists the
-languages that may be spoken: Qwen3-ASR detects the likeliest of them and
-writes only in their scripts, so noise in an English and Portuguese call
-cannot come out as Chinese. `Options.Partial` continues an earlier
+Languages are values: `speech.Language` is a small integer
+(`speech.English`, `speech.Portuguese`, …) with `Code()` and `Name()`, and
+`speech.LanguageSet` a set of them, one bit each. `speech.ParseLanguage`
+reads a code or an English name in any case, and `speech.ParseLanguages` a
+comma-separated list; neither allocates per language.
+`Options.Language` forces a language; `Options.Languages` instead limits
+the languages that may be spoken: Qwen3-ASR detects the likeliest of them
+and writes only in their scripts, so noise in an English and Portuguese
+call cannot come out as Chinese. A lane prepares each set once, and tells
+it is the same set with one comparison, so alternating sets costs
+nothing. `Options.Partial` continues an earlier
 transcript of the start of the same audio, checking it in one pass and
 decoding only where it differs; the result is the same.
 
@@ -260,7 +266,7 @@ if err != nil {
 }
 defer tts.Close()
 
-err = tts.Begin(ctx, speech.SpeakOptions{Voice: "ryan", Language: "en"})
+err = tts.Begin(ctx, speech.SpeakOptions{Voice: "ryan", Language: speech.English})
 go func() { // a Synthesizer is an io.Writer: the model writes at its own pace
 	session.Reply(ctx, chat.Options{}, tts)
 	tts.End()
@@ -316,14 +322,14 @@ lane, err := qwen3asr.NewTranscriber(model, qwen3asr.LaneOptions{})
 if err != nil { return err }
 defer lane.Close()
 
-err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: "de", Context: "Bundestag"}, &t)
+err = lane.Transcribe(ctx, mono16kPCM, speech.Options{Language: speech.German, Context: "Bundestag"}, &t)
 ```
 
 `Options.Format` picks the decoder's weights: `"gpu-q8"` (int8 blocks on
 the Apple GPU, with the encoder on the GPU too; the default where Metal is
 present), `"f16"` (every BF16 weight exactly, on the CPU), or any other
 format of the table above. `speech.Options.Language` forces one of
-`Model.Languages()` and skips detection; `Context` primes recognition with
+`Model.Languages()`, a `speech.LanguageSet`, and skips detection; `Context` primes recognition with
 names and terms. Qwen3-ASR produces no timestamps: `Segments` yields one
 segment per decoded piece (the whole clip, or each piece of audio longer
 than 20 minutes), and `Words` fails with `speech.ErrUnsupported`. Input whose

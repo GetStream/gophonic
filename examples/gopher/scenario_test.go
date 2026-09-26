@@ -62,7 +62,7 @@ func TestScenarios(t *testing.T) {
 	// conversation leaks from one into the next.
 	setup := func(t *testing.T) scenario.Config {
 		captions := &scenario.Captions{}
-		cfg := config("aiden", "", []string{"en", "pt"})
+		cfg := config("aiden", speech.Unknown, speech.Languages(speech.English, speech.Portuguese))
 		cfg.Observer = captions
 		agent, err := duplex.New(cfg, asr, llm, tts)
 		lane(t, agent, err)

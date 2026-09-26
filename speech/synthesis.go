@@ -53,9 +53,9 @@ type SpeakOptions struct {
 	// Voice names one of Synthesizer.Voices; empty picks the model's
 	// default.
 	Voice string
-	// Language is the language to speak, as an ISO 639-1 code or an English
-	// name; empty lets the model follow the text.
-	Language string
+	// Language is the language to speak; Unknown lets the model follow the
+	// text.
+	Language Language
 	// Style says how to speak, in words: "Calm and even; never laugh."
 	// Synthesizers that take no instruction ignore it.
 	Style string

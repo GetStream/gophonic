@@ -565,11 +565,10 @@ func (m *Model) voiceOf(opts speech.SpeakOptions) (speaker, language int, err er
 		return 0, 0, fmt.Errorf("qwen3tts: unknown voice %q: %w", opts.Voice, speech.ErrUnsupported)
 	}
 	language = -1
-	if opts.Language != "" {
-		name, ok := speech.LanguageName(opts.Language)
-		id, known := lookup(c.Languages, name)
-		if !ok || !known {
-			return 0, 0, fmt.Errorf("qwen3tts: cannot speak %q: %w", opts.Language, speech.ErrUnsupported)
+	if opts.Language != speech.Unknown {
+		id, known := lookup(c.Languages, opts.Language.Name())
+		if !known {
+			return 0, 0, fmt.Errorf("qwen3tts: cannot speak %v: %w", opts.Language, speech.ErrUnsupported)
 		}
 		language = id
 	}

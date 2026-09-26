@@ -58,17 +58,10 @@ type Transcriber struct {
 	logits   []float32
 	gen      []int
 	draft    []int // a partial transcript's tokens
-	// The first tokens of the language names the output may give when
-	// Options.Languages limits detection (nil: any), and the list they
-	// were made for.
-	allowed    []int
-	allowedFor []string
-	names      []string // their English names
-	limit      bool     // this pass names only an allowed language
-	// Which tokens the transcript may contain, in the scripts of the
-	// languages given (nil: any), and the languages it was made for.
-	mask       []bool
-	maskFor    []string
+	// What the languages given limit (nil: nothing): the language names
+	// the output may give, and the tokens the transcript may contain.
+	limits     *limits
+	limit      bool      // this pass names only an allowed language
 	forcedText bool      // the prompt names the language: every token is text
 	tail       []float32 // the states that check the draft
 	vlogits    []float32 // their logits, verifyRows at a time
@@ -159,28 +152,25 @@ func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech
 		return fmt.Errorf("qwen3asr: turn judgment for this model: %w", speech.ErrUnsupported)
 	}
 	language := opts.Language
-	if language == "" && len(opts.Languages) == 1 {
-		language = opts.Languages[0]
-	}
-	if language != "" {
-		name, ok := speech.LanguageName(language)
-		if !ok || !t.m.languages[name] {
-			return fmt.Errorf("qwen3asr: language %q: %w", language, speech.ErrUnsupported)
+	if language == speech.Unknown && opts.Languages.Len() == 1 {
+		for l := range opts.Languages.All() {
+			language = l
 		}
-		language = name
 	}
-	constrained := language == "" && len(opts.Languages) > 1
-	switch {
+	if language != speech.Unknown && !t.m.languages.Has(language) {
+		return fmt.Errorf("qwen3asr: language %v: %w", language, speech.ErrUnsupported)
+	}
+	constrained := language == speech.Unknown && opts.Languages.Len() > 1
+	t.limits = nil
+	switch set := opts.Languages; {
+	case language != speech.Unknown:
+		set = speech.Languages(language)
+		fallthrough
 	case constrained:
-		if err := t.restrict(opts.Languages); err != nil {
+		var err error
+		if t.limits, err = t.m.limitsOf(set); err != nil {
 			return err
 		}
-		t.scriptsOf(t.names)
-	case language != "":
-		t.names = append(t.names[:0], language)
-		t.scriptsOf(t.names)
-	default:
-		t.mask = nil
 	}
 	dst.Reset()
 	for start := 0; start < len(pcm); {
@@ -211,7 +201,7 @@ func (t *Transcriber) Transcribe(ctx context.Context, pcm []float32, opts speech
 				TextStart: len(dst.Text), TextEnd: len(dst.Text) + len(t.text)})
 		}
 		dst.Text = append(dst.Text, t.text...)
-		if dst.Language == "" {
+		if dst.Language == speech.Unknown {
 			dst.Language = lang
 		}
 		start = end
@@ -258,11 +248,11 @@ func quietCut(pcm []float32, start int) int {
 // transcribe runs one pass and leaves the text in t.text, returning the
 // language. A partial transcript of the audio's beginning is checked and
 // continued rather than decoded again.
-func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, language string, partial *speech.Transcript, constrained bool) (string, error) {
-	t.limit, t.forcedText = constrained, language != ""
+func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context string, language speech.Language, partial *speech.Transcript, constrained bool) (speech.Language, error) {
+	t.limit, t.forcedText = constrained, language != speech.Unknown
 	t.text = t.text[:0]
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	// Decoded audio outside [-1, 1] is scaled down by its peak, as the
 	// reference normalizes int-like input.
@@ -282,35 +272,35 @@ func (t *Transcriber) transcribe(ctx context.Context, pcm []float32, context, la
 	}
 	frames, err := t.frontend.Frames(len(pcm))
 	if err != nil || frames == 0 {
-		return "", nil // too short to hold speech
+		return speech.Unknown, nil // too short to hold speech
 	}
 	e := t.m.enc
 	n := e.freq[0] * frames
 	if t.genc != nil {
 		if t.features, err = t.genc.features(n); err != nil {
-			return "", err
+			return speech.Unknown, err
 		}
 	} else {
 		t.features = grow(t.features, n)[:n]
 	}
 	if err := t.frontend.Into(pcm, t.features); err != nil {
-		return "", fmt.Errorf("qwen3asr: features: %w", err)
+		return speech.Unknown, fmt.Errorf("qwen3asr: features: %w", err)
 	}
 	if err := t.encode(frames); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	if err := t.buildPrompt(context, language, e.tokens(frames)); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	if err := t.draftFrom(partial, language); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	maxNew := max(minNewTokens, len(pcm)/sampleRate*newTokensPerSecond)
 	if err := t.generate(ctx, maxNew); err != nil {
-		return "", err
+		return speech.Unknown, err
 	}
 	t.raw = t.m.tok.DecodeAppend(t.raw[:0], t.gen, true)
 	return t.parse(language), nil
@@ -336,13 +326,13 @@ func (t *Transcriber) encode(frames int) error {
 
 // buildPrompt writes the chat prompt's token ids to t.ids with audio
 // placeholder tokens, one per audio embedding.
-func (t *Transcriber) buildPrompt(context, language string, audio int) error {
+func (t *Transcriber) buildPrompt(context string, language speech.Language, audio int) error {
 	b := append(t.prompt[:0], "<|im_start|>system\n"...)
 	b = append(b, context...)
 	b = append(b, "<|im_end|>\n<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|><|im_end|>\n<|im_start|>assistant\n"...)
-	if language != "" {
+	if language != speech.Unknown {
 		b = append(b, "language "...)
-		b = append(b, language...)
+		b = append(b, language.Name()...)
 		b = append(b, "<asr_text>"...)
 	}
 	t.prompt = b
@@ -380,15 +370,15 @@ func (t *Transcriber) buildPrompt(context, language string, audio int) error {
 // text, after the language header unless the prompt forces the language.
 // Without a partial transcript, or one with no language to continue, the
 // draft is empty.
-func (t *Transcriber) draftFrom(partial *speech.Transcript, forced string) error {
+func (t *Transcriber) draftFrom(partial *speech.Transcript, forced speech.Language) error {
 	t.draft = t.draft[:0]
-	if partial == nil || len(partial.Text) == 0 || forced == "" && !t.m.languages[partial.Language] {
+	if partial == nil || len(partial.Text) == 0 || forced == speech.Unknown && !t.m.languages.Has(partial.Language) {
 		return nil
 	}
 	b := t.prompt[:0]
-	if forced == "" {
+	if forced == speech.Unknown {
 		b = append(b, "language "...)
-		b = append(b, partial.Language...)
+		b = append(b, partial.Language.Name()...)
 		b = append(b, "<asr_text>"...)
 	}
 	b = append(b, partial.Text...)
@@ -504,59 +494,24 @@ func (t *Transcriber) verify(prompt, keep int, embeds qwen3lm.Embeds, maxNew int
 	return false, nil
 }
 
-// restrict limits the language the output names to those of names.
-func (t *Transcriber) restrict(names []string) error {
-	if slices.Equal(t.allowedFor, names) {
-		return nil
-	}
-	t.allowed, t.allowedFor, t.names = t.allowed[:0], t.allowedFor[:0], t.names[:0]
-	for _, n := range names {
-		name, ok := speech.LanguageName(n)
-		if !ok || !t.m.languages[name] {
-			t.allowedFor = t.allowedFor[:0]
-			return fmt.Errorf("qwen3asr: language %q: %w", n, speech.ErrUnsupported)
-		}
-		t.names = append(t.names, name)
-		ids, err := t.m.tok.EncodeInto("language "+name, make([]int, 0, 8), &t.tokWS)
-		if err != nil || len(ids) < 2 || ids[0] != t.m.ids.language {
-			return fmt.Errorf("qwen3asr: language %q: %w", n, speech.ErrUnsupported)
-		}
-		t.allowed = append(t.allowed, ids[1])
-	}
-	// Audio without speech is still told so.
-	t.allowed = append(t.allowed, t.m.ids.none)
-	t.allowedFor = append(t.allowedFor, names...)
-	return nil
-}
-
-// scriptsOf limits the transcript to the scripts of names.
-func (t *Transcriber) scriptsOf(names []string) {
-	if t.mask != nil && slices.Equal(t.maskFor, names) {
-		return
-	}
-	t.maskFor = append(t.maskFor[:0], names...)
-	if t.mask = t.m.scriptMask(names); t.mask != nil {
-		t.mask[t.m.ids.eos[0]], t.mask[t.m.ids.eos[1]] = true, true
-	}
-}
-
 // pick chooses the token after before: the likeliest; where the output
 // names its language and detection is limited, the likeliest allowed name;
 // and in the transcript of given languages, the likeliest in their scripts.
 func (t *Transcriber) pick(logits []float32, before []int) int {
 	switch {
 	case t.limit && len(before) == 1 && before[0] == t.m.ids.language:
-		best := t.allowed[0]
-		for _, id := range t.allowed[1:] {
+		best := t.limits.names[0]
+		for _, id := range t.limits.names[1:] {
 			if logits[id] > logits[best] {
 				best = id
 			}
 		}
 		return best
-	case t.mask != nil && (t.forcedText || slices.Contains(before, t.m.ids.asrText)):
+	case t.limits != nil && t.limits.mask != nil && (t.forcedText || slices.Contains(before, t.m.ids.asrText)):
+		mask := t.limits.mask
 		best := -1
 		for id, v := range logits {
-			if t.mask[id] && (best < 0 || v > logits[best]) {
+			if mask[id] && (best < 0 || v > logits[best]) {
 				best = id
 			}
 		}

@@ -27,16 +27,17 @@ func TestLanguages(t *testing.T) {
 	if err := tr.Transcribe(ctx, jfk, speech.Options{}, &free); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Transcribe(ctx, jfk, speech.Options{Languages: []string{"pt", "en"}}, &limited); err != nil {
+	if err := tr.Transcribe(ctx, jfk, speech.Options{Languages: speech.Languages(speech.Portuguese, speech.English)}, &limited); err != nil {
 		t.Fatal(err)
 	}
-	if limited.Language != "English" || string(limited.Text) != string(free.Text) {
+	if limited.Language != speech.English || string(limited.Text) != string(free.Text) {
 		t.Fatalf("limited to pt, en: %s %q; free: %s %q", limited.Language, limited.Text, free.Language, free.Text)
 	}
 	for _, c := range []struct {
-		langs []string
-		want  map[string]bool
-	}{{[]string{"en", "pt"}, map[string]bool{"English": true, "Portuguese": true}}, {[]string{"zh", "en"}, map[string]bool{"Chinese": true}}} {
+		langs speech.LanguageSet
+		want  map[speech.Language]bool
+	}{{speech.Languages(speech.English, speech.Portuguese), map[speech.Language]bool{speech.English: true, speech.Portuguese: true}},
+		{speech.Languages(speech.Chinese, speech.English), map[speech.Language]bool{speech.Chinese: true}}} {
 		if err := tr.Transcribe(ctx, zh, speech.Options{Languages: c.langs}, &limited); err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +46,7 @@ func TestLanguages(t *testing.T) {
 			t.Errorf("limited to %v: %s", c.langs, limited.Language)
 		}
 	}
-	opts := speech.Options{Languages: []string{"pt", "en"}}
+	opts := speech.Options{Languages: speech.Languages(speech.Portuguese, speech.English)}
 	if n := testing.AllocsPerRun(3, func() {
 		if err := tr.Transcribe(ctx, jfk, opts, &limited); err != nil {
 			t.Fatal(err)
@@ -53,7 +54,17 @@ func TestLanguages(t *testing.T) {
 	}); n != 0 {
 		t.Errorf("%v allocations per warm call", n)
 	}
-	if err := tr.Transcribe(ctx, jfk, speech.Options{Languages: []string{"en", "tlh"}}, &limited); err == nil {
-		t.Error("an unknown language was accepted")
+	// A second set is prepared once, then costs one comparison too.
+	opts.Languages = speech.Languages(speech.English, speech.German)
+	tr.Transcribe(ctx, jfk, opts, &limited)
+	if n := testing.AllocsPerRun(3, func() {
+		for _, set := range []speech.LanguageSet{speech.Languages(speech.Portuguese, speech.English), speech.Languages(speech.English, speech.German)} {
+			opts.Languages = set
+			if err := tr.Transcribe(ctx, jfk, opts, &limited); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations per warm call alternating two sets", n)
 	}
 }

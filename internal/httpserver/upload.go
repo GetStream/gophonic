@@ -24,7 +24,7 @@ type upload struct {
 	name        []byte
 	audio       []byte
 	prompt      []byte
-	language    string // canonical English name, or empty to detect
+	language    speech.Language // Unknown detects it
 	format      byte
 	words       bool
 	granularity bool
@@ -127,11 +127,11 @@ func parseUpload(contentType string, body []byte) (upload, error) {
 			}
 		case bytes.Equal(field, []byte("language")):
 			if len(value) != 0 {
-				name, ok := speech.LanguageNameBytes(value)
+				l, ok := speech.ParseLanguage(value)
 				if !ok {
 					return upload{}, errValue
 				}
-				result.language = name
+				result.language = l
 			}
 		case bytes.Equal(field, []byte("prompt")):
 			if len(value) > 4096 {

@@ -132,8 +132,8 @@ note: something happened
 	want := []line{
 		{kind: "user", arg: "Hello there."},
 		{kind: "speaks", dur: 3 * time.Second},
-		{kind: "says", arg: "that it is a tone", lang: "pt"},
-		{kind: "user", arg: "Olá.", lang: "pt"},
+		{kind: "says", arg: "that it is a tone", lang: speech.Portuguese},
+		{kind: "user", arg: "Olá.", lang: speech.Portuguese},
 		{kind: "silent", dur: time.Second},
 		{kind: "repeats"},
 		{kind: "captions"},

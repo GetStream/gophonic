@@ -131,7 +131,7 @@ func TestGreedyCodesMatchReference(t *testing.T) {
 	s.greedy = true
 	var got [][groups]int
 	start := time.Now()
-	err = s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, ref.Text,
+	err = s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}, ref.Text,
 		func(f *[groups]int) error { got = append(got, *f); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestFirstStepMatchesReference(t *testing.T) {
 		step++
 	}
 	n := 0
-	s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, ref.Text,
+	s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}, ref.Text,
 		func(*[groups]int) error {
 			n++
 			if n == 4 {
@@ -298,7 +298,7 @@ func TestVoicePromptReuse(t *testing.T) {
 	}
 	defer s.Close()
 	s.greedy = true
-	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}
 	speak := func() [][groups]int {
 		var got [][groups]int
 		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
@@ -389,7 +389,7 @@ func TestSpeakAllocations(t *testing.T) {
 	}
 	defer s.Close()
 	s.greedy = true
-	opts := speech.SpeakOptions{Voice: "Ryan", Language: "en"}
+	opts := speech.SpeakOptions{Voice: "Ryan", Language: speech.English}
 	text := []byte("Hello there.")
 	pcm := make([]float32, FrameSamples/4)
 	speak := func() {
@@ -425,7 +425,7 @@ func TestStyle(t *testing.T) {
 	s.greedy = true
 	speak := func(style string) [][groups]int {
 		var got [][groups]int
-		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: style}
+		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language), Style: style}
 		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +442,7 @@ func TestStyle(t *testing.T) {
 		t.Fatalf("the cached styled prompt differs: first frame %v, want %v", again[0], calm[0])
 	}
 	t.Logf("%d frames plain, %d calm", len(plain), len(calm))
-	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: "Speak slowly, in a calm and even voice."}
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language), Style: "Speak slowly, in a calm and even voice."}
 	if n := testing.AllocsPerRun(2, func() {
 		if err := s.generateText(opts, ref.Text, func(*[groups]int) error { return nil }); err != nil {
 			t.Fatal(err)
@@ -474,4 +474,14 @@ func (s *Synthesizer) hold() {
 	s.cur, s.ctx = s.id, context.Background()
 	s.written, s.taken, s.ended = s.written[:0], 0, false
 	s.mu.Unlock()
+}
+
+// refLanguage reads a reference case's language.
+func refLanguage(t testing.TB, name string) speech.Language {
+	t.Helper()
+	l, ok := speech.ParseLanguage(name)
+	if !ok {
+		t.Fatalf("reference language %q", name)
+	}
+	return l
 }

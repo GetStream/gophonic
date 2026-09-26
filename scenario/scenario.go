@@ -260,7 +260,7 @@ type runner struct {
 	stimulusAt time.Time
 	lastPCM    []float32
 	lastHeard  string
-	lastLang   string
+	lastLang   speech.Language
 	lastAfter  time.Duration
 }
 
@@ -350,9 +350,9 @@ const (
 // that the harness's ears mishear is said again, and the clearest is
 // spoken, so that a scenario tests the agent rather than one draw of the
 // voice.
-func (r *runner) speak(text string, lang string) error {
+func (r *runner) speak(text string, lang speech.Language) error {
 	opts := r.cfg.Speak
-	if lang != "" {
+	if lang != speech.Unknown {
 		opts.Language = lang
 	}
 	var line []float32
@@ -466,7 +466,7 @@ func (r *runner) speaks(d time.Duration) (pcm []float32, after time.Duration, er
 }
 
 // hear transcribes the agent's audio.
-func (r *runner) hear(pcm []float32, lang string) (string, error) {
+func (r *runner) hear(pcm []float32, lang speech.Language) (string, error) {
 	mono, err := r.mono16k(pcm, r.outRate)
 	if err != nil {
 		return "", err
@@ -486,11 +486,11 @@ func (r *runner) mono16k(pcm []float32, rate int) ([]float32, error) {
 }
 
 // hear16k transcribes 16 kHz speech with the harness's ears.
-func (r *runner) hear16k(mono []float32, lang string) (string, error) {
+func (r *runner) hear16k(mono []float32, lang speech.Language) (string, error) {
 	opts := r.cfg.Listen
 	opts.Partial, opts.Turn = nil, false
-	if lang != "" {
-		opts.Language, opts.Languages = lang, nil
+	if lang != speech.Unknown {
+		opts.Language, opts.Languages = lang, 0
 	}
 	var t speech.Transcript
 	if err := r.cfg.Ears.Transcribe(r.ctx, mono, opts, &t); err != nil {
@@ -591,7 +591,7 @@ func (r *runner) step(l line) (Step, error) {
 				s.Reason = fmt.Sprintf("the agent said nothing in %v", d)
 				return s, nil
 			}
-			r.lastPCM, r.lastAfter, r.lastHeard, r.lastLang, r.fresh = pcm, after, "", "", false
+			r.lastPCM, r.lastAfter, r.lastHeard, r.lastLang, r.fresh = pcm, after, "", speech.Unknown, false
 		}
 		if r.lastHeard == "" || r.lastLang != l.lang {
 			var err error

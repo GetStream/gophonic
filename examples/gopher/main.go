@@ -103,7 +103,18 @@ func main() {
 	// Closed captions are a server-side API: with the app's secret, what is
 	// said appears as the call's captions; without it, in the chat.
 	captions := newCaptions(apiKey, callType, callID)
-	cfg := config(*voice, *language, strings.FieldsFunc(*languages, func(r rune) bool { return r == ',' || r == ' ' }))
+	var spoken speech.Language
+	if *language != "" {
+		var ok bool
+		if spoken, ok = speech.ParseLanguage(*language); !ok {
+			log.Fatalf("unknown language %q", *language)
+		}
+	}
+	allowed, err := speech.ParseLanguages(*languages)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg := config(*voice, spoken, allowed)
 	// Captions follow the voice: closed captions sentence by sentence with
 	// the app's secret; otherwise the call's chat, where each answer is one
 	// message that grows as it is spoken.

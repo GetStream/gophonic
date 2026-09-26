@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/safetensors"
@@ -25,8 +26,11 @@ type Model struct {
 	eval      *qwen3lm.Evaluator
 	tok       *qwen3lm.Tokenizer
 	ids       tokenIDs
-	languages map[string]bool // English names the model supports
-	turn      *turnHead       // judges the end of a turn, for the checkpoints it was trained on
+	languages speech.LanguageSet // English names the model supports
+	// Limits of the language sets transcriptions have given.
+	limitsMu sync.RWMutex
+	limits   map[speech.LanguageSet]*limits
+	turn     *turnHead // judges the end of a turn, for the checkpoints it was trained on
 }
 
 // tokenIDs are the special tokens of the chat prompt and its output.
@@ -173,10 +177,10 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: %w", err)
 	}
-	m := &Model{enc: enc, genc: genc, lm: lm, eval: eval, tok: tok, languages: map[string]bool{}}
+	m := &Model{enc: enc, genc: genc, lm: lm, eval: eval, tok: tok}
 	for _, name := range c.SupportLanguages {
-		if canonical, ok := speech.LanguageName(name); ok {
-			m.languages[canonical] = true
+		if l, ok := speech.ParseLanguage(name); ok {
+			m.languages = m.languages.With(l)
 		}
 	}
 	lookup := func(content string) int {
@@ -234,17 +238,9 @@ func checkRoPE(c *qwen3lm.TextConfig) error {
 	return nil
 }
 
-// Languages reports the English names of the languages the model accepts in
-// speech.Options.Language, in speech.Languages order.
-func (m *Model) Languages() []string {
-	var names []string
-	for _, l := range speech.Languages {
-		if m.languages[l.Name] {
-			names = append(names, l.Name)
-		}
-	}
-	return names
-}
+// Languages is the set of languages the model accepts in
+// speech.Options.Language and Languages.
+func (m *Model) Languages() speech.LanguageSet { return m.languages }
 
 // Close releases the model's memory outside the Go heap, once its lanes
 // are closed; the model is unusable afterwards. It is safe to call more

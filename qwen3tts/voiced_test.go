@@ -25,7 +25,7 @@ func TestSynthesizerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	speechtest.TestSynthesizer(t, s, speech.SpeakOptions{Voice: "ryan", Language: "en"},
+	speechtest.TestSynthesizer(t, s, speech.SpeakOptions{Voice: "ryan", Language: speech.English},
 		"Sure, the answer is simple: it rains because warm air cools as it rises.")
 }
 
@@ -67,7 +67,7 @@ func TestVoicedFollowsWords(t *testing.T) {
 	resampler := speech.NewResampler()
 	defer resampler.Close()
 	for _, sen := range sentences {
-		if err := s.Begin(context.Background(), speech.SpeakOptions{Voice: sen.voice, Language: "en"}); err != nil {
+		if err := s.Begin(context.Background(), speech.SpeakOptions{Voice: sen.voice, Language: speech.English}); err != nil {
 			t.Fatal(err)
 		}
 		go func() {

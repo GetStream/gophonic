@@ -11,7 +11,7 @@ the safetensors shards, and the slow-tokenizer files as published.
 ```go
 model, err := qwen3asr.Load("models/Qwen3-ASR-1.7B", qwen3asr.Options{})
 lane, err := qwen3asr.NewTranscriber(model, 0) // or gophonic.Open(...).NewTranscriber()
-err = lane.Transcribe(ctx, pcm16k, speech.Options{Language: "zh", Context: "交易所"}, &transcript)
+err = lane.Transcribe(ctx, pcm16k, speech.Options{Language: speech.Chinese, Context: "交易所"}, &transcript)
 ```
 
 ## Pipeline

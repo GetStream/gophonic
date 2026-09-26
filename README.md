@@ -155,7 +155,7 @@ goes in and comes out 20 ms at a time, and the agent decides when to talk.
 ```go
 agent, err := duplex.New(duplex.Config{
 	Prompt: "You are Gopher.",
-	Listen: speech.Options{Languages: []string{"en", "pt"}},
+	Listen: speech.Options{Languages: speech.Languages(speech.English, speech.Portuguese)},
 	Tools:  []chat.Tool{chat.Func("now", "The current time.", now)},
 	Idle:   45 * time.Second,
 }, asr, llm, tts)

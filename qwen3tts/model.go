@@ -36,6 +36,7 @@ import (
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/safetensors"
 	"github.com/GetStream/gophonic/internal/whispergemm"
+	"github.com/GetStream/gophonic/speech"
 	"github.com/thesyncim/vibejson"
 )
 
@@ -126,8 +127,9 @@ type Model struct {
 	// checkpoint has a known one.
 	align   [2]int
 	aligned bool
-	// The preset voices and the languages they speak, sorted.
-	voices, languages []string
+	// The preset voices, sorted, and the languages they speak.
+	voices    []string
+	languages speech.LanguageSet
 
 	hidden, cpHidden int
 
@@ -181,12 +183,11 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 		m.voices = append(m.voices, strings.ToLower(name))
 	}
 	for name := range c.Talker.Languages {
-		if !strings.Contains(name, "dialect") {
-			m.languages = append(m.languages, strings.ToLower(name))
+		if l, ok := speech.ParseLanguage(name); ok {
+			m.languages = m.languages.With(l)
 		}
 	}
 	slices.Sort(m.voices)
-	slices.Sort(m.languages)
 	if m.threads <= 0 {
 		m.threads = max(1, qwen3lm.PerformanceCores())
 	}
@@ -354,10 +355,9 @@ func (m *Model) textRows(exec *whispergemm.Executor, dst []float32, ids []int, t
 // the model's: callers must not modify it.
 func (m *Model) Voices() []string { return m.voices }
 
-// Languages lists the languages a voice can be asked to speak, in lower
-// case and sorted; an empty language lets the model follow the text. The
-// list is the model's: callers must not modify it.
-func (m *Model) Languages() []string { return m.languages }
+// Languages is the set of languages a voice can be asked to speak;
+// speech.Unknown lets the model follow the text.
+func (m *Model) Languages() speech.LanguageSet { return m.languages }
 
 // Close releases the model's GPU memory and mappings, once its lanes are
 // closed; the model is unusable afterwards. It is safe to call more than

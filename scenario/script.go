@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/GetStream/gophonic/speech"
 )
 
 // line is one step of a script.
 type line struct {
-	text string // the line, for reports
-	kind string // user, wait, note, chat, join, leave, say, silent, speaks, says, repeats, captions
-	arg  string // the words, the claim, the name
-	lang string // user(pt), gopher(pt)
+	text string          // the line, for reports
+	kind string          // user, wait, note, chat, join, leave, say, silent, speaks, says, repeats, captions
+	arg  string          // the words, the claim, the name
+	lang speech.Language // user(pt), gopher(pt)
 	dur  time.Duration
 }
 
@@ -38,7 +40,9 @@ func parse(script string) (lines []line, expected string, err error) {
 		who, rest = strings.TrimSpace(who), strings.TrimSpace(rest)
 		l := line{text: text}
 		if i := strings.IndexByte(who, '('); i >= 0 && strings.HasSuffix(who, ")") {
-			l.lang = who[i+1 : len(who)-1]
+			if l.lang, ok = speech.ParseLanguage(who[i+1 : len(who)-1]); !ok {
+				return nil, "", fmt.Errorf("line %d: %w: unknown language in %q", n+1, errSyntax, who)
+			}
 			who = who[:i]
 		}
 		switch who {

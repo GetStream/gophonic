@@ -34,14 +34,12 @@ const idle = 45 * time.Second
 // config is Gopher: its prompt, voice, languages, and tools. main adds how
 // it names the people in the call and shows its captions; the scenario
 // tests run it as it is.
-func config(voice, language string, languages []string) duplex.Config {
+func config(voice string, language speech.Language, languages speech.LanguageSet) duplex.Config {
 	system := fmt.Sprintf(prompt, time.Now().Format("Monday, January 2, 2006"), localZone())
-	if len(languages) > 0 {
+	if languages.Len() > 0 {
 		var names []string
-		for _, code := range languages {
-			if name, ok := speech.LanguageName(code); ok {
-				names = append(names, name)
-			}
+		for l := range languages.All() {
+			names = append(names, l.Name())
 		}
 		system += "\nPeople in this call speak " + strings.Join(names, " and ") +
 			". Answer in the one you are spoken to in, and never in another."

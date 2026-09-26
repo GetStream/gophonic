@@ -4,31 +4,33 @@
 package qwen3asr
 
 import (
+	"fmt"
 	"slices"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/GetStream/gophonic/internal/qwen3lm"
+	"github.com/GetStream/gophonic/speech"
 )
 
 // Transcripts limited to languages are limited to their writing systems:
 // a call in English and Portuguese gets Latin letters, whatever a noise
 // sounds like to the model. Languages written in a script outside this
 // table limit nothing.
-var scripts = map[string][]*unicode.RangeTable{
-	"Chinese": {unicode.Han}, "Cantonese": {unicode.Han},
-	"Japanese": {unicode.Han, unicode.Hiragana, unicode.Katakana},
-	"Korean":   {unicode.Hangul, unicode.Han},
-	"Russian":  {unicode.Cyrillic}, "Ukrainian": {unicode.Cyrillic}, "Bulgarian": {unicode.Cyrillic},
-	"Macedonian": {unicode.Cyrillic}, "Serbian": {unicode.Cyrillic, unicode.Latin},
-	"Arabic": {unicode.Arabic}, "Persian": {unicode.Arabic}, "Urdu": {unicode.Arabic},
-	"Hindi": {unicode.Devanagari}, "Marathi": {unicode.Devanagari}, "Nepali": {unicode.Devanagari},
-	"Thai": {unicode.Thai}, "Greek": {unicode.Greek}, "Hebrew": {unicode.Hebrew},
-	"English": {unicode.Latin}, "Portuguese": {unicode.Latin}, "Spanish": {unicode.Latin},
-	"French": {unicode.Latin}, "German": {unicode.Latin}, "Italian": {unicode.Latin},
-	"Dutch": {unicode.Latin}, "Indonesian": {unicode.Latin}, "Malay": {unicode.Latin},
-	"Vietnamese": {unicode.Latin}, "Turkish": {unicode.Latin}, "Filipino": {unicode.Latin},
-	"Swedish": {unicode.Latin}, "Danish": {unicode.Latin}, "Finnish": {unicode.Latin},
-	"Norwegian": {unicode.Latin}, "Polish": {unicode.Latin}, "Czech": {unicode.Latin},
-	"Romanian": {unicode.Latin}, "Hungarian": {unicode.Latin},
+var scripts = map[speech.Language][]*unicode.RangeTable{
+	speech.Chinese: {unicode.Han}, speech.Cantonese: {unicode.Han},
+	speech.Japanese: {unicode.Han, unicode.Hiragana, unicode.Katakana},
+	speech.Korean:   {unicode.Hangul, unicode.Han},
+	speech.Russian:  {unicode.Cyrillic}, speech.Macedonian: {unicode.Cyrillic},
+	speech.Arabic: {unicode.Arabic}, speech.Persian: {unicode.Arabic},
+	speech.Hindi: {unicode.Devanagari}, speech.Thai: {unicode.Thai}, speech.Greek: {unicode.Greek},
+	speech.English: {unicode.Latin}, speech.Portuguese: {unicode.Latin}, speech.Spanish: {unicode.Latin},
+	speech.French: {unicode.Latin}, speech.German: {unicode.Latin}, speech.Italian: {unicode.Latin},
+	speech.Dutch: {unicode.Latin}, speech.Indonesian: {unicode.Latin}, speech.Malay: {unicode.Latin},
+	speech.Vietnamese: {unicode.Latin}, speech.Turkish: {unicode.Latin}, speech.Filipino: {unicode.Latin},
+	speech.Swedish: {unicode.Latin}, speech.Danish: {unicode.Latin}, speech.Finnish: {unicode.Latin},
+	speech.Polish: {unicode.Latin}, speech.Czech: {unicode.Latin},
+	speech.Romanian: {unicode.Latin}, speech.Hungarian: {unicode.Latin},
 }
 
 // letterScripts are the scripts a token can belong to; a token with
@@ -38,12 +40,64 @@ var letterScripts = []*unicode.RangeTable{unicode.Latin, unicode.Han, unicode.Hi
 	unicode.Hebrew, unicode.Bengali, unicode.Tamil, unicode.Telugu, unicode.Gujarati, unicode.Armenian,
 	unicode.Georgian, unicode.Ethiopic, unicode.Khmer, unicode.Lao, unicode.Myanmar, unicode.Sinhala}
 
+// limits are what limiting a transcript to a set of languages takes: the
+// first tokens of their names, as the output gives its language (and of
+// "None", for audio without speech), and which tokens their scripts may
+// contain (nil: any). They are read-only, and shared by every lane.
+type limits struct {
+	names []int
+	mask  []bool
+}
+
+// maxLimits bounds the sets a model keeps limits for; others are prepared
+// at every call.
+const maxLimits = 32
+
+// limitsOf returns the limits of set, prepared at its first use.
+func (m *Model) limitsOf(set speech.LanguageSet) (*limits, error) {
+	m.limitsMu.RLock()
+	l := m.limits[set]
+	m.limitsMu.RUnlock()
+	if l != nil {
+		return l, nil
+	}
+	l = &limits{}
+	var ws qwen3lm.TokenizerWorkspace
+	for lang := range set.All() {
+		if !m.languages.Has(lang) {
+			return nil, fmt.Errorf("qwen3asr: language %v: %w", lang, speech.ErrUnsupported)
+		}
+		ids, err := m.tok.EncodeInto("language "+lang.Name(), make([]int, 0, 8), &ws)
+		if err != nil || len(ids) < 2 || ids[0] != m.ids.language {
+			return nil, fmt.Errorf("qwen3asr: language %v: %w", lang, speech.ErrUnsupported)
+		}
+		l.names = append(l.names, ids[1])
+	}
+	l.names = append(l.names, m.ids.none)
+	if l.mask = m.scriptMask(set); l.mask != nil {
+		l.mask[m.ids.eos[0]], l.mask[m.ids.eos[1]] = true, true
+	}
+	m.limitsMu.Lock()
+	defer m.limitsMu.Unlock()
+	if kept := m.limits[set]; kept != nil {
+		return kept, nil
+	}
+	if len(m.limits) < maxLimits {
+		if m.limits == nil {
+			m.limits = map[speech.LanguageSet]*limits{}
+		}
+		m.limits[set] = l
+	}
+	return l, nil
+}
+
 // scriptMask returns, for each token, whether text in the writing systems
-// of languages may contain it, or nil if one of them has no known script.
-func (m *Model) scriptMask(languages []string) []bool {
+// of the languages of set may contain it, or nil if one of them has no
+// known script.
+func (m *Model) scriptMask(set speech.LanguageSet) []bool {
 	var allow []*unicode.RangeTable
-	for _, name := range languages {
-		s, ok := scripts[name]
+	for l := range set.All() {
+		s, ok := scripts[l]
 		if !ok {
 			return nil
 		}

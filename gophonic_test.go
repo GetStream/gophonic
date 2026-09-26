@@ -59,13 +59,13 @@ func TestOpenWhisper(t *testing.T) {
 	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Words: true}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out.Text), "ask not what your country can do for you") || out.Language != "English" {
+	if !strings.Contains(string(out.Text), "ask not what your country can do for you") || out.Language != speech.English {
 		t.Fatalf("transcript %q (%s)", out.Text, out.Language)
 	}
 	if len(out.Segments) == 0 || len(out.Words) < 20 {
 		t.Fatalf("%d segments, %d words", len(out.Segments), len(out.Words))
 	}
-	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Language: "de"}, &out); !errors.Is(err, speech.ErrUnsupported) {
+	if err := lane.Transcribe(context.Background(), pcm, speech.Options{Language: speech.German}, &out); !errors.Is(err, speech.ErrUnsupported) {
 		t.Fatalf("German on an English model: error = %v, want speech.ErrUnsupported", err)
 	}
 }

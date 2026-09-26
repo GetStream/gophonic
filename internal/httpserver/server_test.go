@@ -18,6 +18,7 @@ import (
 
 	"github.com/GetStream/gophonic"
 	"github.com/GetStream/gophonic/internal/testmodels"
+	"github.com/GetStream/gophonic/speech"
 	"github.com/thesyncim/vibejson"
 )
 
@@ -59,7 +60,7 @@ func TestReadUploadValidatesAPIFields(t *testing.T) {
 		"model": "gophonic-whisper", "response_format": "text", "language": "en",
 	})
 	got, err := parseTestUpload(t, request)
-	if err != nil || string(got.name) != "sample.wav" || string(got.audio) != "wav" || got.format != 1 || got.language != "English" {
+	if err != nil || string(got.name) != "sample.wav" || string(got.audio) != "wav" || got.format != 1 || got.language != speech.English {
 		t.Fatalf("upload: %+v err=%v", got, err)
 	}
 	wordRequest := multipartRequest(t, "sample.wav", []byte("wav"), map[string]string{"response_format": "verbose_json", "timestamp_granularities[]": "word"})

@@ -176,7 +176,7 @@ func TestTranscriptsMatchReference(t *testing.T) {
 				if err := tr.Transcribe(context.Background(), clipPCM(t, name), speech.Options{}, &dst); err != nil {
 					t.Fatal(err)
 				}
-				if string(dst.Text) != want.Text || dst.Language != want.Language {
+				if string(dst.Text) != want.Text || dst.Language.Name() != want.Language {
 					t.Errorf("%s: %q (%s), want %q (%s)", name, dst.Text, dst.Language, want.Text, want.Language)
 				}
 				if format == qwen3lm.WeightsF16 && !slices.Equal(tr.gen, want.Generated[:len(want.Generated)-1]) {
@@ -222,7 +222,7 @@ func TestWarmTranscribeDoesNotAllocate(t *testing.T) {
 			defer tr.Close()
 			pcm := clipPCM(t, "zh")
 			var dst speech.Transcript
-			opts := speech.Options{Language: "zh", Context: "交易", Segments: true}
+			opts := speech.Options{Language: speech.Chinese, Context: "交易", Segments: true}
 			if err := tr.Transcribe(context.Background(), pcm, opts, &dst); err != nil {
 				t.Fatal(err)
 			}
@@ -248,10 +248,10 @@ func TestOptions(t *testing.T) {
 	var dst speech.Transcript
 	// A forced language is appended to the prompt; the model then writes
 	// the text alone.
-	if err := tr.Transcribe(context.Background(), pcm, speech.Options{Language: "zh", Segments: true}, &dst); err != nil {
+	if err := tr.Transcribe(context.Background(), pcm, speech.Options{Language: speech.Chinese, Segments: true}, &dst); err != nil {
 		t.Fatal(err)
 	}
-	if string(dst.Text) != ref.Clips["zh"].Text || dst.Language != "Chinese" {
+	if string(dst.Text) != ref.Clips["zh"].Text || dst.Language != speech.Chinese {
 		t.Errorf("forced Chinese: %q (%s)", dst.Text, dst.Language)
 	}
 	suffix, _ := tr.m.tok.EncodeInto("assistant\nlanguage Chinese<asr_text>", make([]int, 0, 64), &tr.tokWS)
@@ -261,7 +261,7 @@ func TestOptions(t *testing.T) {
 	if len(dst.Segments) != 1 || dst.Segments[0].End != float64(len(pcm))/sampleRate || dst.Segments[0].TextEnd != len(dst.Text) {
 		t.Errorf("segments %+v", dst.Segments)
 	}
-	for _, opts := range []speech.Options{{Language: "Klingon"}, {Words: true}} {
+	for _, opts := range []speech.Options{{Language: speech.Language(200)}, {Words: true}} {
 		if err := tr.Transcribe(context.Background(), pcm, opts, &dst); !errors.Is(err, speech.ErrUnsupported) {
 			t.Errorf("%+v: error %v, want ErrUnsupported", opts, err)
 		}

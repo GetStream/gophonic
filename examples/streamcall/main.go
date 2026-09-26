@@ -206,7 +206,7 @@ func listen(ctx context.Context, t rtc.OnTrackReceived, turn, stt *gophonic.Mode
 					if text := strings.TrimSpace(string(transcript.Text)); text != "" {
 						fmt.Printf("\n● %s (%s): %q\n  turn over %.2f (Smart Turn %v) · transcribed in %v\n", name,
 							transcript.Language, text, p.Probability, judged.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
-						go judge.analyze(ctx, name, transcript.Language, text, p.Probability)
+						go judge.analyze(ctx, name, transcript.Language.Name(), text, p.Probability)
 					}
 				}
 			}
