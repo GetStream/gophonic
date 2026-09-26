@@ -1,16 +1,17 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-// Package qwen3 runs Qwen3 dense transformers (Qwen3-8B, 4B, 1.7B, 0.6B) in
-// pure Go, on the CPU or the Apple GPU.
+// Package qwen3 runs the Qwen3 family in pure Go, on the CPU or the Apple
+// GPU: the dense models (Qwen3-8B, 4B, 1.7B, 0.6B), the mixtures of experts
+// (Qwen3-30B-A3B), and the Qwen3.6 hybrid (Qwen3.6-35B-A3B).
 //
-// It loads an official Hugging Face safetensors snapshot, tokenizes text,
-// and computes the final-normalized hidden state of each input's last token.
-// On Apple M4 it uses SME matrix tiles; other CPUs use portable kernels.
-// Model is the high-level entry point: it batches inputs, caches finished
-// vectors, reuses stored key/value prefixes, and answers multiple-choice
-// questions with Choose. Evaluator and Workspace expose the forward pass
-// directly for pretokenized batches.
+// Open loads an official Hugging Face safetensors snapshot as one Model
+// that converses (chat.Generator, with tools in Qwen3's own format),
+// answers multiple-choice questions about text with a single prefill
+// (Question, Classifier, NewContext), and embeds text (Embed), each prepared
+// at its first use. On Apple M4 the CPU path uses SME matrix tiles; other
+// CPUs use portable kernels. Tokenizer is public for callers that tokenize
+// themselves.
 package qwen3
 
 import (
@@ -43,29 +44,29 @@ const (
 	prefixMinTokens = 64
 )
 
-// Model owns one Qwen3 model and one inference workspace, so calls are
-// serialized; use one Model per concurrent inference lane.
-type Model struct {
-	mu          sync.Mutex
-	model       *Weights
-	tokens      *Tokenizer
-	tokenWS     TokenizerWorkspace
-	tokenBufs   [][]int // per-text token IDs for a batched Embed call
-	batchIDs    [][]int
-	missIDs     [][]int // inputs not served by the cache
-	missDst     [][]float32
-	shortIDs    [][]int // inputs batched together (below prefixMinTokens)
-	shortDst    [][]float32
-	letters     *letterHead // answer-letter head rows for Question, or nil
-	answer      string      // what opens the assistant's answer (answerThinking or answerPlain)
-	cache       *embeddingCache
-	prefix      *PrefixKV // last long input's keys and values, or nil
-	reused      uint64    // tokens served from prefix
-	computed    uint64    // tokens evaluated for long inputs
-	eval        *Evaluator
-	ws          *Workspace
-	closed      bool
-	ownsWeights bool // loaded by Open, so Close frees their GPU memory
+// encoder is a Model's questions and embeddings: one workspace, whose
+// calls are serialized, a prefix store for long inputs, and an embedding
+// cache.
+type encoder struct {
+	mu        sync.Mutex
+	model     *qwen3lm.Weights
+	tokens    *Tokenizer
+	tokenWS   TokenizerWorkspace
+	tokenBufs [][]int // per-text token IDs for a batched Embed call
+	batchIDs  [][]int
+	missIDs   [][]int // inputs not served by the cache
+	missDst   [][]float32
+	shortIDs  [][]int // inputs batched together (below prefixMinTokens)
+	shortDst  [][]float32
+	letters   *letterHead // answer-letter head rows for Question, or nil
+	answer    string      // what opens the assistant's answer (answerThinking or answerPlain)
+	cache     *embeddingCache
+	prefix    *qwen3lm.PrefixKV // last long input's keys and values, or nil
+	reused    uint64            // tokens served from prefix
+	computed  uint64            // tokens evaluated for long inputs
+	eval      *qwen3lm.Evaluator
+	ws        *qwen3lm.Workspace
+	closed    bool
 }
 
 // Options controls the local Qwen3 backend.
@@ -127,21 +128,9 @@ func IsModelDir(dir string) bool {
 	return false
 }
 
-// Open loads an official Qwen3 safetensors snapshot directory, such as
-// Qwen/Qwen3-8B or Qwen/Qwen3-1.7B. The zero Options value selects the
-// fastest faithful backend and default caches.
-func Open(path string, opts Options) (*Model, error) {
-	if opts.Threads < 0 {
-		return nil, fmt.Errorf("qwen3: invalid thread count %d", opts.Threads)
-	}
-	tokens, err := LoadTokenizer(path)
-	if err != nil {
-		return nil, fmt.Errorf("qwen3: load tokenizer: %w", err)
-	}
-	model, err := LoadWeights(path, opts.Format)
-	if err != nil {
-		return nil, err
-	}
+// newEncoder prepares a Model's questions and embeddings over its weights.
+func newEncoder(weights *qwen3lm.Weights, tokens *Tokenizer, path string, opts Options) (*encoder, error) {
+	cfg := weights.Config()
 	entries := opts.CacheEntries
 	if entries == 0 {
 		entries = defaultCacheEntries
@@ -150,11 +139,11 @@ func Open(path string, opts Options) (*Model, error) {
 	if prefix == 0 {
 		prefix = maxTokens
 	}
-	letters, err := loadLetterHead(path, tokens, model.Config().Hidden, model.Config().Vocab)
+	letters, err := loadLetterHead(path, tokens, cfg.Hidden, cfg.Vocab)
 	if err != nil {
 		return nil, err
 	}
-	e, err := newModel(model, tokens, opts.threads(), entries, min(prefix, maxTokens, model.Config().MaxPositions))
+	e, err := newModel(weights, tokens, opts.threads(), entries, min(prefix, maxTokens, cfg.MaxPositions))
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +151,11 @@ func Open(path string, opts Options) (*Model, error) {
 	if !thinks(path) {
 		e.answer = answerPlain
 	}
-	e.ownsWeights = true
 	return e, nil
 }
 
-func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTokens int) (*Model, error) {
-	eval, err := NewEvaluator(model)
+func newModel(model *qwen3lm.Weights, tokens *Tokenizer, threads, cacheEntries, prefixTokens int) (*encoder, error) {
+	eval, err := qwen3lm.NewEvaluator(model)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +171,7 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 		_ = ws.Close()
 		return nil, err
 	}
-	e := &Model{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.Config().Hidden), answer: answerThinking}
+	e := &encoder{model: model, tokens: tokens, eval: eval, ws: ws, cache: newEmbeddingCache(cacheEntries, model.Config().Hidden), answer: answerThinking}
 	if prefixTokens > 0 {
 		if e.prefix, err = eval.NewPrefixKV(prefixTokens); err != nil {
 			_ = ws.Close()
@@ -195,11 +183,11 @@ func newModel(model *Weights, tokens *Tokenizer, threads, cacheEntries, prefixTo
 
 // Width reports the length of an embedding: the model's hidden size, 4096
 // for Qwen3-8B.
-func (e *Model) Width() int { return e.model.Config().Hidden }
+func (e *encoder) Width() int { return e.model.Config().Hidden }
 
 // PrefixStats reports, for inputs of at least 64 tokens, how many tokens were
 // served from the prefix store and how many were evaluated.
-func (e *Model) PrefixStats() (reused, computed uint64) {
+func (e *encoder) PrefixStats() (reused, computed uint64) {
 	if e == nil {
 		return 0, 0
 	}
@@ -209,7 +197,7 @@ func (e *Model) PrefixStats() (reused, computed uint64) {
 }
 
 // CacheStats reports embedding-cache hits and lookups since Open.
-func (e *Model) CacheStats() (hits, lookups uint64) {
+func (e *encoder) CacheStats() (hits, lookups uint64) {
 	if e == nil {
 		return 0, 0
 	}
@@ -233,7 +221,7 @@ func (e *Model) CacheStats() (hits, lookups uint64) {
 //	clm.EmbedFunc(func(ctx context.Context, _ clm.Role, texts []string, dst [][]float32) error {
 //		return enc.Embed(ctx, texts, dst)
 //	})
-func (e *Model) Embed(ctx context.Context, texts []string, dst [][]float32) error {
+func (e *encoder) Embed(ctx context.Context, texts []string, dst [][]float32) error {
 	if e == nil {
 		return errors.New("qwen3: nil encoder")
 	}
@@ -277,7 +265,7 @@ func (e *Model) Embed(ctx context.Context, texts []string, dst [][]float32) erro
 
 // EmbedTokensInto embeds caller-tokenized inputs into caller-owned vectors.
 // It is allocation-free after the workspace has warmed to the call's shape.
-func (e *Model) EmbedTokensInto(ctx context.Context, tokenIDs [][]int, dst [][]float32) error {
+func (e *encoder) EmbedTokensInto(ctx context.Context, tokenIDs [][]int, dst [][]float32) error {
 	if e == nil {
 		return errors.New("qwen3: nil encoder")
 	}
@@ -304,7 +292,7 @@ func (e *Model) EmbedTokensInto(ctx context.Context, tokenIDs [][]int, dst [][]f
 // embedBatchLocked serves cached inputs, then packs the rest into forward
 // passes of at most batchTokens tokens (or one longer input), keeping the last
 // maxTokens of each.
-func (e *Model) embedBatchLocked(ctx context.Context, ids [][]int, dst [][]float32) error {
+func (e *encoder) embedBatchLocked(ctx context.Context, ids [][]int, dst [][]float32) error {
 	for i, seq := range ids {
 		if len(seq) == 0 {
 			return fmt.Errorf("qwen3: input %d produced no tokens", i)
@@ -334,7 +322,7 @@ func (e *Model) embedBatchLocked(ctx context.Context, ids [][]int, dst [][]float
 	return err
 }
 
-func (e *Model) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) error {
+func (e *encoder) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) error {
 	if e.prefix != nil {
 		// Long inputs run alone through the prefix store; the rest keep
 		// sharing batched forward passes.
@@ -378,9 +366,9 @@ func (e *Model) inferLocked(ctx context.Context, ids [][]int, dst [][]float32) e
 	return nil
 }
 
-// Close stops the encoder's workers and releases its model. It waits for an
-// in-flight Embed or EmbedTokensInto call. A closed Model cannot be reused.
-func (e *Model) Close() error {
+// Close stops the encoder's workers. It waits for an in-flight Embed or
+// EmbedTokensInto call.
+func (e *encoder) Close() error {
 	if e == nil {
 		return nil
 	}
@@ -391,9 +379,6 @@ func (e *Model) Close() error {
 	}
 	e.closed = true
 	err := e.ws.Close()
-	if e.ownsWeights {
-		e.model.Release()
-	}
 	e.ws, e.eval, e.model, e.tokens = nil, nil, nil, nil
 	e.tokenBufs, e.batchIDs, e.missIDs, e.missDst, e.cache, e.prefix = nil, nil, nil, nil, nil, nil
 	e.shortIDs, e.shortDst = nil, nil

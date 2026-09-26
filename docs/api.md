@@ -399,9 +399,12 @@ Smart Turn's frontend on its own workspace.
 ### qwen3
 
 See the [package README](../qwen3/README.md): `Open`, `Embed`, `Question`,
-`Context`, and the low-level `Evaluator` for pretokenized batches.
+and `Context`. One `qwen3.Model` serves all of them and `chat.Generator`
+from one copy of the weights, each prepared at its first use: the first
+session loads the language-model head (620 MB for Qwen3-8B), the first
+question or embedding its workspace and caches.
 
-Qwen3 models also provide `chat.Generator`, conversations that keep their
+Qwen3 models provide `chat.Generator`, conversations that keep their
 context evaluated between replies. `Session.Reply` writes the reply to an
 `io.Writer` as it is decoded. A session may offer tools: a `chat.Tool` is
 a spec (what the model sees) and a `Call`; `chat.Func` makes one of a Go

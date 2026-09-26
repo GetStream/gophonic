@@ -57,13 +57,13 @@ func TestChatQwen36(t *testing.T) {
 	if !IsModelDir(path) {
 		t.Fatal("not recognized as a Qwen3 checkpoint")
 	}
-	g, err := OpenChat(path, Options{})
+	g, err := Open(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	if g.dialect != xmlCalls {
-		t.Fatal("the Qwen3.5 tool dialect was not chosen")
+	if gen, err := g.generator(); err != nil || gen.dialect != xmlCalls {
+		t.Fatalf("the Qwen3.5 tool dialect was not chosen: %v", err)
 	}
 	s, err := g.NewSession("You are a voice assistant. Answer in one short sentence.")
 	if err != nil {
@@ -87,7 +87,7 @@ func TestChatQwen36(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := sess.(*Session)
+		s := sess.(*session)
 		if i == 1 {
 			s.tools[0].scaffold = nil // no drafts
 		}
@@ -121,12 +121,8 @@ func TestChatQwen36(t *testing.T) {
 	}
 	t.Logf("call %s: %v drafted, %v token by token", args[0], took[0].Round(time.Millisecond), took[1].Round(time.Millisecond))
 
-	m, err := g.Questions(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	q, err := m.Question("Is the user greeting the assistant?", []string{"yes", "no"})
+	// The same model answers questions too.
+	q, err := g.Question("Is the user greeting the assistant?", []string{"yes", "no"})
 	if err != nil {
 		t.Fatal(err)
 	}

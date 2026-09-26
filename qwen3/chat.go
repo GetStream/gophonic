@@ -17,22 +17,21 @@ import (
 	"unicode/utf8"
 
 	"github.com/GetStream/gophonic/chat"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/safetensors"
 )
 
-// Chat generates text with a Qwen3 model: it is a chat.Generator whose
-// sessions keep their conversation's keys and values evaluated, so each new
-// message costs only its own tokens. Replies use Qwen3's non-thinking mode.
-// Sessions share the model; their calls are serialized.
-type Chat struct {
+// generator is a Model's chat.Generator: its sessions keep their
+// conversation's keys and values evaluated, so each new message costs only
+// its own tokens. Replies use Qwen3's non-thinking mode. Sessions share its
+// workspace; their calls are serialized.
+type generator struct {
 	mu      sync.Mutex
-	weights *Weights
+	weights *qwen3lm.Weights
 	tokens  *Tokenizer
-	eval    *Evaluator
-	ws      *Workspace
+	eval    *qwen3lm.Evaluator
+	ws      *qwen3lm.Workspace
 	closed  bool
-	own     bool   // Close releases the weights
-	path    string // the snapshot, when OpenChat loaded it
 
 	imEnd, endText int
 	// enders are the end marker and the tokens of only closing
@@ -48,42 +47,20 @@ type Chat struct {
 	resultEnd           []int
 }
 
-var _ chat.Generator = (*Chat)(nil)
+var _ chat.Generator = (*generator)(nil)
 
-// OpenChat loads the Qwen3 snapshot at path with its language-model head,
-// for text generation. Options select the weight format and threads; the
-// caches of Open do not apply.
-func OpenChat(path string, opts Options) (*Chat, error) {
-	if opts.Threads < 0 {
-		return nil, fmt.Errorf("qwen3: invalid thread count %d", opts.Threads)
-	}
-	tokens, err := LoadTokenizer(path)
-	if err != nil {
-		return nil, fmt.Errorf("qwen3: load tokenizer: %w", err)
-	}
+// headOf names the language-model head of the snapshot at path: the
+// smaller Qwen3 models tie it to the embedding table.
+func headOf(path string) (string, error) {
 	st, err := safetensors.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("qwen3: %w", err)
+		return "", fmt.Errorf("qwen3: %w", err)
 	}
-	head := "lm_head.weight"
-	if !st.Has(head) {
-		head = "model.embed_tokens.weight" // smaller Qwen3 models tie it
+	defer st.Close()
+	if st.Has("lm_head.weight") {
+		return "lm_head.weight", nil
 	}
-	st.Close()
-	weights, err := LoadWeightsOptions(path, LoadOptions{Format: opts.Format, Head: head})
-	if err != nil {
-		return nil, err
-	}
-	c, err := NewChat(weights, tokens, opts.threads())
-	if err != nil {
-		weights.Release()
-		return nil, err
-	}
-	c.own, c.path, c.dialect = true, path, dialectOf(path)
-	if !thinks(path) {
-		c.answer = slices.Clone(c.header[chat.Assistant])
-	}
-	return c, nil
+	return "model.embed_tokens.weight", nil
 }
 
 // thinks reports whether the chat template of the snapshot at path has
@@ -94,42 +71,10 @@ func thinks(path string) bool {
 	return t == "" || strings.Contains(t, "<think>")
 }
 
-// Questions returns a Model for embeddings and zero-shot questions that
-// shares c's weights, so one loaded model serves both. It needs a Chat
-// from OpenChat. Close it before c; closing it leaves the weights loaded.
-func (c *Chat) Questions(opts Options) (*Model, error) {
-	if c.path == "" {
-		return nil, errors.New("qwen3: Questions needs a Chat from OpenChat")
-	}
-	cfg := c.weights.Config()
-	letters, err := loadLetterHead(c.path, c.tokens, cfg.Hidden, cfg.Vocab)
-	if err != nil {
-		return nil, err
-	}
-	entries := opts.CacheEntries
-	if entries == 0 {
-		entries = defaultCacheEntries
-	}
-	prefix := opts.PrefixCacheTokens
-	if prefix == 0 {
-		prefix = maxTokens
-	}
-	m, err := newModel(c.weights, c.tokens, opts.threads(), entries, min(prefix, maxTokens, cfg.MaxPositions))
-	if err != nil {
-		return nil, err
-	}
-	m.letters = letters
-	if !thinks(c.path) {
-		m.answer = answerPlain
-	}
-	return m, nil
-}
-
-// NewChat generates with weights loaded with their head and the tokenizer
-// of the same snapshot, using threads CPU workers. Close leaves the weights
-// loaded.
-func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
-	eval, err := NewEvaluator(weights)
+// newGenerator generates with weights loaded with their head, and the
+// tokenizer of the same snapshot at path, using threads CPU workers.
+func newGenerator(weights *qwen3lm.Weights, tokens *Tokenizer, threads int, path string) (*generator, error) {
+	eval, err := qwen3lm.NewEvaluator(weights)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +82,7 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Chat{weights: weights, tokens: tokens, eval: eval, ws: ws}
+	c := &generator{weights: weights, tokens: tokens, eval: eval, ws: ws}
 	var ok1, ok2 bool
 	c.imEnd, ok1 = tokens.AddedID("<|im_end|>")
 	c.endText, ok2 = tokens.AddedID("<|endoftext|>")
@@ -176,6 +121,10 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 			c.closer[id] = closes
 		}
 	}
+	c.dialect = dialectOf(path)
+	if !thinks(path) {
+		c.answer = slices.Clone(c.header[chat.Assistant])
+	}
 	if err := c.warm(); err != nil {
 		return nil, err
 	}
@@ -185,7 +134,7 @@ func NewChat(weights *Weights, tokens *Tokenizer, threads int) (*Chat, error) {
 // warm runs a prompt and a decoding step once, so that the GPU's first-use
 // costs (scratch allocation, first dispatch of every kernel) are paid while
 // loading instead of by the first reply.
-func (c *Chat) warm() error {
+func (c *generator) warm() error {
 	cfg := c.weights.Config()
 	kv, err := c.eval.NewPrefixKV(64)
 	if err != nil {
@@ -205,26 +154,21 @@ func (c *Chat) warm() error {
 	return c.eval.LogitsInto(hidden, logits, c.ws)
 }
 
-// Close releases the workspace, and the weights when OpenChat loaded them.
-// Close sessions first.
-func (c *Chat) Close() error {
+// Close releases the workspace. Close sessions first.
+func (c *generator) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil
 	}
 	c.closed = true
-	err := c.ws.Close()
-	if c.own {
-		c.weights.Release()
-	}
-	return err
+	return c.ws.Close()
 }
 
 // NewSession starts a conversation.
-func (c *Chat) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, error) {
+func (c *generator) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, error) {
 	cfg := c.weights.Config()
-	s := &Session{c: c, hidden: make([]float32, cfg.Hidden), logits: make([]float32, cfg.Vocab), reply: -1}
+	s := &session{c: c, hidden: make([]float32, cfg.Hidden), logits: make([]float32, cfg.Vocab), reply: -1}
 	if len(tools) > 0 {
 		var err error
 		if system, err = c.dialect.prompt(system, tools); err != nil {
@@ -249,10 +193,10 @@ func (c *Chat) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, 
 	return s, nil
 }
 
-// Session is one conversation of a Chat; see chat.Session.
-type Session struct {
-	c     *Chat
-	kv    *PrefixKV
+// session is one conversation of a generator; see chat.Session.
+type session struct {
+	c     *generator
+	kv    *qwen3lm.PrefixKV
 	ids   []int // the conversation's tokens; kv holds a prefix of them
 	probe []int // Finished's tokens
 	// ready is the number of stored tokens after which hidden is the model
@@ -291,10 +235,10 @@ type toolDraft struct {
 	strings  []string
 }
 
-var _ chat.Session = (*Session)(nil)
+var _ chat.Session = (*session)(nil)
 
 // Add appends a complete message.
-func (s *Session) Add(role chat.Role, text string) error {
+func (s *session) Add(role chat.Role, text string) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -324,10 +268,10 @@ func (s *Session) Add(role chat.Role, text string) error {
 }
 
 // Calls returns the tool calls of the last reply; see chat.Session.
-func (s *Session) Calls() []chat.Call { return s.calls }
+func (s *session) Calls() []chat.Call { return s.calls }
 
 // Reply generates the assistant's next message.
-func (s *Session) Reply(ctx context.Context, opts chat.Options, w io.Writer) error {
+func (s *session) Reply(ctx context.Context, opts chat.Options, w io.Writer) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -423,7 +367,7 @@ const roomAhead = 512
 
 // take appends a token of the reply: text goes to w, and a tool call's
 // tokens are collected until it closes, when the call is recorded.
-func (s *Session) take(id int, w io.Writer) error {
+func (s *session) take(id int, w io.Writer) error {
 	c := s.c
 	s.ids = append(s.ids, id)
 	s.remember(id)
@@ -445,7 +389,7 @@ func (s *Session) take(id int, w io.Writer) error {
 }
 
 // remember records a token of the reply, for the presence penalty.
-func (s *Session) remember(id int) {
+func (s *session) remember(id int) {
 	if len(s.seen) == 0 {
 		s.seen = make([]bool, s.c.weights.Config().Vocab)
 	}
@@ -456,7 +400,7 @@ func (s *Session) remember(id int) {
 }
 
 // forget clears the tokens remembered for the presence penalty.
-func (s *Session) forget() {
+func (s *session) forget() {
 	for _, id := range s.seenIDs {
 		s.seen[id] = false
 	}
@@ -464,7 +408,7 @@ func (s *Session) forget() {
 }
 
 // penalize lowers the logits of the tokens the reply already holds.
-func (s *Session) penalize(logits []float32, opts chat.Options) {
+func (s *session) penalize(logits []float32, opts chat.Options) {
 	if opts.Presence == 0 {
 		return
 	}
@@ -474,7 +418,7 @@ func (s *Session) penalize(logits []float32, opts chat.Options) {
 }
 
 // record adds the call just written to Calls, if it is well formed.
-func (s *Session) record() {
+func (s *session) record() {
 	i := len(s.calls)
 	if i == len(s.args) {
 		s.args = append(s.args, nil)
@@ -497,7 +441,7 @@ func (s *Session) record() {
 }
 
 // stringParam reports whether tool name takes param as a string.
-func (s *Session) stringParam(name, param []byte) bool {
+func (s *session) stringParam(name, param []byte) bool {
 	for _, t := range s.tools {
 		if t.name == string(name) {
 			for _, p := range t.strings {
@@ -513,7 +457,7 @@ func (s *Session) stringParam(name, param []byte) bool {
 // draft returns, while a tool call is being written, the tokens it is sure
 // to go on with, up to max: the rest of the scaffold that every tool it can
 // still be calling shares.
-func (s *Session) draft(max int) []int {
+func (s *session) draft(max int) []int {
 	if !s.calling || max <= 1 {
 		return nil
 	}
@@ -542,13 +486,13 @@ func (s *Session) draft(max int) []int {
 // then samples each position as decoding one token at a time would, taking
 // drafted tokens while the samples agree. It returns how many it took and
 // the first sample that is not a drafted token, which comes next.
-func (s *Session) verify(draft []int, opts chat.Options, w io.Writer) (taken, next int, err error) {
+func (s *session) verify(draft []int, opts chat.Options, w io.Writer) (taken, next int, err error) {
 	c, h, vocab := s.c, len(s.hidden), len(s.logits)
 	base := len(s.ids) - 1
 	s.probe = append(append(s.probe[:0], s.ids[base]), draft...)
 	k := len(s.probe)
 	s.tail = slices.Grow(s.tail[:0], k*h)[:k*h]
-	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, base, s.probe, Embeds{}, s.tail, c.ws); err != nil {
+	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, base, s.probe, qwen3lm.Embeds{}, s.tail, c.ws); err != nil {
 		return 0, 0, err
 	}
 	s.vlogits = slices.Grow(s.vlogits[:0], k*vocab)[:k*vocab]
@@ -579,7 +523,7 @@ func (s *Session) verify(draft []int, opts chat.Options, w io.Writer) (taken, ne
 // and a statement a question follows ("I'm going hiking.") ends no message. The same pass evaluates the end and the assistant's header, as a
 // reply to the message would begin, so that Add and Reply next start
 // sampling at once.
-func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (float32, error) {
+func (s *session) Finished(ctx context.Context, role chat.Role, text string) (float32, error) {
 	if s.closed {
 		return 0, chat.ErrClosed
 	}
@@ -632,7 +576,7 @@ func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (fl
 	h := len(s.hidden)
 	k := len(probe) - end + 1 + closed
 	s.tail = slices.Grow(s.tail[:0], k*h)[:k*h]
-	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, keep, probe[keep:], Embeds{}, s.tail, c.ws); err != nil {
+	if err := c.eval.HiddenTailExtendEmbedInto(s.kv, keep, probe[keep:], qwen3lm.Embeds{}, s.tail, c.ws); err != nil {
 		s.ready = 0
 		return 0, err
 	}
@@ -652,7 +596,7 @@ func (s *Session) Finished(ctx context.Context, role chat.Role, text string) (fl
 }
 
 // next returns the probability that the token after state is one of ids.
-func (s *Session) next(state []float32, ids []int) (float64, error) {
+func (s *session) next(state []float32, ids []int) (float64, error) {
 	if err := s.c.eval.LogitsInto(state, s.logits, s.c.ws); err != nil {
 		return 0, err
 	}
@@ -690,7 +634,7 @@ func ending(piece []byte) (closes, blank bool) {
 }
 
 // Prefill evaluates the conversation so far.
-func (s *Session) Prefill(ctx context.Context) error {
+func (s *session) Prefill(ctx context.Context) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -722,7 +666,7 @@ func (s *Session) Prefill(ctx context.Context) error {
 // emit writes the complete UTF-8 prefix of the text decoded so far, plus
 // piece, to w, keeping an incomplete trailing sequence for the next piece;
 // flush writes everything.
-func (s *Session) emit(piece []byte, w io.Writer, flush bool) error {
+func (s *session) emit(piece []byte, w io.Writer, flush bool) error {
 	s.text = append(s.text, piece...)
 	cut := len(s.text)
 	if !flush {
@@ -755,7 +699,7 @@ func completeUTF8(b []byte) int {
 }
 
 // Truncate shortens the last reply to its first n bytes.
-func (s *Session) Truncate(n int) error {
+func (s *session) Truncate(n int) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -778,10 +722,10 @@ func (s *Session) Truncate(n int) error {
 }
 
 // Checkpoint marks the conversation.
-func (s *Session) Checkpoint() int { return len(s.ids) }
+func (s *session) Checkpoint() int { return len(s.ids) }
 
 // Restore returns the conversation to a mark from Checkpoint.
-func (s *Session) Restore(mark int) error {
+func (s *session) Restore(mark int) error {
 	if s.closed {
 		return chat.ErrClosed
 	}
@@ -795,7 +739,7 @@ func (s *Session) Restore(mark int) error {
 
 // reserve makes the key and value store hold need tokens, growing it by
 // doubling up to limit.
-func (s *Session) reserve(need, limit int) error {
+func (s *session) reserve(need, limit int) error {
 	if s.kv != nil && s.kv.Capacity() >= need {
 		return nil
 	}
@@ -816,7 +760,7 @@ func (s *Session) reserve(need, limit int) error {
 }
 
 // Close ends the session.
-func (s *Session) Close() error {
+func (s *session) Close() error {
 	s.closed = true
 	s.kv, s.ids = nil, nil
 	return nil

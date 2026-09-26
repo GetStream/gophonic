@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"unsafe"
+
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 )
 
 // Context holds a long shared text, such as a conversation, that several
@@ -23,8 +25,8 @@ import (
 // Question's input-last layout. Validate each question on your own data.
 // A Context is not safe for concurrent use.
 type Context struct {
-	m      *Model
-	kv     *PrefixKV
+	m      *encoder
+	kv     *qwen3lm.PrefixKV
 	header []int  // "<|im_start|>user\n"
 	text   []byte // context text plus separator, tokenized together
 	ids    []int  // header, context, and separator tokens
@@ -47,7 +49,7 @@ const (
 
 // NewContext allocates a context of up to maxTokens tokens (288 KiB of keys
 // and values per token).
-func (e *Model) NewContext(maxTokens int) (*Context, error) {
+func (e *encoder) NewContext(maxTokens int) (*Context, error) {
 	if e == nil || e.letters == nil {
 		return nil, errors.New("qwen3: this model was opened without the language-model head")
 	}
@@ -70,7 +72,7 @@ func (e *Model) NewContext(maxTokens int) (*Context, error) {
 }
 
 // ContextQuestion prepares a question with 2 to 26 options for Context.Ask.
-func (e *Model) ContextQuestion(question string, options []string) (*ContextQuestion, error) {
+func (e *encoder) ContextQuestion(question string, options []string) (*ContextQuestion, error) {
 	if e == nil || e.letters == nil {
 		return nil, errors.New("qwen3: this model was opened without the language-model head")
 	}

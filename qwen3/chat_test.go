@@ -68,7 +68,7 @@ func cmpFloat(a, b float32) int {
 }
 
 func TestChatOfficial(t *testing.T) {
-	g, err := OpenChat(testmodels.Path(t, testmodels.Qwen3), Options{})
+	g, err := Open(testmodels.Path(t, testmodels.Qwen3), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,4 +206,43 @@ func (w *timedWriter) Write(p []byte) (int, error) {
 		*w.first = time.Since(w.began)
 	}
 	return w.Builder.Write(p)
+}
+
+// A model prepares each capability at its first use: nothing but the
+// weights at Open, the question workspace for a question, and the
+// language-model head for a conversation.
+func TestModelPreparesOnUse(t *testing.T) {
+	m, err := Open(testmodels.Path(t, testmodels.Qwen3), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.weights.HasHead() || m.enc != nil || m.gen != nil {
+		t.Fatal("Open prepared more than the weights")
+	}
+	q, err := m.Question("Is this a greeting?", []string{"yes", "no"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	probs := make([]float32, 2)
+	if err := q.Choose(context.Background(), "Hello there!", probs); err != nil || probs[0] < probs[1] {
+		t.Fatalf("a greeting: %v, %v", probs, err)
+	}
+	if m.weights.HasHead() || m.gen != nil {
+		t.Fatal("a question loaded the head")
+	}
+	s, err := m.NewSession("Answer with one word.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !m.weights.HasHead() {
+		t.Fatal("a conversation without the head")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.NewSession(""); err == nil {
+		t.Fatal("a session of a closed model")
+	}
 }

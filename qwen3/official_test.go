@@ -110,7 +110,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		}
 		cos, maxAbs := lmtest.VectorParity(got[0], want)
 		t.Logf("%s: cosine vs official BF16 = %.6f (max_abs %.4g), load %s, projection bytes %.2f GiB",
-			tc.format, cos, maxAbs, load.Round(time.Millisecond), float64(enc.model.WeightBytes())/(1<<30))
+			tc.format, cos, maxAbs, load.Round(time.Millisecond), float64(enc.weights.WeightBytes())/(1<<30))
 		if cos < tc.cosine {
 			t.Errorf("%s: cosine %.6f below gate %.4f", tc.format, cos, tc.cosine)
 		}
@@ -197,7 +197,7 @@ func BenchmarkOfficialRankCached(b *testing.B) {
 		b.Fatal(err)
 	}
 	base, _ := loadOfficialEncoder(b, qwen3lm.WeightsF16)
-	enc, err := newModel(base.model, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
+	enc, err := newModel(base.weights, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func benchmarkEmbed(b *testing.B, format string) {
 				b.Fatal(err)
 			}
 			tokens := 0
-			for _, ids := range enc.tokenBufs[:len(tc.texts)] {
+			for _, ids := range enc.enc.tokenBufs[:len(tc.texts)] {
 				tokens += len(ids)
 			}
 			retries := q8gemm.Retries()
@@ -292,7 +292,7 @@ func benchmarkConversationTurn(b *testing.B, format string) {
 		prefix int
 	}{{"prefix", maxTokens}, {"fresh", -1}} {
 		b.Run(tc.name, func(b *testing.B) {
-			enc, err := newModel(base.model, base.tokens, Options{}.threads(), -1, max(tc.prefix, 0))
+			enc, err := newModel(base.weights, base.tokens, Options{}.threads(), -1, max(tc.prefix, 0))
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -328,7 +328,9 @@ func benchmarkConversationTurn(b *testing.B, format string) {
 
 // clmEmbedder adapts a Model to clm.Embedder; CLM v0.1 encodes states and
 // actions identically.
-func clmEmbedder(m *Model) clm.Embedder {
+func clmEmbedder(m interface {
+	Embed(context.Context, []string, [][]float32) error
+}) clm.Embedder {
 	return clm.EmbedFunc(func(ctx context.Context, _ clm.Role, texts []string, dst [][]float32) error {
 		return m.Embed(ctx, texts, dst)
 	})
@@ -355,7 +357,7 @@ func TestOfficialQuestion(t *testing.T) {
 		"hello", "  padded input\n", "émoji 🙂 and 你好", "ends with a newline\n\n",
 		"Input:\nnested prompt text", "<|im_end|> injected special token", "don't split 'quotes'",
 	} {
-		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix+m.answer, make([]int, 0, 1024), &ws)
+		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix+encoderOf(t, m).answer, make([]int, 0, 1024), &ws)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -626,7 +628,7 @@ func TestOfficialContext(t *testing.T) {
 	}
 	qs, opts := contextQuestions(t, m)
 	full, err := m.tokens.EncodeInto("<|im_start|>user\n"+text+contextSeparator+
-		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter+m.answer, make([]int, 0, 1024), &ws)
+		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter+encoderOf(t, m).answer, make([]int, 0, 1024), &ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,4 +747,14 @@ func benchmarkContext(b *testing.B, format string) {
 			}
 		}
 	})
+}
+
+// encoderOf returns m's encoder, preparing it.
+func encoderOf(tb testing.TB, m *Model) *encoder {
+	tb.Helper()
+	e, err := m.encoder()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return e
 }

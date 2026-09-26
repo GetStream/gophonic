@@ -197,9 +197,15 @@ prefix is reused; `Question.Choose` takes 128 ms per new input and
   4096 × 16 KiB) and `Options.PrefixCacheTokens` a store of the last long
   input's keys and values (default 2048 tokens ≈ 576 MiB); negative values
   disable them. `CacheStats` and `PrefixStats` report reuse.
-- **Low-level.** `LoadWeights`, `NewEvaluator`, `Evaluator.HiddenLastBatchInto`,
-  and `PrefixKV` evaluate pretokenized batches directly; `EmbedTokensInto`
-  accepts token IDs.
+- **One model, prepared on use.** A `Model` converses (`NewSession`, a
+  `chat.Generator`), answers questions, and embeds, from one copy of the
+  weights. The first session loads the language-model head; the first
+  question or embedding prepares its workspace and caches. Generation and
+  questions have a workspace each, so a question is answered while a reply
+  is written.
+- **Tokens.** `LoadTokenizer` and `EmbedTokensInto` serve callers that
+  tokenize themselves. The transformer is internal, free to change shape
+  for new architectures without an API change.
 
 ## Tests
 

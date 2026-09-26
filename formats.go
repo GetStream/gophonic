@@ -4,7 +4,6 @@
 package gophonic
 
 import (
-	"errors"
 	"io"
 	"os"
 	"reflect"
@@ -56,41 +55,23 @@ func openQwen3TTS(path string, opts Options) (*Model, error) {
 
 // A Qwen3 language model generates text (chat.Generator) and answers
 // questions about text (speech.ZeroShot, whose classifiers are prepared
-// multiple-choice questions), both from one loaded copy of its weights.
+// multiple-choice questions), both from one loaded copy of its weights,
+// each prepared at its first use.
 func openQwen3(path string, opts Options) (*Model, error) {
-	g, err := qwen3.OpenChat(path, qwen3.Options{Format: opts.Format, Threads: opts.Threads})
+	m, err := qwen3.Open(path, qwen3.Options{Format: opts.Format, Threads: opts.Threads})
 	if err != nil {
 		return nil, err
 	}
-	m, err := g.Questions(qwen3.Options{Threads: opts.Threads})
-	if err != nil {
-		g.Close()
-		return nil, err
-	}
-	model := NewModel("qwen3", path, func() error { return errors.Join(m.Close(), g.Close()) })
-	Provide(model, func() (chat.Generator, error) { return generator{g}, nil })
-	return Provide(model, func() (speech.ZeroShot, error) { return zeroShot{m}, nil }), nil
+	model := NewModel("qwen3", path, m.Close)
+	Provide(model, func() (chat.Generator, error) { return shared{m}, nil })
+	return Provide(model, func() (speech.ZeroShot, error) { return shared{m}, nil }), nil
 }
 
-// zeroShot is one lane of a shared Qwen3 model, which serializes its calls;
-// closing the lane leaves the model open.
-type zeroShot struct{ m *qwen3.Model }
+// shared is a lane of a Qwen3 model, which serializes its calls of each
+// kind; closing the lane leaves the model open.
+type shared struct{ *qwen3.Model }
 
-func (z zeroShot) Classifier(question string, labels []string) (speech.TextClassifier, error) {
-	return z.m.Classifier(question, labels)
-}
-
-func (zeroShot) Close() error { return nil }
-
-// generator is one lane of a shared Qwen3 generator; closing the lane
-// leaves it open.
-type generator struct{ g *qwen3.Chat }
-
-func (g generator) NewSession(system string, tools ...chat.ToolSpec) (chat.Session, error) {
-	return g.g.NewSession(system, tools...)
-}
-
-func (generator) Close() error { return nil }
+func (shared) Close() error { return nil }
 
 func openWhisper(path string, opts Options) (*Model, error) {
 	m, err := whisper.Load(path)

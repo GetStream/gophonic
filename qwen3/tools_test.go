@@ -49,7 +49,7 @@ func TestToolsPrompt(t *testing.T) {
 // Asked to be quiet, Qwen3-8B calls the tool rather than saying so; the
 // call is not text, and drafting its scaffold changes nothing but speed.
 func TestChatTools(t *testing.T) {
-	g, err := OpenChat(testmodels.Path(t, testmodels.Qwen3), Options{})
+	g, err := Open(testmodels.Path(t, testmodels.Qwen3), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestChatTools(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := sess.(*Session)
+		s := sess.(*session)
 		if i == 1 {
 			s.tools = nil // no drafts
 		}

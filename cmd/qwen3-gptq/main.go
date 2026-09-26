@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/GetStream/gophonic/qwen3"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 )
 
 func main() {
@@ -26,7 +26,7 @@ func main() {
 		os.Exit(2)
 	}
 	start := time.Now()
-	err := qwen3.QuantizeGPTQ(flag.Arg(0), *weights, func(layer, layers int) {
+	err := qwen3lm.QuantizeGPTQ(flag.Arg(0), *weights, func(layer, layers int) {
 		fmt.Fprintf(os.Stderr, "\rlayer %d/%d  %v", layer, layers, time.Since(start).Round(time.Second))
 	})
 	fmt.Fprintln(os.Stderr)
