@@ -1,0 +1,34 @@
+Native Q8B full decoder-step geometry/scheduling A/B
+====================================================
+
+Device: Apple M4 Max
+Checkpoint: local Qwen3-ASR 1.7B, Q8B decoder and Q8B language-model head
+Scope: eight independent private KV prefixes, each prefilled with 32 tokens;
+full decoder step through all 28 layers and the language-model head. The same
+logical next-token position is repeated so cache copies and prefix growth are
+outside the timed loop. Every variant's hidden and logits outputs were checked
+against the first variant before timing. M4x2 uses two four-lane projection
+tiles; M8 uses one eight-lane projection. Attention dispatches are either
+serialized or recorded in a concurrent compute encoder with explicit barriers
+between dependent stages.
+
+Command:
+
+    CODEX_AGENT_ID=luna_gpu_perf GOEXPERIMENT=simd CGO_ENABLED=0 GOPHONIC_MODELS=/Users/thesyncim/GolandProjects/gophonic/models /Users/thesyncim/.codex/bin/project-env go test ./internal/qwen3lm -run '^$' -bench '^BenchmarkGPUDecodeBatchStepPaired$' -benchtime=2x -count=3 -v
+
+Raw output:
+
+    goos: darwin
+    goarch: arm64
+    pkg: github.com/GetStream/gophonic/internal/qwen3lm
+    cpu: Apple M4 Max
+    BenchmarkGPUDecodeBatchStepPaired
+    BenchmarkGPUDecodeBatchStepPaired-16           2  70913958 ns/op  15.02 m4x2-concurrent-ms/step  16.30 m4x2-serial-ms/step  19.34 m8-concurrent-ms/step  20.24 m8-serial-ms/step  0 B/op  0 allocs/op
+    BenchmarkGPUDecodeBatchStepPaired-16           2  71425500 ns/op  15.05 m4x2-concurrent-ms/step  16.23 m4x2-serial-ms/step  19.33 m8-concurrent-ms/step  20.81 m8-serial-ms/step  0 B/op  0 allocs/op
+    BenchmarkGPUDecodeBatchStepPaired-16           2  72182562 ns/op  15.48 m4x2-concurrent-ms/step  16.38 m4x2-serial-ms/step  19.65 m8-concurrent-ms/step  20.67 m8-serial-ms/step  0 B/op  0 allocs/op
+    PASS
+    ok   github.com/GetStream/gophonic/internal/qwen3lm 2.246s
+
+These are bounded decoder-step timings on one device, not public ASR-call
+throughput. The paired public transcriber benchmark remains the relevant
+end-to-end measurement.

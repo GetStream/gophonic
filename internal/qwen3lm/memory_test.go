@@ -62,8 +62,14 @@ func TestArenaGrowthPrefixCopyAndClose(t *testing.T) {
 	if err := kv.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if ws.memory != nil || kv.Capacity() != 0 {
-		t.Fatal("Close retained storage")
+	if ws.memory != nil || kv.Capacity() != 0 || kv.owner != nil || ws.owner != nil || ws.attnScratch != nil || ws.tiles != nil || ws.scratch != nil {
+		t.Fatal("Close retained model or storage")
+	}
+	if err := e.HiddenLastInto(ids, hidden, ws); err == nil {
+		t.Fatal("closed workspace accepted inference")
+	}
+	if err := ws.Reserve(33, 64); err == nil {
+		t.Fatal("closed workspace reserved new storage")
 	}
 }
 

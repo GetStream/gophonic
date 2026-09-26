@@ -65,6 +65,7 @@ type Weights struct {
 	headMu     sync.Mutex
 	headName   string
 	headMemory *arena.Arena // the CPU's FP16 head
+	released   bool
 }
 
 type modelLayer struct {
@@ -419,9 +420,12 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 
 // HasHead reports whether the language-model head is loaded.
 func (m *Weights) HasHead() bool {
+	if m == nil {
+		return false
+	}
 	m.headMu.Lock()
 	defer m.headMu.Unlock()
-	return m.headName != ""
+	return !m.released && m.headName != ""
 }
 
 // LoadHead loads the language-model head named name, such as
@@ -429,13 +433,21 @@ func (m *Weights) HasHead() bool {
 // what needs no head pays for one only when it first generates. Loading the
 // head already loaded does nothing.
 func (m *Weights) LoadHead(name string) error {
+	if m == nil {
+		return errors.New("qwen3: nil weights")
+	}
 	m.headMu.Lock()
+	if m.released {
+		m.headMu.Unlock()
+		return errors.New("qwen3: weights have been released")
+	}
 	loaded := m.headName
+	dir := m.dir
 	m.headMu.Unlock()
 	if loaded == name {
 		return nil
 	}
-	st, err := safetensors.Open(m.dir)
+	st, err := safetensors.Open(dir)
 	if err != nil {
 		return err
 	}
@@ -445,11 +457,17 @@ func (m *Weights) LoadHead(name string) error {
 
 // loadHeadFrom loads the head named name from st, if name is not empty.
 func (m *Weights) loadHeadFrom(st *safetensors.Checkpoint, name string) error {
-	if name == "" {
-		return nil
+	if m == nil {
+		return errors.New("qwen3: nil weights")
 	}
 	m.headMu.Lock()
 	defer m.headMu.Unlock()
+	if m.released {
+		return errors.New("qwen3: weights have been released")
+	}
+	if name == "" {
+		return nil
+	}
 	switch m.headName {
 	case name:
 		return nil
@@ -538,6 +556,15 @@ func (m *Weights) loadCPUHead(st *safetensors.Checkpoint, name string) error {
 // Release frees what the Weights hold outside the Go heap: GPU buffers and
 // mapped files. The Weights are unusable afterwards.
 func (m *Weights) Release() {
+	if m == nil {
+		return
+	}
+	m.headMu.Lock()
+	defer m.headMu.Unlock()
+	if m.released {
+		return
+	}
+	m.released = true
 	_ = m.memory.Close()
 	_ = m.headMemory.Close()
 	m.memory, m.headMemory = nil, nil
@@ -545,7 +572,9 @@ func (m *Weights) Release() {
 	for _, unmap := range m.unmap {
 		unmap()
 	}
-	m.unmap, m.embed = nil, nil
+	m.unmap, m.embed, m.finalNorm, m.layers = nil, nil, nil, nil
+	m.head = linear{}
+	m.dir, m.headName = "", ""
 }
 
 // Config is the geometry of a Qwen3 model.

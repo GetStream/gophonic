@@ -153,6 +153,9 @@ type LaneOptions struct {
 
 // NewSynthesizer opens a lane over m.
 func NewSynthesizer(m *Model, opts LaneOptions) (*Synthesizer, error) {
+	if m == nil || m.talker == nil || m.cp == nil || m.codec == nil {
+		return nil, fmt.Errorf("qwen3tts: nil or closed model")
+	}
 	s := &Synthesizer{m: m, greedy: opts.Greedy, hidden: make([]float32, m.hidden), cpHidden: make([]float32, m.cpHidden),
 		logits: make([]float32, m.cfg.Talker.Vocab), cpLogits: make([]float32, codes),
 		row: make([]float32, m.hidden), cpRows: make([]float32, 2*m.cpHidden), seen: make([]bool, m.cfg.Talker.Vocab),

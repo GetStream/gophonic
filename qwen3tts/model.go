@@ -378,6 +378,9 @@ func (m *Model) Languages() speech.LanguageSet { return m.languages }
 // closed; the model is unusable afterwards. It is safe to call more than
 // once.
 func (m *Model) Close() error {
+	if m == nil {
+		return nil
+	}
 	m.cpDecode.Close()
 	m.cpDecode = nil
 	if m.talker != nil {
@@ -391,6 +394,8 @@ func (m *Model) Close() error {
 	for _, unmap := range m.unmap {
 		unmap()
 	}
-	m.unmap = nil
+	// Mappings are gone and all lanes have closed. Retire the codec,
+	// packed CPU projections, and stale mapped views as well.
+	*m = Model{}
 	return nil
 }

@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/internal/qwen3lm
+cpu: Apple M4 Max
+BenchmarkGPUDecodeBatchGreedyPaired-16    	      12	  96431611 ns/op	         4.107 full-copy-cpu-scan-cpu-ms/step	        32.32 full-copy-cpu-scan-ms/step	         1.174 gpu-argmax-cpu-ms/step	        30.88 gpu-argmax-ms/step	         3.840 mapped-cpu-scan-cpu-ms/step	        33.20 mapped-cpu-scan-ms/step	       0 B/op	       0 allocs/op
+BenchmarkGPUDecodeBatchGreedyPaired-16    	      12	  87915531 ns/op	         4.018 full-copy-cpu-scan-cpu-ms/step	        29.95 full-copy-cpu-scan-ms/step	         1.063 gpu-argmax-cpu-ms/step	        27.58 gpu-argmax-ms/step	         3.869 mapped-cpu-scan-cpu-ms/step	        30.36 mapped-cpu-scan-ms/step	       0 B/op	       0 allocs/op
+BenchmarkGPUDecodeBatchGreedyPaired-16    	      12	  93693302 ns/op	         4.107 full-copy-cpu-scan-cpu-ms/step	        32.25 full-copy-cpu-scan-ms/step	         1.146 gpu-argmax-cpu-ms/step	        29.33 gpu-argmax-ms/step	         3.964 mapped-cpu-scan-cpu-ms/step	        32.08 mapped-cpu-scan-ms/step	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/internal/qwen3lm	5.412s

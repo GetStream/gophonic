@@ -1,0 +1,23 @@
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.26s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.07s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (6.09s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (2.44s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.74s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.26s)
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/qwen3asr
+cpu: Apple M4 Max
+BenchmarkGPUPairedTranscribe
+BenchmarkGPUPairedTranscribe/mixed/lanes=2
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16         	       4	 667393792 ns/op	         6.037 batch-calls/s	        15.47 batch-cpu-ms/call	       331.3 batch-ms/wave	        17.73 independent-cpu-ms/call	       336.1 independent-ms/wave	         1.015 speedup	      56 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16         	       4	 585436812 ns/op	         7.188 batch-calls/s	        11.22 batch-cpu-ms/call	       278.2 batch-ms/wave	        16.89 independent-cpu-ms/call	       307.2 independent-ms/wave	         1.104 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=2-16         	       4	 641055823 ns/op	         6.336 batch-calls/s	        11.30 batch-cpu-ms/call	       315.7 batch-ms/wave	        13.28 independent-cpu-ms/call	       325.4 independent-ms/wave	         1.031 speedup	     112 B/op	       1 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	38.122s

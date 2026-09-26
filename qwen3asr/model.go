@@ -242,22 +242,26 @@ func checkRoPE(c *qwen3lm.TextConfig) error {
 // speech.Options.Language and Languages.
 func (m *Model) Languages() speech.LanguageSet { return m.languages }
 
-// Close releases the model's memory outside the Go heap, once its lanes
-// are closed; the model is unusable afterwards. It is safe to call more
-// than once.
+// Close releases native resources and drops references to loaded weights,
+// tokenizer data, and language limits. All lanes must be closed first; close
+// must not overlap inference. Repeated calls are harmless.
 func (m *Model) Close() error {
+	if m == nil {
+		return nil
+	}
 	var err error
-	if m.enc != nil && m.enc.memory != nil {
+	if m.enc != nil {
 		err = m.enc.memory.Close()
-		m.enc.memory = nil
 	}
 	if m.lm != nil {
 		m.lm.Release()
-		m.lm = nil
 	}
 	if m.genc != nil {
 		m.genc.release()
-		m.genc = nil
 	}
+	// Do not copy or reset limitsMu after use. No lanes remain to access it.
+	m.enc, m.genc, m.lm, m.eval, m.tok = nil, nil, nil, nil, nil
+	m.limits, m.turn = nil, nil
+	m.languages = 0
 	return err
 }

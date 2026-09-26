@@ -1,0 +1,6 @@
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.80s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.05s)
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	7.210s

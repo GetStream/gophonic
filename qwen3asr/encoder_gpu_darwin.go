@@ -93,6 +93,7 @@ func loadGPUEncoder(st *safetensors.Checkpoint, e *encoder, prefix string) (_ *g
 	if err != nil {
 		return nil, fmt.Errorf("qwen3asr: compile encoder kernels: %w", err)
 	}
+	defer lib.Release()
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
@@ -372,6 +373,15 @@ func floats(b []byte) []float32 {
 }
 
 func (g *gpuEncoder) release() {
+	for _, pipeline := range g.gemm {
+		pipeline.Release()
+	}
+	for _, pipeline := range g.finish {
+		pipeline.Release()
+	}
+	for _, pipeline := range []*metal.Pipeline{g.convGELU, g.conv1, g.gather, g.layerNorm, g.attend} {
+		pipeline.Release()
+	}
 	for _, b := range g.buffers {
 		b.Release()
 	}
