@@ -19,6 +19,8 @@ takes a fraction of a second.
 
 | Endpoint | Does |
 | --- | --- |
+| `POST /v1/chat/completions` | Converses with a language model, streamed or whole, with tools. OpenAI-compatible. |
+| `POST /v1/audio/speech` | Speaks text as WAV, or streams PCM. OpenAI-compatible. |
 | `POST /v1/audio/transcriptions` | Transcribes a WAV upload. OpenAI-compatible. |
 | `GET /v1/models` | Lists the models. OpenAI-compatible. |
 | `POST /v1/audio/classifications` | Scores a WAV upload with an audio classifier, such as a turn detector. |
@@ -97,6 +99,51 @@ once and keeps up to 16 prepared, so requests that repeat a question pay only
 for their inputs: the request above takes 20 ms once its question is
 prepared, on an M4 Max. A model with a text classifier of its own takes neither
 `question` nor `labels`.
+
+## Chat
+
+```sh
+curl -sS localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "Qwen3-8B",
+  "messages": [{"role": "user", "content": "What is the capital of Portugal?"}],
+  "stream": true}'
+```
+
+The OpenAI clients work unchanged, streaming included. A request's
+conversation is replayed into a new session of the model, so the server
+keeps no state between requests. With `"stream": true` the reply comes as
+server-sent events, a chunk per piece as the model writes it, then
+`data: [DONE]`.
+
+Tools follow OpenAI's shape. The server runs none: a reply that calls
+tools comes back with `tool_calls` and `finish_reason: "tool_calls"`, and
+the client runs them and sends their results as `tool` messages. The
+assistant message that made the calls, replayed in the next request, is
+written in the model's own format, so Qwen3 and Qwen3.6 each see calls as
+they were trained to.
+
+| Field | Meaning |
+| --- | --- |
+| `messages` | `system` (or `developer`), `user`, `assistant` (with `tool_calls`), and `tool` messages; content is text, or text parts |
+| `tools` | Functions the model may call |
+| `stream` | Server-sent events |
+| `max_tokens`, `max_completion_tokens` | Bound the reply |
+| `temperature`, `top_p`, `presence_penalty`, `seed` | Sampling, OpenAI's defaults (temperature 1); `top_k` too |
+
+`n` other than 1, `stop`, and content other than text fail with 400.
+
+## Speech
+
+```sh
+curl -sS localhost:8080/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"input": "The capital of Portugal is Lisbon.", "voice": "ryan", "instructions": "Calm and even."}' -o speech.wav
+```
+
+`input` is spoken in `voice` (a voice of the model, or an OpenAI voice name
+for the model's default), styled by `instructions` as OpenAI's are; a
+`language` field forces a language. `response_format` is `wav` (the
+default) or `pcm`: 16-bit little-endian mono at the voice's rate (24 kHz for
+Qwen3-TTS), streamed as it is decoded.
 
 ## Flags
 

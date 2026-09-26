@@ -32,6 +32,7 @@ var (
 	responseFormat = flag.String("response-format", "json", "transcript output: json, text, verbose_json, srt, or vtt")
 	wordTimestamps = flag.Bool("word-timestamps", false, "include word timestamps in verbose_json output")
 	language       = flag.String("language", "", "spoken language as a code or English name (default: detect)")
+	format         = flag.String("format", "", "weight format of a Qwen model: f16, int8, gpu, gpu-q8, or gpu-q4 (default: the fastest of Q8_0 fidelity)")
 	contextText    = flag.String("context", "", "text that primes transcription, such as names or terms")
 	threads        = flag.Int("threads", 0, "CPU workers per lane (0: model default)")
 )
@@ -63,12 +64,14 @@ func main() {
 
 // run loads the model once, runs it on every input, and closes it.
 func run(inputs []string) error {
+	var lang speech.Language
 	if *language != "" {
-		if _, ok := speech.LanguageName(*language); !ok {
+		var ok bool
+		if lang, ok = speech.ParseLanguage(*language); !ok {
 			return fmt.Errorf("unknown language %q", *language)
 		}
 	}
-	model, err := gophonic.Open(*modelPath, gophonic.Options{Threads: *threads})
+	model, err := gophonic.Open(*modelPath, gophonic.Options{Threads: *threads, Format: *format})
 	if err != nil {
 		return err
 	}
@@ -78,7 +81,7 @@ func run(inputs []string) error {
 	case gophonic.Supports[speech.ZeroShot](model):
 		return classifyTexts(model, out, inputs)
 	case gophonic.Supports[speech.Transcriber](model):
-		return transcribe(model, inputs)
+		return transcribe(model, lang, inputs)
 	case gophonic.Supports[speech.TurnDetector](model):
 		return detectTurns(model, out, inputs)
 	case gophonic.Supports[speech.AudioClassifier](model):
@@ -87,8 +90,8 @@ func run(inputs []string) error {
 	return fmt.Errorf("%s provides nothing this command runs", model.Name())
 }
 
-func transcribe(model *gophonic.Model, paths []string) error {
-	transcriber, err := model.NewTranscriber()
+func transcribe(model *gophonic.Model, lang speech.Language, paths []string) error {
+	transcriber, err := gophonic.Lane[speech.Transcriber](model)
 	if err != nil {
 		return err
 	}
@@ -96,7 +99,7 @@ func transcribe(model *gophonic.Model, paths []string) error {
 	resampler := speech.NewResampler()
 	defer resampler.Close()
 	opts := speech.Options{
-		Language: *language,
+		Language: lang,
 		Context:  *contextText,
 		Segments: *responseFormat == "verbose_json" || *responseFormat == "srt" || *responseFormat == "vtt",
 		Words:    *wordTimestamps,
@@ -148,7 +151,7 @@ func transcribe(model *gophonic.Model, paths []string) error {
 }
 
 func detectTurns(model *gophonic.Model, out *vibejson.Writer, paths []string) error {
-	detector, err := model.NewTurnDetector()
+	detector, err := gophonic.Lane[speech.TurnDetector](model)
 	if err != nil {
 		return err
 	}
@@ -162,7 +165,7 @@ func detectTurns(model *gophonic.Model, out *vibejson.Writer, paths []string) er
 		if err != nil {
 			return err
 		}
-		prediction, err := detector.PredictInto(pcm, rate, channels)
+		prediction, err := detector.Predict(pcm, rate, channels)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}

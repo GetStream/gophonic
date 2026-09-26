@@ -123,23 +123,15 @@ func TestCodecMatchesReference(t *testing.T) {
 func TestGreedyCodesMatchReference(t *testing.T) {
 	ref := loadReference(t, "hello")
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return []byte(ref.Text), nil
-	}
+	s.greedy = true
 	var got [][groups]int
 	start := time.Now()
-	err = s.generate(context.Background(), speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, next,
+	err = s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}, ref.Text,
 		func(f *[groups]int) error { got = append(got, *f); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -184,12 +176,12 @@ func TestFirstStepMatchesReference(t *testing.T) {
 	wantRows := readFloats(t, filepath.Join(dir, "step_rows.f32"))
 	wantHidden := readFloats(t, filepath.Join(dir, "step_hidden.f32"))
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
+	s.greedy = true
 	h := m.hidden
 	step := 0
 	s.onFeed = func(row, hidden []float32) {
@@ -199,16 +191,8 @@ func TestFirstStepMatchesReference(t *testing.T) {
 		}
 		step++
 	}
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return []byte(ref.Text), nil
-	}
 	n := 0
-	s.generate(context.Background(), speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, next,
+	s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}, ref.Text,
 		func(*[groups]int) error {
 			n++
 			if n == 4 {
@@ -241,7 +225,7 @@ func TestPredictorMatchesReference(t *testing.T) {
 	inputs := readFloats(t, filepath.Join(dir, "cp_inputs.f32"))
 	want := readFloats(t, filepath.Join(dir, "cp_logits.f32"))
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +247,15 @@ func TestPredictorMatchesReference(t *testing.T) {
 			t.Logf("projection cosine %.7f max %.3g; hidden cosine %.7f max %.3g", cosine(rows, wantProj), maxDiff(rows, wantProj),
 				cosine(s.cpHidden, wantHidden), maxDiff(s.cpHidden, wantHidden))
 		}
-		m.heads[0].Mul(s.cpLogits, s.cpHidden)
+		if m.cpDecode != nil {
+			// The GPU's head, from the same evaluation.
+			var first [1]int
+			if err := m.cpEval.DecodeInto(m.cpDecode, s.ckv, 0, ids, qwen3lmEmbeds(rows), qwen3lm.Sampling{}, first[:], s.cpLogits, s.cws); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			m.heads[0].Mul(s.cpLogits, s.cpHidden)
+		}
 		w := want[f*codes : (f+1)*codes]
 		a, _ := top2(s.cpLogits)
 		b, _ := top2(w)
@@ -300,24 +292,16 @@ func top2(v []float32) (int, int) {
 func TestVoicePromptReuse(t *testing.T) {
 	ref := loadReference(t, "hello")
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
-	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}
+	s.greedy = true
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language)}
 	speak := func() [][groups]int {
-		sent := false
-		next := func() ([]byte, error) {
-			if sent {
-				return nil, io.EOF
-			}
-			sent = true
-			return []byte(ref.Text), nil
-		}
 		var got [][groups]int
-		if err := s.generate(context.Background(), opts, next, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
 			t.Fatal(err)
 		}
 		return got
@@ -343,80 +327,161 @@ func TestVoicePromptReuse(t *testing.T) {
 	}
 }
 
-// The first piece of text is tokenized as it stands, so speech starts
-// without waiting for the next piece; later pieces wait for a word boundary.
+// A first word with nothing after it is tokenized as it stands, so speech
+// starts without waiting for more text; later text waits for a word
+// boundary, and every token knows the byte of the text it ends at.
 func TestFirstPieceTokens(t *testing.T) {
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	s.reset()
+	s.hold()
 	pieces := []string{"Sure", ",", " the", " answer", " is", " simple", "."}
-	i := 0
-	next := func() ([]byte, error) {
-		if i == len(pieces) {
-			return nil, io.EOF
+	ctx := context.Background()
+	for i, p := range pieces {
+		s.mu.Lock()
+		s.written = append(s.written, p...)
+		s.mu.Unlock()
+		if err := s.pull(ctx); err != nil {
+			t.Fatal(err)
 		}
-		i++
-		return []byte(pieces[i-1]), nil
+		if i == 0 && len(s.text) != 1 {
+			t.Fatalf("after the first piece: %d tokens, want 1", len(s.text))
+		}
 	}
-	if err := s.pull(next); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.text) != 1 {
-		t.Fatalf("after the first piece: %d tokens, want 1", len(s.text))
-	}
+	s.mu.Lock()
+	s.ended = true
+	s.mu.Unlock()
 	for !s.textDone {
-		if err := s.pull(next); err != nil {
+		if err := s.pull(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := m.tokens.EncodeInto(strings.Join(pieces, ""), make([]int, 0, 64), &qwen3lm.TokenizerWorkspace{})
+	text := strings.Join(pieces, "")
+	want, err := m.tokens.EncodeInto(text, make([]int, 0, 64), &qwen3lm.TokenizerWorkspace{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(s.text, want) {
 		t.Fatalf("tokens %v, want %v", s.text, want)
 	}
+	at := 0
+	for i, id := range s.text {
+		at += len(m.tokens.Piece(id))
+		if s.textEnd[i] != at {
+			t.Fatalf("token %d ends at byte %d, want %d", i, s.textEnd[i], at)
+		}
+	}
+	if at != len(text) {
+		t.Fatalf("tokens end at byte %d of %d", at, len(text))
+	}
 }
 
-// Warm Speak calls allocate nothing.
+// A warm utterance allocates nothing, on any of the lane's goroutines.
 func TestSpeakAllocations(t *testing.T) {
 	m := loadModel(t)
-	s, err := NewSynthesizer(m)
+	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	s.Greedy = true
-	opts := speech.SpeakOptions{Voice: "Ryan", Language: "en"}
+	s.greedy = true
+	opts := speech.SpeakOptions{Voice: "Ryan", Language: speech.English}
 	text := []byte("Hello there.")
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return text, nil
-	}
-	frames := 0
-	out := func([]float32) error {
-		frames++
-		if frames == 4 {
-			return io.EOF
-		}
-		return nil
-	}
+	pcm := make([]float32, FrameSamples/4)
 	speak := func() {
-		sent, frames = false, 0
-		if err := s.Speak(context.Background(), opts, next, out); err != nil && !errors.Is(err, io.EOF) {
+		if err := s.Begin(context.Background(), opts); err != nil {
 			t.Fatal(err)
+		}
+		s.Write(text)
+		s.End()
+		for {
+			if _, err := s.Read(pcm); errors.Is(err, io.EOF) {
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	speak()
 	if allocs := testing.AllocsPerRun(3, speak); allocs != 0 {
-		t.Fatalf("Speak allocates %v times", allocs)
+		t.Fatalf("an utterance allocates %v times", allocs)
 	}
+}
+
+// A style is read before the voice prompt: it changes what is said, its
+// prompt is cached like any voice's, and a warm call allocates nothing.
+func TestStyle(t *testing.T) {
+	ref := loadReference(t, "hello")
+	m := loadModel(t)
+	s, err := NewSynthesizer(m, LaneOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.greedy = true
+	speak := func(style string) [][groups]int {
+		var got [][groups]int
+		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language), Style: style}
+		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	plain := speak("")
+	calm := speak("Speak slowly, in a calm and even voice.")
+	rows := len(s.kv.Tokens())
+	again := speak("Speak slowly, in a calm and even voice.")
+	if len(plain) == 0 || len(calm) == 0 || calm[0] == plain[0] && len(calm) == len(plain) {
+		t.Fatalf("the style changed nothing: %d frames, %d without it", len(calm), len(plain))
+	}
+	if again[0] != calm[0] || len(s.kv.Tokens()) != rows {
+		t.Fatalf("the cached styled prompt differs: first frame %v, want %v", again[0], calm[0])
+	}
+	t.Logf("%d frames plain, %d calm", len(plain), len(calm))
+	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: refLanguage(t, ref.Language), Style: "Speak slowly, in a calm and even voice."}
+	if n := testing.AllocsPerRun(2, func() {
+		if err := s.generateText(opts, ref.Text, func(*[groups]int) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations per warm styled call", n)
+	}
+}
+
+// generateText generates text's codes in opts's voice on the caller's
+// goroutine, passing each frame to emit: the reference tests' path.
+func (s *Synthesizer) generateText(opts speech.SpeakOptions, text string, emit func(*[groups]int) error) error {
+	speaker, language, err := s.m.voiceOf(opts)
+	if err != nil {
+		return err
+	}
+	s.hold()
+	s.mu.Lock()
+	s.written, s.taken, s.ended = append(s.written[:0], text...), 0, true
+	s.mu.Unlock()
+	return s.generate(context.Background(), speaker, language, opts.Style, emit)
+}
+
+// hold makes the caller's goroutine the lane's worker for a new utterance,
+// as the tests that drive the talker directly need.
+func (s *Synthesizer) hold() {
+	s.mu.Lock()
+	s.id++
+	s.cur, s.ctx = s.id, context.Background()
+	s.written, s.taken, s.ended = s.written[:0], 0, false
+	s.mu.Unlock()
+}
+
+// refLanguage reads a reference case's language.
+func refLanguage(t testing.TB, name string) speech.Language {
+	t.Helper()
+	l, ok := speech.ParseLanguage(name)
+	if !ok {
+		t.Fatalf("reference language %q", name)
+	}
+	return l
 }

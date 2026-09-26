@@ -14,7 +14,7 @@ import (
 )
 
 // dimsBundle writes a version-2 bundle whose tensors hold small finite values.
-func dimsBundle(d Dims, raw [6]uint32) []byte {
+func dimsBundle(d modelDims, raw [6]uint32) []byte {
 	var payload bytes.Buffer
 	_ = binary.Write(&payload, binary.LittleEndian, raw)
 	for i, spec := range expectedTensors(d) {
@@ -43,15 +43,15 @@ func dimsBundle(d Dims, raw [6]uint32) []byte {
 }
 
 func TestReadWeightsVersion2Dims(t *testing.T) {
-	d := Dims{AudioState: 64, AudioHeads: 2, AudioLayers: 2, TextState: 64, TextHeads: 2, TextLayers: 3}
+	d := modelDims{AudioState: 64, AudioHeads: 2, AudioLayers: 2, TextState: 64, TextHeads: 2, TextLayers: 3}
 	raw := [6]uint32{64, 2, 2, 64, 2, 3}
 	data := dimsBundle(d, raw)
 	m, err := ReadWeights(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Dims() != d {
-		t.Fatalf("dims %+v, want %+v", m.Dims(), d)
+	if m.dimensions() != d {
+		t.Fatalf("dims %+v, want %+v", m.dimensions(), d)
 	}
 	if got := len(m.tensor("decoder.blocks.2.mlp.0.weight")); got != 4*64*64 {
 		t.Fatalf("decoder MLP has %d values", got)
@@ -78,7 +78,7 @@ func TestReadWeightsRejectsInvalidHeaders(t *testing.T) {
 	var wrongVersion bytes.Buffer
 	wrongVersion.WriteString("WHISPER1")
 	_ = binary.Write(&wrongVersion, binary.LittleEndian, uint32(3))
-	_ = binary.Write(&wrongVersion, binary.LittleEndian, uint32(len(expectedTensors(TinyENDims))))
+	_ = binary.Write(&wrongVersion, binary.LittleEndian, uint32(len(expectedTensors(tinyENDims))))
 	if _, err := ReadWeights(&wrongVersion); err == nil {
 		t.Fatal("accepted unsupported bundle version")
 	}
@@ -100,7 +100,7 @@ func TestOfficialTinyENBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, spec := range expectedTensors(TinyENDims) {
+	for _, spec := range expectedTensors(tinyENDims) {
 		count := 1
 		for _, dim := range spec.shape {
 			count *= dim

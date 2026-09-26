@@ -16,9 +16,9 @@ func TestDecoderAttentionCacheLayoutAndWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, frames := range []int{1, 7, 128, AudioFrames} {
-		query := make([]float32, TextState)
-		keys, values := make([]float32, frames*TextState), make([]float32, frames*TextState)
+	for _, frames := range []int{1, 7, 128, audioFrames} {
+		query := make([]float32, textState)
+		keys, values := make([]float32, frames*textState), make([]float32, frames*textState)
 		for i := range query {
 			query[i] = float32(i%31-15) / 16
 		}
@@ -26,19 +26,19 @@ func TestDecoderAttentionCacheLayoutAndWorkers(t *testing.T) {
 			keys[i] = float32(i%37-18) / 19
 			values[i] = float32(i%41-20) / 21
 		}
-		want := make([]float32, TextState)
-		attentionInto(want, query, keys, values, frames, TextHeads, make([]float32, frames))
-		scale := float32(math.Pow(float64(TextState/TextHeads), -0.25))
+		want := make([]float32, textState)
+		attentionInto(want, query, keys, values, frames, textHeads, make([]float32, frames))
+		scale := float32(math.Pow(float64(textState/textHeads), -0.25))
 		for i := range keys {
 			keys[i] *= scale
 		}
 		transposed := make([]float32, len(values))
 		for frame := 0; frame < frames; frame++ {
-			for d := 0; d < TextState; d++ {
-				transposed[d*frames+frame] = values[frame*TextState+d]
+			for d := 0; d < textState; d++ {
+				transposed[d*frames+frame] = values[frame*textState+d]
 			}
 		}
-		s := &DecoderScratch{dims: TinyENDims, query: query, context: make([]float32, TextState), scaledQuery: make([]float32, TextState), scores: make([]float32, TextHeads*AudioFrames)}
+		s := &decoderScratch{dims: tinyENDims, query: query, context: make([]float32, textState), scaledQuery: make([]float32, textState), scores: make([]float32, textHeads*audioFrames)}
 		if err := s.attend(keys, transposed, frames, frames); err != nil {
 			t.Fatal(err)
 		}
@@ -72,14 +72,14 @@ func TestPackedDecoderAttentionDispatchIsExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, shape := range [][3]int{{6, 64, 128}, {6, 64, AudioFrames}, {8, 64, AudioFrames}, {6, 80, 129}} {
+	for _, shape := range [][3]int{{6, 64, 128}, {6, 64, audioFrames}, {8, 64, audioFrames}, {6, 80, 129}} {
 		heads, width, frames := shape[0], shape[1], shape[2]
 		state := heads * width
-		dims := TinyENDims
+		dims := tinyENDims
 		dims.TextHeads, dims.TextState = heads, state
-		s := &DecoderScratch{dims: dims, gemm: pool,
+		s := &decoderScratch{dims: dims, gemm: pool,
 			query: make([]float32, state), scaledQuery: make([]float32, state),
-			context: make([]float32, state), scores: make([]float32, heads*AudioFrames),
+			context: make([]float32, state), scores: make([]float32, heads*audioFrames),
 			layerKeys: make([]*whispergemm.PackedVector, heads), layerValues: make([]*whispergemm.PackedVector, heads)}
 		for i := range s.query {
 			s.query[i] = float32(i%31-15) / 17
@@ -103,7 +103,7 @@ func TestPackedDecoderAttentionDispatchIsExact(t *testing.T) {
 		}
 		want := make([]float32, state)
 		op := &decoderAttentionOperation{keyVec: s.layerKeys, valueVec: s.layerValues,
-			heads: heads, dst: want, scaledQuery: s.scaledQuery, scores: make([]float32, heads*AudioFrames), frames: frames}
+			heads: heads, dst: want, scaledQuery: s.scaledQuery, scores: make([]float32, heads*audioFrames), frames: frames}
 		if err := pool.Rows(op, heads, 1); err != nil {
 			t.Fatal(err)
 		}

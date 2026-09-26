@@ -14,10 +14,10 @@ import (
 // BenchmarkTranscribe measures warm transcription of the test clips, PCM to
 // text, and reports the real-time factor.
 func BenchmarkTranscribe(b *testing.B) {
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		for _, clip := range []string{"jfk", "zh"} {
 			b.Run(format+"/"+clip, func(b *testing.B) {
-				tr, err := NewTranscriber(loadModel(b, format), 0)
+				tr, err := NewTranscriber(loadModel(b, format), LaneOptions{})
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -40,12 +40,12 @@ func BenchmarkTranscribe(b *testing.B) {
 }
 
 // BenchmarkEncoder measures the audio encoder alone on the JFK clip's
-// features, on the CPU (FormatF16 models) and the GPU (FormatGPU models).
+// features, on the CPU (qwen3lm.WeightsF16 models) and the GPU (qwen3lm.WeightsGPUQ8 models).
 func BenchmarkEncoder(b *testing.B) {
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		b.Run(format, func(b *testing.B) {
 			m := loadModel(b, format)
-			tr, err := NewTranscriber(m, 0)
+			tr, err := NewTranscriber(m, LaneOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -69,9 +69,9 @@ func BenchmarkEncoder(b *testing.B) {
 // BenchmarkDecoder measures the decoder on the JFK clip's prompt: a fresh
 // prefill of all 158 tokens, and one decoding step with its logits.
 func BenchmarkDecoder(b *testing.B) {
-	for _, format := range []string{FormatF16, FormatGPU} {
+	for _, format := range []string{qwen3lm.WeightsF16, qwen3lm.WeightsGPUQ8} {
 		m := loadModel(b, format)
-		tr, err := NewTranscriber(m, 0)
+		tr, err := NewTranscriber(m, LaneOptions{})
 		if err != nil {
 			b.Fatal(err)
 		}

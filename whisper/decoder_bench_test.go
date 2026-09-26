@@ -24,7 +24,7 @@ func decoderBenchmarkFixture(b *testing.B) (*Model, []float32, decoderOracle) {
 		b.Fatal(err)
 	}
 	dir := filepath.Join("..", "testdata", "whisper")
-	encoder, err := readF32Fixture(filepath.Join(dir, "jfk.encoder.f32le"), AudioFrames*AudioState)
+	encoder, err := readF32Fixture(filepath.Join(dir, "jfk.encoder.f32le"), audioFrames*audioState)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func BenchmarkDecoderOfficialGreedyWorkers(b *testing.B) {
 
 func benchmarkDecoderOfficialGreedy(b *testing.B, workers int) {
 	m, encoder, oracle := decoderBenchmarkFixture(b)
-	s := NewDecoderScratch()
+	s := newTinyDecoderScratch()
 	if workers != 0 {
 		pool, err := whispergemm.NewExecutor(workers)
 		if err != nil {
@@ -63,7 +63,7 @@ func benchmarkDecoderOfficialGreedy(b *testing.B, workers int) {
 		s.gemm = pool
 	}
 	output := make([]int, len(oracle.Prefix)+len(oracle.Tokens)+1)
-	n, err := m.GreedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
+	n, err := m.greedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func benchmarkDecoderOfficialGreedy(b *testing.B, workers int) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		n, err = m.GreedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
+		n, err = m.greedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -100,7 +100,7 @@ func BenchmarkDecoderOfficialBeginWorkers(b *testing.B) {
 
 func benchmarkDecoderOfficialBegin(b *testing.B, workers int) {
 	m, encoder, _ := decoderBenchmarkFixture(b)
-	s := NewDecoderScratch()
+	s := newTinyDecoderScratch()
 	if workers != 0 {
 		pool, err := whispergemm.NewExecutor(workers)
 		if err != nil {
@@ -109,12 +109,12 @@ func benchmarkDecoderOfficialBegin(b *testing.B, workers int) {
 		defer pool.Close()
 		s.gemm = pool
 	}
-	if err := m.BeginDecode(encoder, s); err != nil {
+	if err := m.beginDecode(encoder, s); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := m.BeginDecode(encoder, s); err != nil {
+		if err := m.beginDecode(encoder, s); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -128,7 +128,7 @@ func BenchmarkDecoderOfficialTokensWorkers(b *testing.B) {
 	for _, workers := range []int{1, 8} {
 		b.Run("workers_"+strconv.Itoa(workers), func(b *testing.B) {
 			m, encoder, oracle := decoderBenchmarkFixture(b)
-			s := NewDecoderScratch()
+			s := newTinyDecoderScratch()
 			pool, err := whispergemm.NewExecutor(workers)
 			if err != nil {
 				b.Fatal(err)
@@ -136,7 +136,7 @@ func BenchmarkDecoderOfficialTokensWorkers(b *testing.B) {
 			defer pool.Close()
 			s.gemm = pool
 			output := make([]int, len(oracle.Prefix)+len(oracle.Tokens)+1)
-			n, err := m.GreedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
+			n, err := m.greedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -152,7 +152,7 @@ func BenchmarkDecoderOfficialTokensWorkers(b *testing.B) {
 			for b.Loop() {
 				s.nextPos = 0
 				for position := range output[:n-1] {
-					if err := m.LogitsForTokenInto(output[position], position, s, s.logits); err != nil {
+					if err := m.logitsForTokenInto(output[position], position, s, s.logits); err != nil {
 						b.Fatal(err)
 					}
 					if position+1 >= len(oracle.Prefix) {

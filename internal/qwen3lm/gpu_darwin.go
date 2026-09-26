@@ -44,6 +44,14 @@ const (
 type gpuLayer struct {
 	buf                                              *metal.Buffer
 	qkv, qkvScale, o, oScale, gu, guScale, d, dScale int
+	// router is the FP32 router of a mixture of experts; gu and d then hold
+	// every expert's gate/up and down rows, expert after expert.
+	router int
+	// In the Qwen3.5 family, linear marks a DeltaNet layer; index is the
+	// layer's place among its kind, which picks its key/value cache or its
+	// state and parameters.
+	linear bool
+	index  int
 }
 
 // gpuModel is a Qwen3 model resident in GPU-visible memory. The residual
@@ -55,23 +63,35 @@ type gpuModel struct {
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
 	attendFlash, gemvHead        *metal.Pipeline
+	probe                        *metal.Pipeline // one head's attention, for a Probe
+	decodeHead, decodeSample     *metal.Pipeline // a Decoder's steps
+	decodeGather                 *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
 	finishHead                   *metal.Pipeline
-	layers                       []gpuLayer
-	norms, signs, rope           *metal.Buffer
-	hidden, inter, head          *rotation
-	cfg                          *modelConfig
-	noInter                      bool // down's inputs are not rotated
-	bits                         int  // weight scheme, as in gpu.metal: 8 (Q8), 9 (Q8B), or 4 (Q4)
-	positions                    int  // RoPE table rows
+	moeRouter, moeRoute          *metal.Pipeline // a mixture of experts' router and top-k
+	moeGateUp, moeDown           *metal.Pipeline // one row's experts
+	// Batches grouped by expert: the tiles, the 32- and 16-pair GEMMs, and
+	// the sum of each row's experts.
+	moeTiles, moeCombine   *metal.Pipeline
+	moeGateUpMM, moeDownMM [2]*metal.Pipeline
+	hy                     hybridPipelines // the Qwen3.5 family's kernels
+	dnParams               *metal.Buffer   // DeltaNet layers' parameters
+	layers                 []gpuLayer
+	norms, signs, rope     *metal.Buffer
+	hidden, inter, head    *rotation
+	cfg                    *modelConfig
+	noInter                bool // down's inputs are not rotated
+	bits                   int  // weight scheme, as in gpu.metal: 8 (Q8), 9 (Q8B), or 4 (Q4)
+	positions              int  // RoPE table rows
 	// lm is the language-model head W·Rᵀ as Q8B int8 blocks with FP16
 	// scales, padded with zero rows to lmRows; nil unless loaded.
-	lm      *metal.Buffer
-	lmScale int // byte offset of the scales in lm
-	lmRows  int
-	cache   *wcache.File // holds the layer and head buffers' memory
+	lm        *metal.Buffer
+	lmScale   int // byte offset of the scales in lm
+	lmRows    int
+	cache     *wcache.File // holds the layer buffers' memory
+	headCache *wcache.File // holds the head's, once it is loaded
 }
 
 // gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
@@ -89,6 +109,9 @@ func alignUp(n int) int { return (n + gpuAlign - 1) &^ (gpuAlign - 1) }
 // the model's widths, fit the model: 128-wide heads, at most eight query
 // heads per key/value head, and projection widths that tile evenly.
 func gpuGeometry(c *modelConfig) error {
+	if c.hybrid {
+		return hybridGeometry(c)
+	}
 	qdim := c.heads * c.headDim
 	group := c.heads / c.kvHeads
 	rot := newRotation(c.intermediate).block
@@ -118,7 +141,7 @@ var (
 
 // loadGPU quantizes every projection, and the head when named, into GPU
 // buffers.
-func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string) error {
+func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	c := &m.cfg
 	if err := gpuGeometry(c); err != nil {
 		return err
@@ -131,21 +154,35 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		positions: min(c.maxPositions, gpuMaxPositions)}
 	m.gpu = g // Release frees what is loaded when loading fails
 	suffix := map[int]string{8: "", 9: "_q8", 4: "_q4"}[bits]
-	lib, err := dev.Compile(gpuSourceFor(c))
+	src := gpuSourceFor(c)
+	if c.hybrid {
+		src += hybridDefines(c) + gpuHybridSource
+	}
+	lib, err := dev.Compile(src)
 	if err != nil {
 		return err
 	}
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
-	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate"},
+	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.probe, "probe1"}, {&g.rotate, "rotate"},
+		{&g.decodeHead, "decode_head"}, {&g.decodeSample, "decode_sample"}, {&g.decodeGather, "decode_gather"},
 		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
 		{&g.finish[0], "mm_finish_store" + suffix}, {&g.finish[1], "mm_finish_add" + suffix}, {&g.finish[2], "mm_finish_swiglu" + suffix},
 		{&g.mmHead[0], "mm_head_w"}, {&g.mmHead[1], "mm_head_16"}, {&g.finishHead, "mm_finish_store_q8"},
-		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"}} {
+		{&g.mm[1][0], "mm_qkv" + suffix + "_16"}, {&g.mm[1][1], "mm_o" + suffix + "_16"}, {&g.mm[1][2], "mm_gateup" + suffix + "_16"}, {&g.mm[1][3], "mm_down" + suffix + "_16"},
+		{&g.moeRouter, "moe_router"}, {&g.moeRoute, "moe_route"}, {&g.moeGateUp, "moe_gateup_q8"}, {&g.moeDown, "moe_down_q8"},
+		{&g.moeTiles, "moe_tiles"}, {&g.moeCombine, "moe_combine"},
+		{&g.moeGateUpMM[0], "moe_gateup_mm_w"}, {&g.moeGateUpMM[1], "moe_gateup_mm_16"},
+		{&g.moeDownMM[0], "moe_down_mm_w"}, {&g.moeDownMM[1], "moe_down_mm_16"}} {
 		if *p.dst, err = dev.Pipeline(lib, p.name); err != nil {
+			return err
+		}
+	}
+	if c.hybrid {
+		if err := g.hybridPipelines(lib); err != nil {
 			return err
 		}
 	}
@@ -178,7 +215,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		copy(norms[2*i*c.headDim:], m.layers[i].qNorm)
 		copy(norms[(2*i+1)*c.headDim:], m.layers[i].kNorm)
 	}
-	half := c.headDim / 2
+	half := len(c.invFreq) // rotary dimensions / 2
 	if g.rope, err = dev.Buffer(4 * 2 * g.positions * half); err != nil {
 		return err
 	}
@@ -191,57 +228,68 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		}
 	}
 
-	// Every layer's projections share one buffer: int8 or 4-bit rows, then
-	// their scales, at the same offsets in every layer.
-	var shape gpuLayer
-	layerBytes := 0
-	place := func(rows, k int) (int, int) {
-		w := layerBytes
-		if bits == 4 {
-			layerBytes = alignUp(layerBytes + rows*k/2)
-		} else {
-			layerBytes = alignUp(layerBytes + rows*k)
+	// Each layer's projections share one buffer: int8 or 4-bit rows, then
+	// their scales. Layers of a kind have the same offsets.
+	shapes, sizes := make([]gpuLayer, c.layers), make([]int, c.layers)
+	counts := [2]int{} // attention and DeltaNet layers so far
+	for i := range shapes {
+		layerBytes := 0
+		place := func(rows, k int) (int, int) {
+			w := layerBytes
+			if bits == 4 {
+				layerBytes = alignUp(layerBytes + rows*k/2)
+			} else {
+				layerBytes = alignUp(layerBytes + rows*k)
+			}
+			s := layerBytes
+			if bits == 8 {
+				layerBytes = alignUp(layerBytes + 4*rows)
+			} else {
+				layerBytes = alignUp(layerBytes + 2*rows*(k/q4Group))
+			}
+			return w, s
 		}
-		s := layerBytes
-		if bits == 8 {
-			layerBytes = alignUp(layerBytes + 4*rows)
-		} else {
-			layerBytes = alignUp(layerBytes + 2*rows*(k/q4Group))
+		shape := &shapes[i]
+		shape.linear = c.hybrid && c.linear[i]
+		kind := 0
+		if shape.linear {
+			kind = 1
 		}
-		return w, s
-	}
-	shape.qkv, shape.qkvScale = place(qdim+2*kv, h)
-	shape.o, shape.oScale = place(h, qdim)
-	shape.gu, shape.guScale = place(2*inter, h)
-	shape.d, shape.dScale = place(h, inter)
-	headBytes := 0
-	if headName != "" {
-		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
-		// rotates the normalized state.
-		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
-		g.lmScale = alignUp(g.lmRows * h)
-		headBytes = g.lmScale + 2*g.lmRows*(h/q4Group)
+		shape.index = counts[kind]
+		counts[kind]++
+		switch {
+		case shape.linear:
+			shape.qkv, shape.qkvScale = place(c.dnIn(), h)
+			shape.o, shape.oScale = place(h, c.dnValueHeads*c.dnValueDim)
+		case c.hybrid: // q and its gate, head by head, then k and v
+			shape.qkv, shape.qkvScale = place(2*qdim+2*kv, h)
+			shape.o, shape.oScale = place(h, qdim)
+		default:
+			shape.qkv, shape.qkvScale = place(qdim+2*kv, h)
+			shape.o, shape.oScale = place(h, qdim)
+		}
+		if e := c.allExperts(); e > 0 {
+			shape.router = layerBytes
+			layerBytes = alignUp(layerBytes + 4*routerRows(c)*h)
+			shape.gu, shape.guScale = place(e*2*inter, h)
+			shape.d, shape.dScale = place(e*h, inter)
+		} else {
+			shape.gu, shape.guScale = place(2*inter, h)
+			shape.d, shape.dScale = place(h, inter)
+		}
+		sizes[i] = layerBytes
 	}
 	// The buffers are regions of a cache entry: quantized on the first load,
-	// mapped as they are afterwards.
-	cut := func(l *wcache.Layout) (layers [][]byte, lm []byte) {
-		for range c.layers {
-			layers = append(layers, l.Take(layerBytes))
+	// mapped as they are afterwards. The head has an entry of its own.
+	cut := func(l *wcache.Layout) (layers [][]byte) {
+		for _, n := range sizes {
+			layers = append(layers, l.Take(n))
 		}
-		if headBytes > 0 {
-			lm = l.Take(headBytes)
-		}
-		return layers, lm
+		return layers
 	}
 	size := wcache.NewLayout(nil)
 	cut(size)
-	// Weights with and without a head are different entries, so loaders of
-	// both keep both.
-	kind := m.format
-	if headName != "" {
-		kind += "-head"
-	}
-	key, err := wcache.Key(st.Dir(), kind, gpuCacheVersion, m.prefix, headName)
+	key, err := wcache.Key(st.Dir(), m.format, gpuCacheVersion, m.prefix, "")
 	if err != nil {
 		return err
 	}
@@ -249,65 +297,125 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		return err
 	}
 	if g.cache.Fresh() {
-		layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
-		if err := m.prepareGPU(st, g, shape, layers, lm, downIn, headName, g.cache.Done); err != nil {
+		if err := m.prepareGPU(st, g, shapes, cut(wcache.NewLayout(g.cache.Payload())), nil, downIn, "", g.cache.Done); err != nil {
 			return err
 		}
 		g.cache.Commit()
 	}
 	// The GPU reads the committed, read-only entry in place.
-	layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
+	layers := cut(wcache.NewLayout(g.cache.Payload()))
 	for i := range g.layers {
-		g.layers[i] = shape
+		g.layers[i] = shapes[i]
 		if g.layers[i].buf, err = dev.Wrap(layers[i]); err != nil {
 			return err
 		}
 	}
-	if lm != nil {
-		if g.lm, err = dev.Wrap(lm); err != nil {
-			return err
-		}
+	if c.hybrid {
+		return g.uploadDeltaNet(m)
 	}
 	return nil
 }
 
-// prepareGPU quantizes every projection into its layer's region, and the
-// head, when named, into lm.
-func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuLayer, layers [][]byte, lm []byte, downIn *rotation, headName string, filled func([]byte)) error {
+// loadHead quantizes the head named name, W·Rᵀ as int8 blocks (Q8B), into
+// a cache entry of its own beside the layers': LogitsInto rotates the
+// normalized state.
+func (g *gpuModel) loadHead(m *Weights, st *safetensors.Checkpoint, name string) error {
+	c := &m.cfg
+	h := c.hidden
+	rows := (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
+	scale := alignUp(rows * h)
+	n := scale + 2*rows*(h/q4Group)
+	key, err := wcache.Key(st.Dir(), m.format+"-lm", gpuCacheVersion, m.prefix, name)
+	if err != nil {
+		return err
+	}
+	size := wcache.NewLayout(nil)
+	size.Take(n)
+	cache, err := wcache.Open(key, size.Size())
+	if err != nil {
+		return err
+	}
+	g.lmRows, g.lmScale = rows, scale
+	if cache.Fresh() {
+		if err := m.prepareGPU(st, g, nil, nil, wcache.NewLayout(cache.Payload()).Take(n), nil, name, cache.Done); err != nil {
+			cache.Close()
+			g.lmRows, g.lmScale = 0, 0
+			return err
+		}
+		cache.Commit()
+	}
+	if g.lm, err = g.dev.Wrap(wcache.NewLayout(cache.Payload()).Take(n)); err != nil {
+		cache.Close()
+		g.lmRows, g.lmScale = 0, 0
+		return err
+	}
+	g.headCache = cache
+	return nil
+}
+
+// gpuJob quantizes one matrix, or a chunk of one, into a layer's region.
+type gpuJob struct {
+	name     string
+	n, k     int
+	norm     []float32 // folded input RMSNorm weight
+	in, out  *rotation // input- and output-side rotations; out spans a chunk
+	buf      []byte
+	base, sc int // byte offsets of row 0 and scale 0
+	step     int // destination row stride in rows
+	scaleMul float32
+	row0     int    // destination row of source row 0
+	rows     [2]int // for a chunk of a large matrix: its source rows
+	f32      bool   // stored as FP32 rows at base, unquantized
+	dims     []int  // the tensor's shape when not [n][k], as stacked experts'
+}
+
+// prepareGPU quantizes every projection into its layer's region (layers
+// may be none), and the head, when named, into lm.
+func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shapes []gpuLayer, layers [][]byte, lm []byte, downIn *rotation, headName string, filled func([]byte)) error {
 	c := &m.cfg
 	bits := g.bits
 	h, kv, inter, qdim := c.hidden, c.kvDim, c.intermediate, c.heads*c.headDim
 
-	type job struct {
-		name     string
-		n, k     int
-		norm     []float32 // folded input RMSNorm weight
-		in, out  *rotation // input- and output-side rotations
-		buf      []byte
-		base, sc int // byte offsets of row 0 and scale 0
-		step     int // destination row stride in rows
-		scaleMul float32
-		row0     int    // destination row of source row 0
-		rows     [2]int // for a chunk of a large matrix: its source rows
-	}
+	type job = gpuJob
 	var jobs []job
-	for i := range m.layers {
-		l, gl, buf := &m.layers[i], &shape, layers[i]
+	for i := range layers {
+		l, gl, buf := &m.layers[i], &shapes[i], layers[i]
 		p := fmt.Sprintf("%slayers.%d.", m.prefix, i)
+		if c.hybrid {
+			jobs = m.hybridJobs(jobs, g, i, gl, buf, downIn)
+			continue
+		}
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}},
-			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}},
-			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}},
-			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}},
-			job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}},
-			job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}},
-			job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}},
+			job{p + "self_attn.q_proj.weight", qdim, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, 0, [2]int{}, false, nil},
+			job{p + "self_attn.k_proj.weight", kv, h, l.attnNorm, g.hidden, nil, buf, gl.qkv, gl.qkvScale, 1, 1, qdim, [2]int{}, false, nil},
+			job{p + "self_attn.v_proj.weight", kv, h, l.attnNorm, g.hidden, g.head, buf, gl.qkv, gl.qkvScale, 1, 1, qdim + kv, [2]int{}, false, nil},
+			job{p + "self_attn.o_proj.weight", h, qdim, nil, g.head, g.hidden, buf, gl.o, gl.oScale, 1, 1, 0, [2]int{}, false, nil},
 		)
+		if c.experts == 0 {
+			jobs = append(jobs,
+				job{p + "mlp.gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 0, [2]int{}, false, nil},
+				job{p + "mlp.up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, 1, [2]int{}, false, nil},
+				job{p + "mlp.down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, 0, [2]int{}, false, nil},
+			)
+			continue
+		}
+		// The router reads the normalized residual as gate/up does; each
+		// expert's gate and up rows alternate, expert after expert.
+		jobs = append(jobs, job{p + "mlp.gate.weight", c.experts, h, l.mlpNorm, g.hidden, nil, buf, gl.router, 0, 1, 1, 0, [2]int{}, true, nil})
+		for e := range c.experts {
+			q := fmt.Sprintf("%smlp.experts.%d.", p, e)
+			jobs = append(jobs,
+				job{q + "gate_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, e * 2 * inter, [2]int{}, false, nil},
+				job{q + "up_proj.weight", inter, h, l.mlpNorm, g.hidden, nil, buf, gl.gu, gl.guScale, 2, 1, e*2*inter + 1, [2]int{}, false, nil},
+				job{q + "down_proj.weight", h, inter, nil, downIn, g.hidden, buf, gl.d, gl.dScale, 1, 1, e * h, [2]int{}, false, nil},
+			)
+		}
 	}
 	// The head, the largest matrix, is read in chunks of at most one
 	// projection.
-	for r := 0; headName != "" && r < c.vocab; r += inter {
-		jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+inter, c.vocab)}})
+	chunk := max(inter, 4096)
+	for r := 0; headName != "" && r < c.vocab; r += chunk {
+		jobs = append(jobs, job{headName, c.vocab, h, nil, g.hidden, nil, lm, 0, g.lmScale, 1, 1, 0, [2]int{r, min(r+chunk, c.vocab)}, false, nil})
 	}
 	// GPTQ-rounded weights made by QuantizeGPTQ replace round-to-nearest.
 	var pre *gptqFile
@@ -371,7 +479,11 @@ func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuL
 				if j.rows[1] > 0 {
 					r0, n = j.rows[0], j.rows[1]-j.rows[0]
 				}
-				t, err := st.Lookup(j.name, j.n, j.k)
+				dims := j.dims
+				if dims == nil {
+					dims = []int{j.n, j.k}
+				}
+				t, err := st.Lookup(j.name, dims...)
 				if err == nil && t.DType != "BF16" {
 					err = fmt.Errorf("qwen3: %s is %s; the loader expects the official BF16 checkpoint", j.name, t.DType)
 				}
@@ -401,9 +513,14 @@ func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shape gpuL
 					}
 				}
 				if j.out != nil {
-					j.out.applyRows(mat, j.n, j.k)
+					j.out.applyRows(mat, n, j.k)
 				}
 				buf := j.buf
+				if j.f32 {
+					copy(floats(buf[j.base:])[(j.row0+r0*j.step)*j.k:], mat[:n*j.k])
+					finish(j)
+					continue
+				}
 				for r := range n {
 					row := mat[r*j.k : (r+1)*j.k]
 					dst := j.row0 + (r0+r)*j.step
@@ -550,7 +667,45 @@ type gpuWorkspace struct {
 	logitRows                               int // rows the logits buffer holds
 	headArgs                                gemvArgs
 	tail                                    []float32 // a single sequence's last states, when set
-	oneSeq                                  [1][]int
+	// A Decoder run's tokens and logits, grown to the largest run.
+	decodeTokens, decodeLogits *metal.Buffer
+	decodeArgs                 decodeArgs
+	probe                      *Probe // the head a one-token pass reads, when set
+	probeOut                   *metal.Buffer
+	probeArgs                  probeArgs
+	oneSeq                     [1][]int
+	// A mixture of experts: the router's logits, each row's experts and
+	// weights, and the arguments of its kernels. Batches group their (row,
+	// slot) pairs by expert: each expert's count, each pair's rank among its
+	// expert's, the pairs expert after expert, the GEMM tiles over them, and
+	// each pair's weighted output.
+	route, ids, wts               *metal.Buffer
+	counts, rank, list, tiles     *metal.Buffer
+	moeOut                        *metal.Buffer
+	moeRouter, moeGateUp, moeDown moeArgs
+	moeTiles                      moeTileArgs
+	hy                            hybridWork
+}
+
+// moeTileArgs is MoeTileArgs in gpu.metal.
+type moeTileArgs struct {
+	pairs, tile, tiles uint32
+}
+
+// moeGroupRows is the batch size from which experts run grouped: below it,
+// each row streams its own experts' weights.
+var moeGroupRows = 16
+
+// moeArgs is MoeArgs in gpu.metal.
+type moeArgs struct {
+	k, n     uint32
+	eps      float32
+	parts    uint32
+	experts  uint32
+	topK     uint32
+	partsOut uint32
+	stride   uint32
+	shared   uint32
 }
 
 // gpuTokenByToken forces the single-token kernels and gpuScalarAttention
@@ -586,6 +741,11 @@ type gemvArgs struct {
 	parts uint32
 }
 
+// probeArgs is ProbeArgs in gpu.metal.
+type probeArgs struct {
+	head, from, n uint32
+}
+
 type attnArgs struct {
 	pos, ropeSin    uint32
 	eps, scale      float32
@@ -597,10 +757,35 @@ type attnArgs struct {
 type gpuPrefix struct {
 	kc, vc   *metal.Buffer
 	capacity int
+	state    *gpuState // a hybrid model's recurrent state after the prefix
+	// Snapshots of state where extensions began (hybrid_state.go), states
+	// no longer needed, and a clock that orders their use.
+	snaps, spare []*gpuState
+	clock        uint64
+}
+
+// copyStates makes p's state and snapshots src's, up to token n.
+func (p *gpuPrefix) copyStates(src *gpuPrefix, n int) {
+	p.state.copyFrom(src.state)
+	p.spare = append(p.spare, p.snaps...)
+	p.snaps = p.snaps[:0]
+	for _, s := range src.snaps {
+		if s.pos > n {
+			continue
+		}
+		var d *gpuState
+		if len(p.spare) > 0 {
+			d, p.spare = p.spare[len(p.spare)-1], p.spare[:len(p.spare)-1]
+		} else if d, _ = newStateLike(src.state); d == nil {
+			return // the state rewinds further back instead
+		}
+		d.copyFrom(s)
+		p.snaps = append(p.snaps, d)
+	}
 }
 
 func (g *gpuModel) newPrefix(capacity int) (*gpuPrefix, error) {
-	n := 4 * g.cfg.layers * capacity * g.cfg.kvDim
+	n := 4 * g.cfg.attnLayers() * capacity * g.cfg.kvDim
 	kc, err := g.dev.Buffer(n)
 	if err != nil {
 		return nil, err
@@ -610,7 +795,14 @@ func (g *gpuModel) newPrefix(capacity int) (*gpuPrefix, error) {
 		kc.Release()
 		return nil, err
 	}
-	return &gpuPrefix{kc: kc, vc: vc, capacity: capacity}, nil
+	p := &gpuPrefix{kc: kc, vc: vc, capacity: capacity}
+	if g.cfg.hybrid {
+		if p.state, err = g.newState(); err != nil {
+			p.release()
+			return nil, err
+		}
+	}
+	return p, nil
 }
 
 // copyFrom copies the first n values of each layer's keys and values.
@@ -627,6 +819,13 @@ func (p *gpuPrefix) copyFrom(src *gpuPrefix, layers, n int) {
 func (p *gpuPrefix) release() {
 	p.kc.Release()
 	p.vc.Release()
+	if p.state != nil {
+		p.state.release()
+	}
+	for _, s := range append(p.snaps, p.spare...) {
+		s.release()
+	}
+	p.snaps, p.spare = nil, nil
 }
 
 func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
@@ -635,22 +834,45 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	rows := gpuRows(g.bits)
 	w := &gpuWorkspace{g: g, rows: gpuPositions}
 	var err error
+	// Each row's experts write their own activations; their down kernel
+	// publishes a partial sum per 16 rows of the residual.
+	// A hybrid layer's input projection is gated attention's or DeltaNet's.
+	qkvWidth := qdim + 2*c.kvDim
+	if c.hybrid {
+		qkvWidth = max(2*qdim+2*c.kvDim, c.dnIn())
+	}
+	// Grouped, each (row, slot) pair keeps its expert's output.
+	perRow, rowParts, experts, route, pairs, pairOut := c.intermediate, c.hidden/mmColumns, 1, 1, gpuPositions, 1
+	if c.experts > 0 {
+		perRow, rowParts, experts, route = c.slots()*c.intermediate, c.hidden/rows, c.allExperts(), routerRows(c)
+		pairs *= c.slots()
+		pairOut = pairs * c.hidden
+	}
 	for _, b := range []struct {
 		dst **metal.Buffer
 		n   int
 	}{
 		{&w.h, 4 * gpuPositions * c.hidden},
-		{&w.qkv, 4 * gpuPositions * (qdim + 2*c.kvDim)},
-		{&w.ctx, 4 * gpuPositions * qdim},
-		{&w.act, 4 * gpuPositions * c.intermediate},
-		{&w.kc, 4 * c.layers * gpuPositions * c.kvDim},
-		{&w.vc, 4 * c.layers * gpuPositions * c.kvDim},
+		{&w.qkv, 4 * gpuPositions * qkvWidth},
+		{&w.ctx, 4 * gpuPositions * max(qdim, c.dnValueHeads*c.dnValueDim)},
+		{&w.act, 4 * gpuPositions * perRow},
+		{&w.kc, 4 * c.attnLayers() * gpuPositions * c.kvDim},
+		{&w.vc, 4 * c.attnLayers() * gpuPositions * c.kvDim},
 		{&w.embedParts, 4 * gpuPositions},
 		{&w.info, 8 * gpuPositions},
 		{&w.scratch, 4 * mmScratchFloats},
-		{&w.attnParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
+		{&w.attnParts, 4 * max(c.hidden/rows, gpuPositions*rowParts)},
 		{&w.mlpParts, 4 * max(c.hidden/rows, gpuPositions*c.hidden/mmColumns)},
 		{&w.logits, 4 * max(g.lmRows, 1)},
+		{&w.route, 4 * gpuPositions * route},
+		{&w.ids, 4 * pairs},
+		{&w.wts, 4 * pairs},
+		{&w.counts, 4 * experts},
+		{&w.rank, 4 * pairs},
+		{&w.list, 4 * pairs},
+		{&w.tiles, 16 * (pairs/16 + experts)},
+		{&w.moeOut, 4 * pairOut},
+		{&w.probeOut, 4 * maxProbe},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
 			return nil, err
@@ -665,8 +887,127 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	w.guArgs = gemvArgs{uint32(c.hidden), uint32(2 * c.intermediate), eps, parts}
 	w.dArgs = gemvArgs{uint32(c.intermediate), uint32(c.hidden), eps, 0}
 	w.headArgs = gemvArgs{uint32(c.hidden), uint32(g.lmRows), eps, 0}
-	w.attn = attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: eps, scale: float32(c.attnScale)}
+	w.attn = attnArgs{ropeSin: uint32(g.positions * len(c.invFreq)), eps: eps, scale: float32(c.attnScale)}
+	if c.experts > 0 {
+		e, k := uint32(c.experts), uint32(c.topK)
+		// A shared expert is expert E, in every token's last slot.
+		sh := uint32(0)
+		if c.hybrid {
+			sh = 1
+		}
+		w.moeRouter = moeArgs{k: uint32(c.hidden), n: e, eps: eps, experts: e, topK: k, stride: uint32(routerRows(c)), shared: sh}
+		w.moeGateUp = moeArgs{k: uint32(c.hidden), n: uint32(2 * c.intermediate), eps: eps, experts: e + sh, topK: k + sh}
+		w.moeDown = moeArgs{k: uint32(c.intermediate), n: uint32(c.hidden), eps: eps, experts: e + sh, topK: k + sh, partsOut: uint32(c.hidden / rows)}
+	}
+	if c.hybrid {
+		if err := g.newHybridWork(w); err != nil {
+			return nil, err
+		}
+	}
 	return w, nil
+}
+
+// encodeMoE encodes a layer's mixture of experts for rows rows of the
+// residual at hOff: the router over the normalized residual (parts partial
+// sums per row in mlpParts), each row's top experts, their SwiGLU, and the
+// weighted sum of their down projections into the residual, which publishes
+// hidden/16 partial sums per row in attnParts.
+func (w *gpuWorkspace) encodeMoE(gl *gpuLayer, rows, hOff, parts int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	w.moeRouter.parts, w.moeGateUp.parts = uint32(parts), uint32(parts)
+	e.SetPipeline(g.moeRouter)
+	e.SetBuffer(gl.buf, gl.router, 0)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.route, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeRouter), int(unsafe.Sizeof(w.moeRouter)), 5)
+	e.SetBuffer(w.counts, 0, 6)
+	e.Dispatch(metal.Size{X: routerRows(c) / 16, Y: rows, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeRoute)
+	e.SetBuffer(w.route, 0, 0)
+	e.SetBuffer(w.ids, 0, 1)
+	e.SetBuffer(w.wts, 0, 2)
+	e.SetBytes(unsafe.Pointer(&w.moeRouter), int(unsafe.Sizeof(w.moeRouter)), 3)
+	e.SetBuffer(w.counts, 0, 4)
+	e.SetBuffer(w.rank, 0, 5)
+	e.Dispatch(metal.Size{X: rows, Y: 1, Z: 1}, metal.Size{X: c.experts, Y: 1, Z: 1})
+	if rows >= moeGroupRows {
+		w.encodeGroupedExperts(gl, rows, hOff)
+		return
+	}
+
+	e.SetPipeline(g.moeGateUp)
+	e.SetBuffer(gl.buf, gl.gu, 0)
+	e.SetBuffer(gl.buf, gl.guScale, 1)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.act, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeGateUp), int(unsafe.Sizeof(w.moeGateUp)), 5)
+	e.SetBuffer(w.ids, 0, 6)
+	e.Dispatch(metal.Size{X: 2 * c.intermediate / 16, Y: c.slots(), Z: rows}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeDown)
+	e.SetBuffer(gl.buf, gl.d, 0)
+	e.SetBuffer(gl.buf, gl.dScale, 1)
+	e.SetBuffer(w.act, 0, 2)
+	e.SetBuffer(w.h, hOff, 3)
+	e.SetBytes(unsafe.Pointer(&w.moeDown), int(unsafe.Sizeof(w.moeDown)), 5)
+	e.SetBuffer(w.attnParts, 0, 6)
+	e.SetBuffer(w.ids, 0, 7)
+	e.SetBuffer(w.wts, 0, 8)
+	e.Dispatch(metal.Size{X: c.hidden / 16, Y: rows, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+}
+
+// encodeGroupedExperts encodes the experts of a batch grouped by expert:
+// each expert multiplies all the rows routed to it as one GEMM, so its
+// weights stream once per tile of pairs rather than once per row, and each
+// row then sums its experts' weighted outputs into the residual.
+func (w *gpuWorkspace) encodeGroupedExperts(gl *gpuLayer, rows, hOff int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	pairs, experts := rows*c.slots(), c.allExperts()
+	// Wide tiles once experts average 24 pairs or more.
+	tile, kind := 16, 1
+	if pairs >= 24*min(experts, pairs) {
+		tile, kind = 32, 0
+	}
+	tiles := (pairs+tile-1)/tile + min(experts, pairs)
+	w.moeTiles = moeTileArgs{pairs: uint32(pairs), tile: uint32(tile), tiles: uint32(tiles)}
+	e.SetPipeline(g.moeTiles)
+	e.SetBuffer(w.ids, 0, 0)
+	e.SetBuffer(w.rank, 0, 1)
+	e.SetBuffer(w.counts, 0, 2)
+	e.SetBuffer(w.list, 0, 3)
+	e.SetBuffer(w.tiles, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeGateUp), int(unsafe.Sizeof(w.moeGateUp)), 5)
+	e.SetBytes(unsafe.Pointer(&w.moeTiles), int(unsafe.Sizeof(w.moeTiles)), 6)
+	e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeGateUpMM[kind])
+	e.SetBuffer(gl.buf, gl.gu, 0)
+	e.SetBuffer(gl.buf, gl.guScale, 1)
+	e.SetBuffer(w.h, hOff, 2)
+	e.SetBuffer(w.act, 0, 3)
+	e.SetBuffer(w.mlpParts, 0, 4)
+	e.SetBytes(unsafe.Pointer(&w.moeGateUp), int(unsafe.Sizeof(w.moeGateUp)), 5)
+	e.SetBuffer(w.list, 0, 6)
+	e.SetBuffer(w.tiles, 0, 7)
+	e.SetBuffer(w.wts, 0, 8)
+	e.Dispatch(metal.Size{X: 2 * c.intermediate / mmColumns, Y: tiles, Z: 1}, metal.Size{X: mmThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeDownMM[kind])
+	e.SetBuffer(gl.buf, gl.d, 0)
+	e.SetBuffer(gl.buf, gl.dScale, 1)
+	e.SetBuffer(w.act, 0, 2)
+	e.SetBuffer(w.moeOut, 0, 3)
+	e.SetBytes(unsafe.Pointer(&w.moeDown), int(unsafe.Sizeof(w.moeDown)), 5)
+	e.Dispatch(metal.Size{X: c.hidden / mmColumns, Y: tiles, Z: 1}, metal.Size{X: mmThreads, Y: 1, Z: 1})
+
+	e.SetPipeline(g.moeCombine)
+	e.SetBuffer(w.moeOut, 0, 0)
+	e.SetBuffer(w.h, hOff, 3)
+	e.SetBuffer(w.attnParts, 0, 6)
+	e.Dispatch(metal.Size{X: c.hidden / mmColumns, Y: rows, Z: 1}, metal.Size{X: mmColumns, Y: 1, Z: 1})
 }
 
 // gemv encodes one projection: weights at wOff and scales at sOff in buf,
@@ -693,6 +1034,38 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 // keys and values after its first past rows, a pass at a time when it is
 // longer than one pass. Placeholder tokens of embeds take its rows.
 func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool, embeds Embeds) error {
+	if !m.cfg.hybrid {
+		return w.batchPacked(m, seqs, dst, pre, past, shared, embeds)
+	}
+	// A Qwen3.5 sequence runs on its own recurrent state: the prefix's when
+	// it extends one, a copy of it for each continuation of a shared prefix,
+	// or the workspace's from nothing.
+	if pre != nil && !shared && len(seqs) > 1 {
+		return errors.New("qwen3: a Qwen3.5 model extends one sequence at a time")
+	}
+	for s := range seqs {
+		state := w.hy.own
+		switch {
+		case shared:
+			state.copyFrom(pre.state)
+		case pre != nil:
+			state = pre.state
+			if past == 0 {
+				state.reset()
+			}
+		default:
+			state.reset()
+		}
+		w.hy.state = state
+		if err := w.batchPacked(m, seqs[s:s+1], dst[s:s+1], pre, past, shared, embeds); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// batchPacked is batch with sequences packed into shared passes.
+func (w *gpuWorkspace) batchPacked(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool, embeds Embeds) error {
 	c := &m.cfg
 	own := 4 * gpuPositions * c.kvDim
 	w.curK, w.curV, w.curStride = w.kc, w.vc, own
@@ -748,13 +1121,8 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 // in one command buffer.
 func (w *gpuWorkspace) logitsRowsInto(m *Weights, hidden, dst []float32, k int) error {
 	g, c := w.g, &m.cfg
-	if k > w.logitRows {
-		b, err := g.dev.Buffer(4 * k * g.lmRows)
-		if err != nil {
-			return err
-		}
-		w.logits.Release()
-		w.logits, w.logitRows = b, k
+	if err := w.fitHead(k); err != nil {
+		return err
 	}
 	x := floats(w.h.Bytes())[:k*c.hidden]
 	copy(x, hidden)
@@ -782,9 +1150,29 @@ func (w *gpuWorkspace) logitsRowsInto(m *Weights, hidden, dst []float32, k int) 
 	return nil
 }
 
+// fitHead sizes the logits buffer for k rows of the head, which may have
+// loaded after the workspace was made.
+func (w *gpuWorkspace) fitHead(k int) error {
+	g := w.g
+	w.headArgs.n = uint32(g.lmRows)
+	if len(w.logits.Bytes()) >= 4*k*g.lmRows {
+		return nil
+	}
+	b, err := g.dev.Buffer(4 * max(k, w.logitRows) * g.lmRows)
+	if err != nil {
+		return err
+	}
+	w.logits.Release()
+	w.logits, w.logitRows = b, max(k, w.logitRows)
+	return nil
+}
+
 // logits writes the head's logits for one post-final-norm state.
 func (w *gpuWorkspace) logitsInto(m *Weights, hidden, dst []float32) error {
 	g, c := w.g, &m.cfg
+	if err := w.fitHead(1); err != nil {
+		return err
+	}
 	x := floats(w.h.Bytes())[:c.hidden]
 	copy(x, hidden)
 	g.hidden.apply(x)
@@ -822,16 +1210,36 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 	}
 	e := &w.enc
 	g.dev.Begin(e, false)
-	if (gpuTokenByToken || rows == 1) && !w.shared {
+	hybrid := c.hybrid
+	if hybrid {
+		// A hybrid pass is one sequence, continuing the state it runs on.
+		if len(seqs) != 1 || w.hy.state.pos != w.past {
+			return fmt.Errorf("qwen3: a Qwen3.5 pass continues its state at %d tokens, not %d", w.hy.state.pos, w.past)
+		}
+	}
+	switch {
+	case (gpuTokenByToken || rows == 1) && !w.shared:
 		if len(seqs) != 1 {
 			panic("qwen3: token-by-token GPU path takes one sequence")
 		}
-		w.encodeTokens(rows)
-	} else {
+		if hybrid {
+			w.encodeHybridTokens(rows)
+		} else {
+			w.encodeTokens(rows)
+		}
+	case hybrid:
+		w.encodeHybridBatch(rows)
+	default:
 		w.encodeBatch(rows)
 	}
 	if err := e.Wait(); err != nil {
 		return err
+	}
+	if hybrid {
+		w.hy.state.pos += rows
+	}
+	if p := w.probe; p != nil {
+		copy(p.Probs, floats(w.probeOut.Bytes()))
 	}
 	if k := len(w.tail) / c.hidden; k > 1 && len(seqs) == 1 && rows >= k {
 		for i := range k {
@@ -911,6 +1319,12 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 	g, c, e := w.g, w.g.cfg, &w.enc
 	qdim := c.heads * c.headDim
 	parts := c.hidden / mmColumns
+	// The partial sums the next layer's QKV reads: the down projection's,
+	// or the experts' (one per 16 rows).
+	qkvParts := parts
+	if c.experts > 0 {
+		qkvParts = c.hidden / 16
+	}
 	w.attn.pos = 0
 	w.perRow = uint32(c.intermediate / g.inter.block)
 	for i := range g.layers {
@@ -918,7 +1332,7 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		if i == 0 {
 			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.embedParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, 1)
 		} else {
-			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, parts)
+			w.mmDispatch(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, c.hidden, qdim+2*c.kvDim, rows, qkvParts)
 		}
 		e.SetPipeline(g.qkRope)
 		e.SetBuffer(w.qkv, 0, 0)
@@ -946,6 +1360,10 @@ func (w *gpuWorkspace) encodeBatch(rows int) {
 		}
 
 		w.mmDispatch(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, qdim, c.hidden, rows, 0)
+		if c.experts > 0 {
+			w.encodeMoE(gl, rows, 0, parts)
+			continue
+		}
 		w.mmDispatch(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, c.hidden, 2*c.intermediate, rows, parts)
 
 		if !g.noInter {
@@ -986,8 +1404,15 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 			e.SetBuffer(w.ctx, 0, 6)
 			e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
 			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
+			if p := w.probe; p != nil && p.Layer == i && t == n-1 {
+				w.encodeProbe(i)
+			}
 
 			w.gemv(g.o, gl.buf, gl.o, gl.oScale, w.ctx, 0, w.h, hOff, w.mlpParts, w.mlpParts, 0, &w.oArgs)
+			if c.experts > 0 {
+				w.encodeMoE(gl, 1, hOff, c.hidden/gpuRows(g.bits))
+				continue
+			}
 			w.gemv(g.gateup, gl.buf, gl.gu, gl.guScale, w.h, hOff, w.act, 0, w.mlpParts, w.mlpParts, 0, &w.guArgs)
 
 			if !g.noInter {
@@ -1003,10 +1428,213 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 	}
 }
 
+// gpuDecoder is a Decoder's heads and tables in GPU memory, FP16: heads
+// [steps][padded][hidden], with the final norm's weight and the rotation
+// folded in; tables [tables][rows][hidden], rotated, with each row's sum of
+// squares. It is read-only: a run's tokens and logits are its workspace's.
+type gpuDecoder struct {
+	heads, tables, sumsq *metal.Buffer
+	rows, padded         int
+}
+
+// decodeArgs is DecodeArgs in gpu.metal.
+type decodeArgs struct {
+	k, rows, parts uint32
+	eps            float32
+	topK           uint32
+	invTemp        float32
+	seed, draw     [2]uint32
+	step           uint32
+	_              uint32
+}
+
+func (g *gpuModel) newDecoder(heads, tables [][]float32, rows int, finalNorm []float32) (*gpuDecoder, error) {
+	h := g.cfg.hidden
+	d := &gpuDecoder{rows: rows, padded: (rows + 31) / 32 * 32}
+	for _, b := range []struct {
+		dst **metal.Buffer
+		n   int
+	}{
+		{&d.heads, 2 * len(heads) * d.padded * h},
+		{&d.tables, 2 * max(1, len(tables)) * rows * h},
+		{&d.sumsq, 4 * max(1, len(tables)) * rows},
+	} {
+		var err error
+		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
+			d.release()
+			return nil, err
+		}
+	}
+	halves := func(b *metal.Buffer) []uint16 {
+		return unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(b.Bytes()))), len(b.Bytes())/2)
+	}
+	hw, tw, sq := halves(d.heads), halves(d.tables), floats(d.sumsq.Bytes())
+	// Rows are rotated as the residual is, a matrix to a goroutine.
+	var wg sync.WaitGroup
+	prepare := func(src []float32, dst []uint16, norm []float32, sums []float32) {
+		defer wg.Done()
+		row := make([]float32, h)
+		for r := range rows {
+			copy(row, src[r*h:(r+1)*h])
+			if norm != nil {
+				for i := range row {
+					row[i] *= norm[i]
+				}
+			}
+			g.hidden.apply(row)
+			var ss float32
+			for i, v := range row {
+				dst[r*h+i] = q8gemm.F32ToF16(v)
+				v = safetensors.F16ToF32(dst[r*h+i])
+				ss += v * v
+			}
+			if sums != nil {
+				sums[r] = ss
+			}
+		}
+	}
+	for i, m := range heads {
+		wg.Add(1)
+		go prepare(m, hw[i*d.padded*h:], finalNorm, nil)
+	}
+	for i, m := range tables {
+		wg.Add(1)
+		go prepare(m, tw[i*rows*h:], nil, sq[i*rows:])
+	}
+	wg.Wait()
+	return d, nil
+}
+
+func (d *gpuDecoder) release() {
+	for _, b := range []*metal.Buffer{d.heads, d.tables, d.sumsq} {
+		if b != nil {
+			b.Release()
+		}
+	}
+}
+
+// decode encodes a Decoder's run in one command buffer: the input rows as
+// a pass does, then for each step the head over the last state, the draw,
+// and, but for the last, the drawn token's row as a one-token pass.
+func (w *gpuWorkspace) decode(m *Weights, d *gpuDecoder, pre *gpuPrefix, past int, ids []int, embeds Embeds, s Sampling, tokens []int, logits []float32) error {
+	g, c, e := w.g, &m.cfg, &w.enc
+	h := c.hidden
+	if len(ids) > w.rows {
+		return fmt.Errorf("qwen3: %d input tokens exceed the GPU context %d", len(ids), w.rows)
+	}
+	for _, b := range []struct {
+		buf **metal.Buffer
+		n   int
+	}{{&w.decodeTokens, 4 * len(tokens)}, {&w.decodeLogits, 4 * len(tokens) * d.padded}} {
+		if *b.buf == nil || len((*b.buf).Bytes()) < b.n {
+			nb, err := g.dev.Buffer(b.n)
+			if err != nil {
+				return err
+			}
+			if *b.buf != nil {
+				(*b.buf).Release()
+			}
+			*b.buf = nb
+		}
+	}
+	stride := 4 * pre.capacity * c.kvDim
+	w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
+	w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+	w.attn.base, w.attn.prefixLen = uint32(past), 0
+	w.past, w.shared = past, false
+	hs, parts := floats(w.h.Bytes()), floats(w.embedParts.Bytes())
+	spliced := 0
+	for t, id := range ids {
+		row := hs[t*h : (t+1)*h]
+		if len(embeds.Rows) != 0 && id == embeds.Token {
+			copy(row, embeds.Rows[spliced*h:])
+			spliced++
+		} else {
+			m.embedRow(id, row)
+		}
+		g.hidden.apply(row)
+		parts[t] = sumSquares(row)
+	}
+	g.dev.Begin(e, false)
+	w.encodeTokens(len(ids))
+	args := &w.decodeArgs
+	*args = decodeArgs{k: uint32(h), rows: uint32(d.rows), parts: w.qkvArgs.parts, eps: w.qkvArgs.eps,
+		topK: uint32(s.TopK), invTemp: 1 / s.Temperature, seed: [2]uint32{uint32(s.Seed), uint32(s.Seed >> 32)}}
+	size := int(unsafe.Sizeof(*args))
+	last := len(ids) - 1 // the row of the state the next head reads
+	for i := range tokens {
+		draw := s.Draw + uint64(i)
+		args.step, args.draw = uint32(i), [2]uint32{uint32(draw), uint32(draw >> 32)}
+		e.SetPipeline(g.decodeHead)
+		e.SetBuffer(d.heads, 2*i*d.padded*h, 0)
+		e.SetBuffer(w.h, 4*last*h, 1)
+		e.SetBuffer(w.attnParts, 0, 2)
+		e.SetBuffer(w.decodeLogits, 4*i*d.padded, 3)
+		e.SetBytes(unsafe.Pointer(args), size, 4)
+		e.Dispatch(metal.Size{X: d.padded / 32, Y: 1, Z: 1}, metal.Size{X: 256, Y: 1, Z: 1})
+
+		e.SetPipeline(g.decodeSample)
+		e.SetBuffer(w.decodeLogits, 4*i*d.padded, 0)
+		e.SetBuffer(w.decodeTokens, 0, 1)
+		e.SetBytes(unsafe.Pointer(args), size, 4)
+		e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 1024, Y: 1, Z: 1})
+		if i == len(tokens)-1 {
+			break
+		}
+		e.SetPipeline(g.decodeGather)
+		e.SetBuffer(d.tables, 2*i*d.rows*h, 0)
+		e.SetBuffer(d.sumsq, 4*i*d.rows, 1)
+		e.SetBuffer(w.decodeTokens, 0, 2)
+		e.SetBuffer(w.h, 0, 3)
+		e.SetBuffer(w.embedParts, 0, 4)
+		e.SetBytes(unsafe.Pointer(args), size, 5)
+		e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 256, Y: 1, Z: 1})
+		w.past += last + 1
+		last = 0
+		w.encodeTokens(1)
+	}
+	if err := e.Wait(); err != nil {
+		return err
+	}
+	out := unsafe.Slice((*int32)(unsafe.Pointer(unsafe.SliceData(w.decodeTokens.Bytes()))), len(tokens))
+	for i, t := range out {
+		tokens[i] = int(t)
+	}
+	if logits != nil {
+		all := floats(w.decodeLogits.Bytes())
+		for i := range tokens {
+			copy(logits[i*d.rows:(i+1)*d.rows], all[i*d.padded:])
+		}
+	}
+	return nil
+}
+
+// encodeProbe reads w.probe's head of layer i as attend1 weighed it, before
+// the next layer overwrites the query.
+func (w *gpuWorkspace) encodeProbe(i int) {
+	g, c, e, p := w.g, w.g.cfg, &w.enc, w.probe
+	w.probeArgs = probeArgs{uint32(p.Head), uint32(p.From), uint32(len(p.Probs))}
+	e.SetPipeline(g.probe)
+	e.SetBuffer(w.qkv, 0, 0)
+	e.SetBuffer(w.curK, i*w.curStride, 1)
+	e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
+	e.SetBuffer(g.rope, 0, 5)
+	e.SetBuffer(w.probeOut, 0, 6)
+	e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
+	e.SetBytes(unsafe.Pointer(&w.probeArgs), int(unsafe.Sizeof(w.probeArgs)), 8)
+	e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits, Y: 1, Z: 1})
+}
+
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut, w.probeOut} {
 		b.Release()
 	}
+	for _, b := range []*metal.Buffer{w.decodeTokens, w.decodeLogits} {
+		if b != nil {
+			b.Release()
+		}
+	}
+	w.hy.release()
 }
 
 func (m *Weights) releaseGPU() {
@@ -1017,10 +1645,11 @@ func (m *Weights) releaseGPU() {
 	for i := range g.layers {
 		g.layers[i].buf.Release()
 	}
-	for _, b := range []*metal.Buffer{g.lm, g.norms, g.signs, g.rope} {
+	for _, b := range []*metal.Buffer{g.lm, g.norms, g.signs, g.rope, g.dnParams} {
 		b.Release()
 	}
 	g.cache.Close()
+	g.headCache.Close()
 	g.dev.Close()
 	m.gpu = nil
 }

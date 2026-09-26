@@ -13,7 +13,10 @@ import (
 
 type gpuModel struct{}
 
-type gpuWorkspace struct{ tail []float32 }
+type gpuWorkspace struct {
+	tail  []float32
+	probe *Probe
+}
 
 type gpuPrefix struct{}
 
@@ -21,7 +24,7 @@ func (g *gpuModel) newPrefix(int) (*gpuPrefix, error) {
 	return nil, errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 
-func (m *Weights) loadGPU(*safetensors.Checkpoint, int, string) error {
+func (m *Weights) loadGPU(*safetensors.Checkpoint, int) error {
 	return errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 
@@ -41,6 +44,16 @@ func (p *gpuPrefix) copyFrom(*gpuPrefix, int, int) {}
 
 func (p *gpuPrefix) release() {}
 
+func (p *gpuPrefix) recurrent() bool { return false }
+
+func (p *gpuPrefix) copyStates(*gpuPrefix, int) {}
+
+func (e *Evaluator) rewind(*PrefixKV, int, bool, *Workspace) error { return nil }
+
+func (m *Weights) loadHybrid(*safetensors.Checkpoint) error {
+	return errors.New("qwen3: Qwen3.5 models need the GPU backend (darwin/arm64)")
+}
+
 func gpuSupports(*modelConfig) bool { return false }
 
 func (w *gpuWorkspace) logitsInto(*Weights, []float32, []float32) error {
@@ -56,4 +69,20 @@ func GPUAvailable() bool { return false }
 
 func (w *gpuWorkspace) logitsRowsInto(*Weights, []float32, []float32, int) error {
 	return errors.New("qwen3: GPU backend unavailable")
+}
+
+type gpuDecoder struct{}
+
+func (g *gpuModel) newDecoder([][]float32, [][]float32, int, []float32) (*gpuDecoder, error) {
+	return nil, errors.New("qwen3: no GPU")
+}
+
+func (d *gpuDecoder) release() {}
+
+func (w *gpuWorkspace) decode(*Weights, *gpuDecoder, *gpuPrefix, int, []int, Embeds, Sampling, []int, []float32) error {
+	return errors.New("qwen3: no GPU")
+}
+
+func (g *gpuModel) loadHead(*Weights, *safetensors.Checkpoint, string) error {
+	return errors.New("qwen3: no GPU")
 }

@@ -27,10 +27,10 @@ type Transcriber struct {
 	model               *Model
 	frontend            *FeatureWorkspace
 	fullFrontend        *FullFeatureWorkspace
-	encoder             *EncoderWorkspace
-	decoder             *DecoderScratch
-	tokenizer           *Tokenizer
-	policy              *GreedyPolicy
+	encoder             *encoderWorkspace
+	decoder             *decoderScratch
+	tokenizer           *tokenizer
+	policy              *greedyPolicy
 	mel                 []float32
 	audio               []float32
 	logits              []float32
@@ -55,33 +55,37 @@ type Transcriber struct {
 	closed              bool
 }
 
-// NewTranscriber prepares one reusable tiny.en worker with at most eight
-// execution slots, capped by GOMAXPROCS.
-func NewTranscriber(model *Model) (*Transcriber, error) {
-	return NewTranscriberWithWorkers(model, min(runtime.GOMAXPROCS(0), 8))
+// LaneOptions configures a Transcriber.
+type LaneOptions struct {
+	// Threads bounds the lane's CPU workers, including the caller: 1 through
+	// 64, or zero for GOMAXPROCS, at most eight.
+	Threads int
 }
 
-// NewTranscriberWithWorkers prepares one reusable tiny.en worker with an
-// explicit CPU slot count, including the caller. The count must be 1 through
-// 64. Use one Transcriber per concurrent caller and Close it when finished.
-func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) {
+// NewTranscriber prepares one reusable lane. Use one Transcriber per
+// concurrent caller and Close it when finished.
+func NewTranscriber(model *Model, opts LaneOptions) (*Transcriber, error) {
 	if model == nil {
 		return nil, ErrDecoderNilModel
 	}
+	workers := opts.Threads
+	if workers == 0 {
+		workers = min(runtime.GOMAXPROCS(0), 8)
+	}
 	dims := model.dims
-	if dims == (Dims{}) {
-		dims = TinyENDims // an unloaded model fails later with a weight error
+	if dims == (modelDims{}) {
+		dims = tinyENDims // an unloaded model fails later with a weight error
 	}
 	encoder, err := newEncoderWorkspace(dims, workers)
 	if err != nil {
 		return nil, err
 	}
-	tokenizer, err := NewTokenizer(EnglishOnly)
+	tokenizer, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		encoder.Close()
 		return nil, err
 	}
-	policy, err := NewGreedyPolicy(tokenizer, GreedyOptions{WithoutTimestamps: true})
+	policy, err := newGreedyPolicy(tokenizer, greedyOptions{WithoutTimestamps: true})
 	if err != nil {
 		encoder.Close()
 		return nil, err
@@ -95,10 +99,10 @@ func NewTranscriberWithWorkers(model *Model, workers int) (*Transcriber, error) 
 		tokenizer:    tokenizer,
 		policy:       policy,
 		mel:          make([]float32, MelBins*MelFrames),
-		audio:        make([]float32, AudioFrames*dims.AudioState),
-		logits:       make([]float32, VocabSize),
-		tokens:       make([]int, 0, TextContext+1),
-		history:      make([]int, 0, TextContext),
+		audio:        make([]float32, audioFrames*dims.AudioState),
+		logits:       make([]float32, vocabSize),
+		tokens:       make([]int, 0, textContext+1),
+		history:      make([]int, 0, textContext),
 		segmentText:  make([]byte, 0, 4096),
 	}
 	worker.decoder.gemm = worker.encoder.gemm
@@ -151,10 +155,10 @@ func (t *Transcriber) TranscribeWindowInto(pcm []float32, dst []byte) ([]byte, e
 	if err := featuresInto(pcm, t.mel, t.frontend, t.encoder.gemm); err != nil {
 		return dst, err
 	}
-	if err := t.model.EncodeInto(t.mel, t.audio, t.encoder); err != nil {
+	if err := t.model.encode(t.mel, t.audio, t.encoder); err != nil {
 		return dst, err
 	}
-	if err := t.model.BeginDecode(t.audio, t.decoder); err != nil {
+	if err := t.model.beginDecode(t.audio, t.decoder); err != nil {
 		return dst, err
 	}
 	promptLen, err := t.policy.PromptInto(t.tokens[:0], nil, nil)
@@ -168,8 +172,8 @@ func (t *Transcriber) TranscribeWindowInto(pcm []float32, dst []byte) ([]byte, e
 		}
 	}
 	textEnd := promptLen
-	for generated := 0; generated < TextContext/2 && len(t.tokens) <= TextContext; generated++ {
-		next, err := t.policy.SelectNextInto(t.logits, t.logits, t.tokens)
+	for generated := 0; generated < textContext/2 && len(t.tokens) <= textContext; generated++ {
+		next, err := t.policy.selectNextInto(t.logits, t.logits, t.tokens)
 		if err != nil {
 			return dst, err
 		}
@@ -178,15 +182,15 @@ func (t *Transcriber) TranscribeWindowInto(pcm []float32, dst []byte) ([]byte, e
 			break
 		}
 		textEnd = len(t.tokens)
-		if generated+1 >= TextContext/2 || len(t.tokens) > TextContext {
+		if generated+1 >= textContext/2 || len(t.tokens) > textContext {
 			break
 		}
-		if err := t.model.LogitsForTokenInto(next, len(t.tokens)-1, t.decoder, t.logits); err != nil {
+		if err := t.model.logitsForTokenInto(next, len(t.tokens)-1, t.decoder, t.logits); err != nil {
 			return dst, err
 		}
 	}
 	start := len(dst)
-	decoded, err := t.tokenizer.DecodeInto(dst, t.tokens[promptLen:textEnd])
+	decoded, err := t.tokenizer.decodeInto(dst, t.tokens[promptLen:textEnd])
 	if err != nil {
 		return dst, err
 	}

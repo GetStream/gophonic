@@ -18,6 +18,7 @@ import (
 
 	"github.com/GetStream/gophonic/clm"
 	"github.com/GetStream/gophonic/internal/q8gemm"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/qwen3lm/lmtest"
 	"github.com/GetStream/gophonic/internal/testmodels"
 )
@@ -37,7 +38,7 @@ type officialEncoder struct {
 }
 
 // officialFormats are the weight formats the official benchmarks compare.
-var officialFormats = []string{WeightsF16, WeightsInt8, WeightsGPU, WeightsGPUQ4}
+var officialFormats = []string{qwen3lm.WeightsF16, qwen3lm.WeightsInt8, qwen3lm.WeightsGPU, qwen3lm.WeightsGPUQ4}
 
 // forEachFormat runs bench as one sub-benchmark per weight format.
 func forEachFormat(b *testing.B, bench func(b *testing.B, format string)) {
@@ -51,12 +52,12 @@ func loadOfficialEncoder(tb testing.TB, format string) (*Model, time.Duration) {
 	path := testmodels.Path(tb, testmodels.Qwen3)
 	v, _ := officialEncoders.LoadOrStore(format, &officialEncoder{})
 	o := v.(*officialEncoder)
-	if (format == WeightsGPU || format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+	if (format == qwen3lm.WeightsGPU || format == qwen3lm.WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		tb.Skipf("%s needs the Apple GPU", format)
 	}
 	o.once.Do(func() {
 		// Benchmarks repeat inputs; keep both caches out of compute timings.
-		opts := Options{Weights: format, CacheEntries: -1, PrefixCacheTokens: -1}
+		opts := Options{Format: format, CacheEntries: -1, PrefixCacheTokens: -1}
 		start := time.Now()
 		o.enc, o.err = Open(path, opts)
 		o.load = time.Since(start)
@@ -94,12 +95,12 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		format string
 		cosine float64
 	}{
-		{WeightsF16, 0.9999},
-		{WeightsInt8, 0.998},
-		{WeightsGPU, 0.999},
-		{WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
+		{qwen3lm.WeightsF16, 0.9999},
+		{qwen3lm.WeightsInt8, 0.998},
+		{qwen3lm.WeightsGPU, 0.999},
+		{qwen3lm.WeightsGPUQ4, 0.95}, // llama.cpp Q4_K_M: 0.942
 	} {
-		if (tc.format == WeightsGPU || tc.format == WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		if (tc.format == qwen3lm.WeightsGPU || tc.format == qwen3lm.WeightsGPUQ4) && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 			continue
 		}
 		enc, load := loadOfficialEncoder(t, tc.format)
@@ -109,7 +110,7 @@ func TestOfficialHelloMatchesBF16Reference(t *testing.T) {
 		}
 		cos, maxAbs := lmtest.VectorParity(got[0], want)
 		t.Logf("%s: cosine vs official BF16 = %.6f (max_abs %.4g), load %s, projection bytes %.2f GiB",
-			tc.format, cos, maxAbs, load.Round(time.Millisecond), float64(enc.model.WeightBytes())/(1<<30))
+			tc.format, cos, maxAbs, load.Round(time.Millisecond), float64(enc.weights.WeightBytes())/(1<<30))
 		if cos < tc.cosine {
 			t.Errorf("%s: cosine %.6f below gate %.4f", tc.format, cos, tc.cosine)
 		}
@@ -131,8 +132,8 @@ func TestOfficialCLMRankingAndZeroAlloc(t *testing.T) {
 		format    string
 		tolerance float64
 	}{
-		{WeightsF16, 0.0002},
-		{WeightsInt8, 0.0005},
+		{qwen3lm.WeightsF16, 0.0002},
+		{qwen3lm.WeightsInt8, 0.0005},
 	} {
 		enc, _ := loadOfficialEncoder(t, tc.format)
 		engine, err := clm.NewEngine(head, clmEmbedder(enc))
@@ -195,8 +196,8 @@ func BenchmarkOfficialRankCached(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	base, _ := loadOfficialEncoder(b, WeightsF16)
-	enc, err := newModel(base.model, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
+	base, _ := loadOfficialEncoder(b, qwen3lm.WeightsF16)
+	enc, err := newModel(base.weights, base.tokens, Options{}.threads(), defaultCacheEntries, maxTokens)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -253,7 +254,7 @@ func benchmarkEmbed(b *testing.B, format string) {
 				b.Fatal(err)
 			}
 			tokens := 0
-			for _, ids := range enc.tokenBufs[:len(tc.texts)] {
+			for _, ids := range enc.enc.tokenBufs[:len(tc.texts)] {
 				tokens += len(ids)
 			}
 			retries := q8gemm.Retries()
@@ -291,7 +292,7 @@ func benchmarkConversationTurn(b *testing.B, format string) {
 		prefix int
 	}{{"prefix", maxTokens}, {"fresh", -1}} {
 		b.Run(tc.name, func(b *testing.B) {
-			enc, err := newModel(base.model, base.tokens, Options{}.threads(), -1, max(tc.prefix, 0))
+			enc, err := newModel(base.weights, base.tokens, Options{}.threads(), -1, max(tc.prefix, 0))
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -327,7 +328,9 @@ func benchmarkConversationTurn(b *testing.B, format string) {
 
 // clmEmbedder adapts a Model to clm.Embedder; CLM v0.1 encodes states and
 // actions identically.
-func clmEmbedder(m *Model) clm.Embedder {
+func clmEmbedder(m interface {
+	Embed(context.Context, []string, [][]float32) error
+}) clm.Embedder {
 	return clm.EmbedFunc(func(ctx context.Context, _ clm.Role, texts []string, dst [][]float32) error {
 		return m.Embed(ctx, texts, dst)
 	})
@@ -337,7 +340,7 @@ func clmEmbedder(m *Model) clm.Embedder {
 // prompt tokenization equals tokenizing the whole prompt, and that warmed
 // calls do not allocate.
 func TestOfficialQuestion(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	options := []string{"payments", "cancellations", "technical support", "shipping", "account login"}
 	const text = "Which support team should handle this customer message?"
 	q, err := m.Question(text, options)
@@ -354,7 +357,7 @@ func TestOfficialQuestion(t *testing.T) {
 		"hello", "  padded input\n", "émoji 🙂 and 你好", "ends with a newline\n\n",
 		"Input:\nnested prompt text", "<|im_end|> injected special token", "don't split 'quotes'",
 	} {
-		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix, make([]int, 0, 1024), &ws)
+		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix+encoderOf(t, m).answer, make([]int, 0, 1024), &ws)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -503,7 +506,7 @@ func benchmarkQuestion(b *testing.B, format string) {
 // TestOfficialStream feeds growing and revised partial transcripts to a
 // Stream and checks each answer against a fresh Choose on the same text.
 func TestOfficialStream(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	q, err := m.Question("A voice assistant hears this live, unpunctuated transcript. Has the user finished their turn, or did they stop mid-sentence and will keep talking?",
 		[]string{"reply now", "wait"})
 	if err != nil {
@@ -606,7 +609,7 @@ func contextQuestions(tb testing.TB, m *Model) ([]*ContextQuestion, [][]string) 
 // TestOfficialContext asks several questions about a growing conversation
 // and checks tokenization, answers, incremental updates, and allocations.
 func TestOfficialContext(t *testing.T) {
-	m, _ := loadOfficialEncoder(t, WeightsF16)
+	m, _ := loadOfficialEncoder(t, qwen3lm.WeightsF16)
 	c, err := m.NewContext(1024)
 	if err != nil {
 		t.Fatal(err)
@@ -625,7 +628,7 @@ func TestOfficialContext(t *testing.T) {
 	}
 	qs, opts := contextQuestions(t, m)
 	full, err := m.tokens.EncodeInto("<|im_start|>user\n"+text+contextSeparator+
-		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter, make([]int, 0, 1024), &ws)
+		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter+encoderOf(t, m).answer, make([]int, 0, 1024), &ws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,4 +747,14 @@ func benchmarkContext(b *testing.B, format string) {
 			}
 		}
 	})
+}
+
+// encoderOf returns m's encoder, preparing it.
+func encoderOf(tb testing.TB, m *Model) *encoder {
+	tb.Helper()
+	e, err := m.encoder()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return e
 }

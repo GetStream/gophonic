@@ -1,14 +1,16 @@
 // Copyright 2026 The gophonic authors
 // SPDX-License-Identifier: BSD-2-Clause
 
-// Package gophonic runs speech models in pure Go: speech recognition
-// (Qwen3-ASR, Whisper) and end-of-turn detection (Smart Turn, TinyMelNet).
+// Package gophonic runs speech and language models in pure Go: speech
+// recognition (Qwen3-ASR, Whisper), speech synthesis (Qwen3-TTS),
+// end-of-turn detection (Smart Turn, TinyMelNet), and Qwen3 language
+// models.
 //
 // Open loads any registered model by path; the model provides lanes of the
-// interface types it supports, such as those of package speech. The
-// built-in formats are registered already, and Register adds more. Each
-// model also has its own package (qwen3asr, whisper, smartturn, tinymel)
-// with lower level entry points.
+// interface types it supports, such as those of packages speech and chat.
+// The built-in formats are registered already, and Register adds more. Each
+// model also has its own package (qwen3, qwen3asr, qwen3tts, whisper,
+// smartturn, tinymel) with lower level entry points.
 package gophonic
 
 import (
@@ -18,6 +20,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/GetStream/gophonic/internal/wcache"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -26,7 +29,31 @@ type Options struct {
 	// Threads bounds the CPU workers of each lane, including the caller.
 	// Zero picks the model's default.
 	Threads int
+	// Format names the weight format of the models that offer a choice, the
+	// Qwen models: one of the Format constants. Empty picks the fastest
+	// format of llama.cpp Q8_0 fidelity on this machine, the Apple GPU
+	// where Metal is present and exact weights on the CPU elsewhere. Models
+	// with one format ignore it; a Qwen model without the format named fails
+	// with speech.ErrUnsupported.
+	Format string
 }
+
+// Weight formats for Options.Format. Every format but FormatF16 is checked
+// against the checkpoint's BF16 hidden states, and all but FormatGPUQ4 are
+// at llama.cpp Q8_0 fidelity or better.
+const (
+	FormatF16   = "f16"    // every BF16 weight exactly, on the CPU's matrix units
+	FormatInt8  = "int8"   // int8 rows in a rotated basis, on the CPU
+	FormatGPU   = "gpu"    // int8 rows in a rotated basis, on the Apple GPU
+	FormatGPUQ8 = "gpu-q8" // int8 blocks of 32, on the Apple GPU
+	FormatGPUQ4 = "gpu-q4" // 4-bit blocks of 32, on the Apple GPU: lower fidelity
+)
+
+// CacheDir is where prepared weights are cached, so that a checkpoint is
+// quantized once and mapped in place afterwards: $GOPHONIC_CACHE, or
+// gophonic in the user cache directory. Empty means no cache: an empty
+// $GOPHONIC_CACHE, or no cache directory, prepares weights at every load.
+func CacheDir() string { return wcache.Dir }
 
 // Model is a loaded model. Its weights are immutable and shared by every
 // lane opened from it; lanes own their scratch and may run concurrently with
@@ -37,9 +64,9 @@ type Options struct {
 // speech.TextClassifier, speech.ZeroShot, or one a third-party package
 // defines. Lane opens one of them, and Supports reports whether it can.
 type Model struct {
-	name  string
-	lanes []lane
-	close func() error
+	name, path string
+	lanes      []lane
+	close      func() error
 }
 
 // lane opens lanes of one provided type.
@@ -48,11 +75,12 @@ type lane struct {
 	open func() (any, error)
 }
 
-// NewModel returns a model named name with no lanes; Provide adds them.
-// close, when not nil, releases the model's resources (such as GPU memory)
-// and runs once, from Model.Close. A Format's Open builds its Model this way.
-func NewModel(name string, close func() error) *Model {
-	return &Model{name: name, close: close}
+// NewModel returns a model of architecture name, loaded from path, with no
+// lanes; Provide adds them. close, when not nil, releases the model's
+// resources (such as GPU memory) and runs once, from Model.Close. A
+// Format's Open builds its Model this way.
+func NewModel(name, path string, close func() error) *Model {
+	return &Model{name: name, path: path, close: close}
 }
 
 // Provide makes m open lanes of type T, normally an interface, with open.
@@ -98,6 +126,9 @@ func Supports[T any](m *Model) bool {
 // Name identifies the architecture, such as "qwen3-asr" or "smart-turn".
 func (m *Model) Name() string { return m.name }
 
+// Path is the path the model was loaded from.
+func (m *Model) Path() string { return m.path }
+
 // Provides lists the lane types m provides, in the order its format
 // provided them.
 func (m *Model) Provides() []reflect.Type {
@@ -107,12 +138,6 @@ func (m *Model) Provides() []reflect.Type {
 	}
 	return types
 }
-
-// NewTranscriber is Lane[speech.Transcriber](m).
-func (m *Model) NewTranscriber() (speech.Transcriber, error) { return Lane[speech.Transcriber](m) }
-
-// NewTurnDetector is Lane[speech.TurnDetector](m).
-func (m *Model) NewTurnDetector() (speech.TurnDetector, error) { return Lane[speech.TurnDetector](m) }
 
 // Close releases the model's resources. Close its lanes first; neither the
 // model nor its lanes may be used afterwards. It is safe to call more than
@@ -138,7 +163,8 @@ type Format struct {
 	Open func(path string, opts Options) (*Model, error)
 	// Provides lists the lane types the format's models provide, so a
 	// server can choose a model for a task without loading it; nil means
-	// they are known only once a model is open.
+	// they are known only once a model is open. Open checks that a model
+	// provides them.
 	Provides []reflect.Type
 }
 
@@ -176,8 +202,23 @@ func Open(path string, opts Options) (*Model, error) {
 	if opts.Threads < 0 {
 		return nil, fmt.Errorf("gophonic: invalid thread count %d", opts.Threads)
 	}
+	switch opts.Format {
+	case "", FormatF16, FormatInt8, FormatGPU, FormatGPUQ8, FormatGPUQ4:
+	default:
+		return nil, fmt.Errorf("gophonic: unknown weight format %q: %w", opts.Format, speech.ErrUnsupported)
+	}
 	if f, ok := Detect(path); ok {
-		return f.Open(path, opts)
+		m, err := f.Open(path, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range f.Provides {
+			if !slices.ContainsFunc(m.lanes, func(l lane) bool { return l.typ == t }) {
+				m.Close()
+				return nil, fmt.Errorf("gophonic: format %s declares %v, but its model does not provide it", f.Name, t)
+			}
+		}
+		return m, nil
 	}
 	if err := exists(path); err != nil {
 		return nil, err

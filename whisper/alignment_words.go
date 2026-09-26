@@ -19,10 +19,10 @@ func (t *Transcriber) alignWordsForWindow(windowSeek, segmentFrames int, text []
 	}
 	tokenCount := len(t.alignTokens)
 	positions := tokenCount + 3 // SOT, NoTimestamps, text, EOT
-	if positions > TextContext {
+	if positions > textContext {
 		return words, ErrWordAlignmentContext
 	}
-	audioFrames := min(AudioFrames, segmentFrames/2)
+	audioFrames := min(audioFrames, segmentFrames/2)
 	if audioFrames == 0 {
 		return words, nil
 	}

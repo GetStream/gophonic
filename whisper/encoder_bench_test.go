@@ -29,20 +29,20 @@ func BenchmarkEncoder(b *testing.B) {
 	}
 	for _, workers := range []int{1, 2, 4, 8, 12, 16} {
 		b.Run(fmt.Sprintf("workers%d", workers), func(b *testing.B) {
-			w, err := NewEncoderWorkspaceWithWorkers(workers)
+			w, err := newEncoderWorkspaceWithWorkers(workers)
 			if err != nil {
 				b.Fatal(err)
 			}
 			defer w.Close()
-			dst := make([]float32, AudioFrames*AudioState)
+			dst := make([]float32, audioFrames*audioState)
 			for range 3 {
-				if err := m.EncodeInto(mel, dst, w); err != nil {
+				if err := m.encode(mel, dst, w); err != nil {
 					b.Fatal(err)
 				}
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				if err := m.EncodeInto(mel, dst, w); err != nil {
+				if err := m.encode(mel, dst, w); err != nil {
 					b.Fatal(err)
 				}
 			}

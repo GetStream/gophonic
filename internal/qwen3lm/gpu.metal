@@ -298,6 +298,283 @@ kernel void attend1(device const float *qkv [[buffer(0)]], device float *kc [[bu
 	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
 }
 
+struct ProbeArgs {
+	uint head; // the query head read
+	uint from; // the first key position read
+	uint n;    // the positions read
+};
+
+// probe1 reads one query head of the token attend1 just attended with: the
+// probabilities of keys p.from..p.from+p.n-1 (0 past the token), from the
+// same normalized, rotated query and the same keys. Its AS simdgroups take
+// every AS-th block of AK keys with a streaming log-sum-exp, as attend1's
+// do, and the first merges them and weighs the keys read.
+kernel void probe1(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
+		device const float *qn [[buffer(3)]], device const float *rope [[buffer(5)]],
+		device float *out [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
+		constant ProbeArgs &p [[buffer(8)]], uint sg [[simdgroup_index_in_threadgroup]],
+		uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float2 partML[AS];
+	uint g = p.head / GROUP, n = a.pos + 1;
+	device const float *q = qkv + p.head * 128;
+	float4 qv = normRopeAt(float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]), qn, rope, a, lane) * a.scale;
+	float m = -INFINITY, l = 0;
+	for (uint j0 = sg * AK; j0 < n; j0 += AK * AS) {
+		float s[AK];
+		float bm = -INFINITY;
+		for (uint u = 0; u < AK; u++) {
+			device const float *k = kc + min(j0 + u, n - 1) * KVD + g * 128;
+			s[u] = dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]));
+		}
+		for (uint u = 0; u < AK; u++) {
+			s[u] = j0 + u < n ? simd_sum(s[u]) : -INFINITY;
+			bm = max(bm, s[u]);
+		}
+		float mn = max(m, bm);
+		l *= exp(m - mn);
+		for (uint u = 0; u < AK; u++)
+			l += exp(s[u] - mn);
+		m = mn;
+	}
+	if (lane == 0)
+		partML[sg] = float2(m, l);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (sg != 0)
+		return;
+	float mx = -INFINITY, sum = 0;
+	for (uint i = 0; i < AS; i++)
+		mx = max(mx, partML[i].x);
+	for (uint i = 0; i < AS; i++)
+		sum += partML[i].x == -INFINITY ? 0 : partML[i].y * exp(partML[i].x - mx);
+	for (uint i = 0; i < p.n; i++) {
+		uint j = p.from + i;
+		float v = 0;
+		if (j < n) {
+			device const float *k = kc + j * KVD + g * 128;
+			v = exp(simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]))) - mx) / sum;
+		}
+		if (lane == 0)
+			out[i] = v;
+	}
+}
+
+// ---- Decoding: heads, sampling, and inputs on the GPU ----
+
+struct DecodeArgs {
+	uint k;         // the state's width
+	uint rows;      // tokens a head scores
+	uint parts;     // the residual's partial sums of squares
+	float eps;
+	uint topK;      // tokens drawn among; 1 takes the likeliest
+	float invTemp;  // 1 / temperature
+	uint2 seed;     // the run's seed
+	uint2 draw;     // the draw's counter
+	uint step;      // the token this step writes or reads
+};
+
+// decode_head writes a head's logits for the last state: rows of W (FP16,
+// the final norm's weight and the rotation folded in) times the residual
+// x, normalized by its partial sums of squares, as a layer's input is.
+// Simdgroup s of threadgroup g computes rows 4(8g+s) to 4(8g+s)+3.
+kernel void decode_head(device const half *W [[buffer(0)]], device const float *x [[buffer(1)]],
+		device const float *parts [[buffer(2)]], device float *logits [[buffer(3)]],
+		constant DecodeArgs &a [[buffer(4)]], uint tg [[threadgroup_position_in_grid]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	float s = 0;
+	for (uint i = lane; i < a.parts; i += 32)
+		s += parts[i];
+	float inv = rsqrt(simd_sum(s) / a.k + a.eps);
+	uint row0 = (tg * 8 + sg) * 4;
+	device const float4 *xv = (device const float4 *)x;
+	float acc[4] = {0, 0, 0, 0};
+	for (uint i = lane; i < a.k / 4; i += 32) {
+		float4 xi = xv[i];
+		for (uint r = 0; r < 4; r++)
+			acc[r] += dot(float4(((device const half4 *)(W + (ulong)(row0 + r) * a.k))[i]), xi);
+	}
+	for (uint r = 0; r < 4; r++) {
+		float v = simd_sum(acc[r]) * inv;
+		if (lane == 0)
+			logits[row0 + r] = v;
+	}
+}
+
+// orderKey maps a float to a uint of the same order.
+inline uint orderKey(float f) {
+	uint u = as_type<uint>(f);
+	return (u & 0x80000000u) ? ~u : u | 0x80000000u;
+}
+
+// draw01 is splitmix64 of seed + (draw+1)·γ, as 24 bits in [0, 1).
+inline float draw01(uint2 seed, uint2 draw) {
+	ulong x = (ulong(seed.y) << 32 | seed.x) + ((ulong(draw.y) << 32 | draw.x) + 1) * 0x9E3779B97F4A7C15ul;
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ul;
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EBul;
+	x ^= x >> 31;
+	return float(x >> 40) * 0x1p-24f;
+}
+
+constant constexpr uint ST = 1024, SC = 4; // decode_sample's threads, and logits per thread
+
+// scan returns the sum of v over the threads before this one, and the
+// total in *total, for ST threads.
+inline float scanF(float v, threadgroup float *part, uint sg, uint lane, thread float &total) {
+	float before = simd_prefix_exclusive_sum(v);
+	if (lane == 31)
+		part[sg] = before + v;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	float sgBefore = 0;
+	total = 0;
+	for (uint i = 0; i < ST / 32; i++) {
+		float p = part[i];
+		sgBefore += i < sg ? p : 0;
+		total += p;
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	return sgBefore + before;
+}
+
+inline uint scanU(uint v, threadgroup uint *part, uint sg, uint lane) {
+	uint before = simd_prefix_exclusive_sum(v);
+	if (lane == 31)
+		part[sg] = before + v;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	uint sgBefore = 0;
+	for (uint i = 0; i < sg; i++)
+		sgBefore += part[i];
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	return sgBefore + before;
+}
+
+// decode_sample draws tokens[a.step] from the logits: among the topK
+// likeliest, weighed by exp(logit/temperature), with draw01(seed, draw);
+// ties go to the lower index, so a draw is a function of its inputs. A
+// radix select finds the topK-th largest logit in four 8-bit passes; each
+// thread then weighs its SC consecutive logits, and the thread whose share
+// of the total holds the draw walks its own. A draw that rounding puts past
+// the total takes the likeliest.
+kernel void decode_sample(device const float *logits [[buffer(0)]], device int *tokens [[buffer(1)]],
+		constant DecodeArgs &a [[buffer(4)]], uint tid [[thread_index_in_threadgroup]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup atomic_uint bins[256];
+	threadgroup atomic_uint won;
+	threadgroup uint chosen[2];
+	threadgroup uint partU[ST / 32];
+	threadgroup float partF[ST / 32];
+	uint i0 = tid * SC;
+	uint keys[SC];
+	float vals[SC];
+	for (uint j = 0; j < SC; j++) {
+		bool in = i0 + j < a.rows;
+		vals[j] = in ? logits[i0 + j] : -INFINITY;
+		keys[j] = in ? orderKey(vals[j]) : 0;
+	}
+	// The topK-th largest key, T, and how many keys equal to it are taken.
+	uint prefix = 0, need = a.topK;
+	for (int d = 3; d >= 0; d--) {
+		uint shift = uint(d) * 8, high = d == 3 ? 0 : 0xFFFFFFFFu << (shift + 8);
+		if (tid < 256)
+			atomic_store_explicit(&bins[tid], 0, memory_order_relaxed);
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		for (uint j = 0; j < SC; j++)
+			if (i0 + j < a.rows && (keys[j] & high) == prefix)
+				atomic_fetch_add_explicit(&bins[(keys[j] >> shift) & 255], 1, memory_order_relaxed);
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid == 0) {
+			uint b = 255;
+			for (;; b--) {
+				uint n = atomic_load_explicit(&bins[b], memory_order_relaxed);
+				if (n >= need || b == 0)
+					break;
+				need -= n;
+			}
+			chosen[0] = prefix | (b << shift);
+			chosen[1] = need;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		prefix = chosen[0];
+		need = chosen[1];
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+	// Keys above T are taken, and of those equal to it the need of lowest
+	// index.
+	uint equal = 0;
+	for (uint j = 0; j < SC; j++)
+		equal += i0 + j < a.rows && keys[j] == prefix;
+	uint rank = scanU(equal, partU, sg, lane);
+	bool taken[SC];
+	float top = -INFINITY;
+	uint first = 0xFFFFFFFFu; // this thread's first taken logit
+	for (uint j = 0; j < SC; j++) {
+		bool eq = i0 + j < a.rows && keys[j] == prefix;
+		taken[j] = i0 + j < a.rows && (keys[j] > prefix || (eq && rank < need));
+		rank += eq;
+		top = taken[j] ? max(top, vals[j]) : top;
+	}
+	top = simd_max(top);
+	if (lane == 0)
+		partF[sg] = top;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	for (uint i = 0; i < ST / 32; i++)
+		top = max(top, partF[i]);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	// The likeliest, of lowest index.
+	for (uint j = 0; j < SC && first == 0xFFFFFFFFu; j++)
+		if (taken[j] && vals[j] == top)
+			first = i0 + j;
+	first = simd_min(first);
+	if (lane == 0)
+		partU[sg] = first;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (tid == 0) {
+		for (uint i = 0; i < ST / 32; i++)
+			first = min(first, partU[i]);
+		chosen[0] = first;
+		atomic_store_explicit(&won, 0xFFFFFFFFu, memory_order_relaxed);
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	float w[SC], mine = 0;
+	for (uint j = 0; j < SC; j++) {
+		w[j] = taken[j] ? exp((vals[j] - top) * a.invTemp) : 0;
+		mine += w[j];
+	}
+	float total;
+	float before = scanF(mine, partF, sg, lane, total);
+	float u = draw01(a.seed, a.draw) * total;
+	// Rounding may let two neighbours claim a draw on their boundary: the
+	// lower index wins.
+	if (mine > 0 && u >= before && u < before + mine) {
+		float acc = before;
+		for (uint j = 0; j < SC; j++) {
+			acc += w[j];
+			if (taken[j] && u < acc) {
+				atomic_fetch_min_explicit(&won, i0 + j, memory_order_relaxed);
+				break;
+			}
+		}
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (tid == 0) {
+		uint t = atomic_load_explicit(&won, memory_order_relaxed);
+		tokens[a.step] = int(t != 0xFFFFFFFFu ? t : chosen[0]);
+	}
+}
+
+// decode_gather writes row tokens[a.step] of a table as the next input, and
+// its sum of squares.
+kernel void decode_gather(device const half *table [[buffer(0)]], device const float *sumsq [[buffer(1)]],
+		device const int *tokens [[buffer(2)]], device float *h [[buffer(3)]],
+		device float *parts [[buffer(4)]], constant DecodeArgs &a [[buffer(5)]],
+		uint tid [[thread_position_in_grid]]) {
+	uint t = uint(tokens[a.step]);
+	device const half4 *row = (device const half4 *)(table + (ulong)t * a.k);
+	device float4 *dst = (device float4 *)h;
+	for (uint i = tid; i < a.k / 4; i += 256)
+		dst[i] = float4(row[i]);
+	if (tid == 0)
+		parts[0] = sumsq[t];
+}
+
 // ---- Batched (multi-token) kernels ----
 
 struct MMArgs {
@@ -787,4 +1064,401 @@ kernel void attendFlash(device const float *qkv [[buffer(0)]], device const floa
 		}
 		simdgroup_barrier(mem_flags::mem_threadgroup);
 	}
+}
+
+// Mixture of experts (Qwen3-MoE). A router picks, for each token, TOPK of E
+// experts with renormalized softmax weights; each expert is a SwiGLU MLP of
+// width W. The router is FP32, as quantizing it can flip which experts win;
+// expert weights are Q8B, stored expert after expert so that a token's
+// experts are contiguous reads. The gate/up kernel takes its RMSNorm from
+// the partial sums of squares, as gemv_gateup does, and the down kernel sums
+// the experts' outputs, weighted, into the residual and publishes its own.
+struct MoeArgs {
+	uint K, N;     // the projection's input and output widths
+	float eps;
+	uint parts;    // partial sums of squares to read per row
+	uint experts;  // E
+	uint topk;     // experts per token
+	uint partsOut; // partial sums of squares written per row
+	// The router: logits per row, and whether a shared expert (index E,
+	// whose gate logit follows the experts') joins every token as one more
+	// slot, weighted by the sigmoid of its logit.
+	uint stride;
+	uint shared;
+};
+
+// moe_router writes the router's logits for each row: 16 experts per
+// threadgroup of eight simdgroups, rows along y. It also clears the
+// per-expert counts that moe_route fills.
+kernel void moe_router(device const float *W [[buffer(0)]], device const float *x [[buffer(2)]],
+		device float *y [[buffer(3)]], device const float *partsIn [[buffer(4)]],
+		constant MoeArgs &a [[buffer(5)]], device atomic_uint *counts [[buffer(6)]],
+		uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+		uint lane [[thread_index_in_simdgroup]]) {
+	if (tg.x == 0 && tg.y == 0 && sg == 0)
+		for (uint e = lane; e < a.experts + a.shared; e += 32)
+			atomic_store_explicit(&counts[e], 0, memory_order_relaxed);
+	uint row = tg.y;
+	x += (ulong)row * a.K;
+	partsIn += (ulong)row * a.parts;
+	float s = 0;
+	for (uint i = lane; i < a.parts; i += 32)
+		s += partsIn[i];
+	float inv = rsqrt(simd_sum(s) / a.K + a.eps);
+	uint e0 = (tg.x * SG + sg) * 2;
+	device const float *w0 = W + (ulong)e0 * a.K, *w1 = w0 + a.K;
+	float acc0 = 0, acc1 = 0;
+	for (uint i = lane * 4; i < a.K; i += 128) {
+		float4 xv = *(device const float4 *)(x + i);
+		acc0 += dot(*(device const float4 *)(w0 + i), xv);
+		acc1 += dot(*(device const float4 *)(w1 + i), xv);
+	}
+	acc0 = simd_sum(acc0) * inv;
+	acc1 = simd_sum(acc1) * inv;
+	if (lane == 0) {
+		y[(ulong)row * a.stride + e0] = acc0;
+		y[(ulong)row * a.stride + e0 + 1] = acc1;
+	}
+}
+
+// moe_route turns each row's logits into its topk experts and their
+// weights: the softmax over the chosen experts alone, which is the full
+// softmax renormalized. One threadgroup of E threads per row; ties go to
+// the lower expert, as torch.topk. Each (row, slot) pair also takes its rank
+// among the pairs of its expert, for moe_tiles.
+kernel void moe_route(device const float *logits [[buffer(0)]], device uint *ids [[buffer(1)]],
+		device float *wts [[buffer(2)]], constant MoeArgs &a [[buffer(3)]],
+		device atomic_uint *counts [[buffer(4)]], device uint *rank [[buffer(5)]],
+		uint row [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float bestV[32];
+	threadgroup uint bestI[32];
+	threadgroup float chosen[32];
+	uint slots = a.topk + a.shared;
+	float v = logits[(ulong)row * a.stride + tid];
+	uint groups = (a.experts + 31) / 32;
+	for (uint k = 0; k < a.topk; k++) {
+		// The simdgroup's best, lowest index on ties, then the threadgroup's.
+		float m = simd_max(v);
+		uint i = simd_min(v == m ? tid : 0xffffffffu);
+		if (lane == 0) {
+			bestV[sg] = m;
+			bestI[sg] = i;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid == 0) {
+			float bv = bestV[0];
+			uint bi = bestI[0];
+			for (uint g = 1; g < groups; g++)
+				if (bestV[g] > bv || (bestV[g] == bv && bestI[g] < bi)) {
+					bv = bestV[g];
+					bi = bestI[g];
+				}
+			ids[(ulong)row * slots + k] = bi;
+			rank[(ulong)row * slots + k] = atomic_fetch_add_explicit(&counts[bi], 1, memory_order_relaxed);
+			chosen[k] = bv;
+			bestI[0] = bi;
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (tid == bestI[0])
+			v = -INFINITY;
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+	if (tid == 0) {
+		float top = chosen[0], sum = 0;
+		for (uint k = 0; k < a.topk; k++)
+			sum += exp(chosen[k] - top);
+		for (uint k = 0; k < a.topk; k++)
+			wts[(ulong)row * slots + k] = exp(chosen[k] - top) / sum;
+		if (a.shared) {
+			ulong p = (ulong)row * slots + a.topk;
+			ids[p] = a.experts;
+			wts[p] = 1 / (1 + exp(-logits[(ulong)row * a.stride + a.experts]));
+			rank[p] = atomic_fetch_add_explicit(&counts[a.experts], 1, memory_order_relaxed);
+		}
+	}
+}
+
+// moeDot accumulates a simdgroup lane's share of two Q8B rows (r0, r0+1 of
+// an expert) against x.
+inline void moeDot(device const uchar *W, device const half *S, device const float *x, uint K, uint lane,
+		thread float &acc0, thread float &acc1) {
+	for (uint i = lane * 16; i < K; i += 32 * 16) {
+		device const float4 *xv = (device const float4 *)(x + i);
+		float4 x0 = xv[0], x1 = xv[1], x2 = xv[2], x3 = xv[3];
+		uint4 w = *(device const uint4 *)(W + i);
+		float t = dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
+			dot(float4(as_type<char4>(w.z)), x2) + dot(float4(as_type<char4>(w.w)), x3);
+		acc0 = fma(float(S[i / 32]), t, acc0);
+		w = *(device const uint4 *)(W + K + i);
+		t = dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
+			dot(float4(as_type<char4>(w.z)), x2) + dot(float4(as_type<char4>(w.w)), x3);
+		acc1 = fma(float(S[K / 32 + i / 32]), t, acc1);
+	}
+}
+
+// moe_gateup_q8 computes SwiGLU(gate, up) of one chosen expert for one row:
+// x is the residual, normalized from the partial sums; the expert's rows
+// alternate gate and up, N = 2W of them; act gets W values per (row, slot).
+// Grid: x over row pairs (16 per threadgroup), y the slot, z the row.
+kernel void moe_gateup_q8(device const uchar *W [[buffer(0)]], device const half *scale [[buffer(1)]],
+		device const float *x [[buffer(2)]], device float *act [[buffer(3)]],
+		device const float *partsIn [[buffer(4)]], constant MoeArgs &a [[buffer(5)]],
+		device const uint *ids [[buffer(6)]], uint3 tg [[threadgroup_position_in_grid]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	uint row = tg.z, slot = tg.y;
+	uint e = ids[(ulong)row * a.topk + slot];
+	x += (ulong)row * a.K;
+	partsIn += (ulong)row * a.parts;
+	float s = 0;
+	for (uint i = lane; i < a.parts; i += 32)
+		s += partsIn[i];
+	float inv = rsqrt(simd_sum(s) / a.K + a.eps);
+	uint r0 = (tg.x * SG + sg) * 2; // a gate row, and its up row after it
+	float g = 0, u = 0;
+	moeDot(W + ((ulong)e * a.N + r0) * a.K, scale + ((ulong)e * a.N + r0) * (a.K / 32), x, a.K, lane, g, u);
+	g = simd_sum(g) * inv;
+	u = simd_sum(u) * inv;
+	if (lane == 0)
+		act[((ulong)row * a.topk + slot) * (a.N / 2) + r0 / 2] = g / (1 + exp(-g)) * u;
+}
+
+// moe_down_q8 adds, for one row, the weighted sum of its chosen experts'
+// down projections (N rows of K = W inputs) into the residual y, and writes
+// this threadgroup's sum of squares of the updated values. Grid: x over row
+// pairs (16 per threadgroup), y the row.
+kernel void moe_down_q8(device const uchar *W [[buffer(0)]], device const half *scale [[buffer(1)]],
+		device const float *act [[buffer(2)]], device float *y [[buffer(3)]],
+		constant MoeArgs &a [[buffer(5)]], device float *partsOut [[buffer(6)]],
+		device const uint *ids [[buffer(7)]], device const float *wts [[buffer(8)]],
+		uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+		uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float tgPart[SG];
+	uint row = tg.y;
+	uint r0 = (tg.x * SG + sg) * 2;
+	float acc0 = 0, acc1 = 0;
+	for (uint slot = 0; slot < a.topk; slot++) {
+		uint e = ids[(ulong)row * a.topk + slot];
+		float wt = wts[(ulong)row * a.topk + slot];
+		float t0 = 0, t1 = 0;
+		moeDot(W + ((ulong)e * a.N + r0) * a.K, scale + ((ulong)e * a.N + r0) * (a.K / 32),
+			act + ((ulong)row * a.topk + slot) * a.K, a.K, lane, t0, t1);
+		acc0 = fma(wt, t0, acc0);
+		acc1 = fma(wt, t1, acc1);
+	}
+	acc0 = simd_sum(acc0);
+	acc1 = simd_sum(acc1);
+	float ss = 0;
+	if (lane == 0) {
+		device float *yr = y + (ulong)row * a.N + r0;
+		float v0 = yr[0] + acc0, v1 = yr[1] + acc1;
+		yr[0] = v0;
+		yr[1] = v1;
+		ss = v0 * v0 + v1 * v1;
+		tgPart[sg] = ss;
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (sg == 0 && lane == 0) {
+		float t = 0;
+		for (uint i = 0; i < SG; i++)
+			t += tgPart[i];
+		partsOut[(ulong)row * a.partsOut + tg.x] = t;
+	}
+}
+
+// ---- Batched experts, grouped by expert ----
+//
+// A batch of rows sends each row to topk experts: rows·topk (row, slot)
+// pairs, p = row·topk + slot. Rather than stream every pair's experts, the
+// pairs are grouped by expert and each expert multiplies its pairs as one
+// GEMM, reading its weights once per tile of BM pairs, as mm does.
+
+struct MoeTileArgs {
+	uint pairs; // rows·topk
+	uint tile;  // pairs per tile (BM)
+	uint tiles; // tiles dispatched: at least the tiles written
+};
+
+// moe_tiles lays the pairs out expert after expert in list (list[start[e] +
+// rank] = p) and writes the tiles: (expert, first list entry, pairs), and
+// zero pairs for the tiles dispatched beyond them. One threadgroup of 1024
+// threads; E ≤ 1024.
+kernel void moe_tiles(device const uint *ids [[buffer(0)]], device const uint *rank [[buffer(1)]],
+		device const uint *counts [[buffer(2)]], device uint *list [[buffer(3)]],
+		device uint4 *tiles [[buffer(4)]], constant MoeArgs &a [[buffer(5)]],
+		constant MoeTileArgs &t [[buffer(6)]], uint tid [[thread_position_in_threadgroup]]) {
+	threadgroup uint start[1024];
+	threadgroup uint written;
+	if (tid == 0) {
+		uint o = 0, n = 0;
+		for (uint e = 0; e < a.experts; e++) {
+			uint c = counts[e];
+			start[e] = o;
+			for (uint i = 0; i < c; i += t.tile)
+				tiles[n++] = uint4(e, o + i, min(t.tile, c - i), 0);
+			o += c;
+		}
+		written = n;
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	for (uint p = tid; p < t.pairs; p += 1024)
+		list[start[ids[p]] + rank[p]] = p;
+	for (uint i = written + tid; i < t.tiles; i += 1024)
+		tiles[i] = uint4(0);
+}
+
+// moeMM computes one tile of an expert's GEMM over its pairs: 64 output
+// columns (weight rows n0...) of the expert's N rows by up to BM pairs. With
+// GATEUP, a pair's input is its row of the residual x, normalized from the
+// partial sums, and the output its SwiGLU in act[p]; otherwise the input is
+// act[p] and the output, times the pair's weight, goes to out[p]. The K loop
+// is mm's, for Q8B weights, with tiles of E: the down projection keeps FP32,
+// since its input, unlike the dense layers', is not rotated, and rounding
+// its outliers to FP16 costs accuracy (a cosine of 0.997 to the unrounded
+// state after 100 tokens, against 0.9999).
+template <bool GATEUP, uint BM, uint T, bool WIDE, typename E = half>
+inline void moeMM(device const uchar *W, device const half *scale, device const float *x, device float *y,
+		device const float *partsIn, constant MoeArgs &a, device const uint *list, device const uint4 *tiles,
+		device const float *wts, threadgroup float *smem, threadgroup float *inv, threadgroup uint *pair,
+		uint2 tg, uint tid, uint sg) {
+	constexpr uint WPER = MM_BN * MM_BK / T;
+	constexpr uint XPER = BM * MM_BK / T;
+	constexpr uint NB = WIDE ? 4 : 2;
+	uint4 tile = tiles[tg.y];
+	uint count = tile.z;
+	if (count == 0)
+		return;
+	uint e = tile.x, n0 = tg.x * MM_BN;
+	threadgroup E *Ws = (threadgroup E *)smem;
+	threadgroup E *Xs = (threadgroup E *)smem + MM_BN * MM_BK;
+	if (tid < BM) {
+		uint p = tid < count ? list[tile.y + tid] : 0;
+		float f = 1;
+		if (GATEUP && tid < count) {
+			uint row = p / a.topk;
+			float s = 0;
+			for (uint i = 0; i < a.parts; i++)
+				s += partsIn[row * a.parts + i];
+			f = rsqrt(s / a.K + a.eps);
+		}
+		pair[tid] = p;
+		inv[tid] = f;
+	}
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	uint sn = WIDE ? (sg % 2) * 32 : (sg % 4) * 16, sm = WIDE ? (sg / 2) * 16 : (sg / 4) * 16;
+	simdgroup_float8x8 acc[2][NB];
+	for (uint i = 0; i < 2; i++)
+		for (uint j = 0; j < NB; j++)
+			acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0);
+	uint wr = tid / (MM_BK / WPER), wc = (tid % (MM_BK / WPER)) * WPER;
+	uint xr = tid / (MM_BK / XPER), xc = (tid % (MM_BK / XPER)) * XPER;
+	bool live = xr < count;
+	float f = inv[xr];
+	uint src = GATEUP ? pair[xr] / a.topk : pair[xr];
+	device const float *xrow = x + (ulong)src * a.K + xc;
+	ulong wRow = (ulong)e * a.N + n0 + wr;
+	device const uchar *wrow = W + wRow * a.K + wc;
+	device const half *srow = scale + wRow * (a.K / 32);
+	uint4 wreg = 0;
+	half d = 0;
+	float4 xreg = 0, xreg2 = 0;
+#define MOE_FETCH(k0)                                                       \
+	if (WPER == 16)                                                         \
+		wreg = *(device const uint4 *)(wrow + (k0));                        \
+	else                                                                    \
+		wreg.xy = *(device const uint2 *)(wrow + (k0));                     \
+	d = srow[(k0) / 32];                                                    \
+	xreg = live ? *(device const float4 *)(xrow + (k0)) * f : 0;             \
+	if (XPER == 8)                                                          \
+		xreg2 = live ? *(device const float4 *)(xrow + (k0) + 4) * f : 0;
+	MOE_FETCH(0)
+	for (uint k0 = 0; k0 < a.K; k0 += MM_BK) {
+		typedef vec<E, 4> E4;
+		threadgroup E *wd = Ws + wr * MM_BK + wc;
+		*(threadgroup E4 *)wd = E4(as_type<char4>(wreg.x)) * E(d);
+		*(threadgroup E4 *)(wd + 4) = E4(as_type<char4>(wreg.y)) * E(d);
+		if (WPER == 16) {
+			*(threadgroup E4 *)(wd + 8) = E4(as_type<char4>(wreg.z)) * E(d);
+			*(threadgroup E4 *)(wd + 12) = E4(as_type<char4>(wreg.w)) * E(d);
+		}
+		*(threadgroup E4 *)(Xs + xr * MM_BK + xc) = E4(xreg);
+		if (XPER == 8)
+			*(threadgroup E4 *)(Xs + xr * MM_BK + xc + 4) = E4(xreg2);
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (k0 + MM_BK < a.K) {
+			MOE_FETCH(k0 + MM_BK)
+		}
+		for (uint k8 = 0; k8 < MM_BK; k8 += 8) {
+			simdgroup_matrix<E, 8, 8> A[2], B[NB];
+			simdgroup_load(A[0], Xs + sm * MM_BK + k8, MM_BK);
+			simdgroup_load(A[1], Xs + (sm + 8) * MM_BK + k8, MM_BK);
+			for (uint j = 0; j < NB; j++)
+				simdgroup_load(B[j], Ws + (sn + 8 * j) * MM_BK + k8, MM_BK, ulong2(0, 0), true);
+			for (uint j = 0; j < NB; j++)
+				for (uint i = 0; i < 2; i++)
+					simdgroup_multiply_accumulate(acc[i][j], A[i], B[j], acc[i][j]);
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+#undef MOE_FETCH
+	threadgroup float *Cs = smem; // [BM][64], reusing the tiles
+	for (uint j = 0; j < NB; j++)
+		for (uint i = 0; i < 2; i++)
+			simdgroup_store(acc[i][j], Cs + (sm + 8 * i) * MM_BN + sn + 8 * j, MM_BN);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (GATEUP) {
+		for (uint i = tid; i < BM * MM_BN / 2; i += T) {
+			uint m = i / (MM_BN / 2), j = i % (MM_BN / 2);
+			if (m >= count)
+				continue;
+			float g = Cs[m * MM_BN + 2 * j], u = Cs[m * MM_BN + 2 * j + 1];
+			y[(ulong)pair[m] * (a.N / 2) + n0 / 2 + j] = g / (1 + exp(-g)) * u;
+		}
+	} else {
+		for (uint i = tid; i < BM * MM_BN; i += T) {
+			uint m = i / MM_BN, n = i % MM_BN;
+			if (m >= count)
+				continue;
+			uint p = pair[m];
+			y[(ulong)p * a.N + n0 + n] = Cs[i] * wts[p];
+		}
+	}
+}
+
+#define MOE_MM(name, GATEUP, BM, T, WIDE, E)                                                            \
+	kernel void name(device const uchar *W [[buffer(0)]], device const half *scale [[buffer(1)]],        \
+			device const float *x [[buffer(2)]], device float *y [[buffer(3)]],                         \
+			device const float *partsIn [[buffer(4)]], constant MoeArgs &a [[buffer(5)]],               \
+			device const uint *list [[buffer(6)]], device const uint4 *tiles [[buffer(7)]],             \
+			device const float *wts [[buffer(8)]], uint2 tg [[threadgroup_position_in_grid]],           \
+			uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) {      \
+		threadgroup float smem[mmSmemFloats(BM) * sizeof(E) / 2];                                     \
+		threadgroup float inv[BM];                                                                    \
+		threadgroup uint pair[BM];                                                                    \
+		moeMM<GATEUP, BM, T, WIDE, E>(W, scale, x, y, partsIn, a, list, tiles, wts, smem, inv, pair, tg, tid, sg); \
+	}
+
+MOE_MM(moe_gateup_mm_16, true, 16, 128, false, half)
+MOE_MM(moe_gateup_mm_w, true, 32, 128, true, half)
+MOE_MM(moe_down_mm_16, false, 16, 128, false, float)
+MOE_MM(moe_down_mm_w, false, 32, 128, true, float)
+
+// moe_combine adds each row's weighted expert outputs, in slot order, into
+// the residual y, and writes a partial sum of squares per 16 values, as
+// moe_down_q8 does. Threadgroup (64 columns, row) has 64 threads.
+kernel void moe_combine(device const float *out [[buffer(0)]], device float *y [[buffer(3)]],
+		constant MoeArgs &a [[buffer(5)]], device float *partsOut [[buffer(6)]],
+		uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+	uint n = tg.x * MM_BN + tid, row = tg.y;
+	float v = 0;
+	for (uint s = 0; s < a.topk; s++)
+		v += out[((ulong)row * a.topk + s) * a.N + n];
+	device float *p = y + (ulong)row * a.N + n;
+	v += *p;
+	*p = v;
+	float ss = v * v;
+	for (ushort o = 8; o > 0; o /= 2)
+		ss += simd_shuffle_down(ss, o);
+	if (tid % 16 == 0)
+		partsOut[(ulong)row * a.partsOut + n / 16] = ss;
 }

@@ -18,19 +18,19 @@ import (
 
 // EnglishOnly selects the GPT-2 byte-pair vocabulary used by tiny.en.
 // Multilingual selects Whisper's multilingual vocabulary.
-type TokenizerKind uint8
+type tokenizerKind uint8
 
 const (
-	EnglishOnly TokenizerKind = iota
+	EnglishOnly tokenizerKind = iota
 	Multilingual
 )
 
 var (
-	ErrTokenizerKind           = errors.New("whisper: unsupported tokenizer kind")
-	ErrTokenizerOutputTooSmall = errors.New("whisper: tokenizer output buffer is too small")
-	ErrTokenizerTokenRange     = errors.New("whisper: token ID is outside the tokenizer vocabulary")
-	ErrTokenizerSpecialToken   = errors.New("whisper: input contains a special token")
-	ErrTokenizerNil            = errors.New("whisper: nil tokenizer")
+	errTokenizerKind           = errors.New("whisper: unsupported tokenizer kind")
+	errTokenizerOutputTooSmall = errors.New("whisper: tokenizer output buffer is too small")
+	errTokenizerTokenRange     = errors.New("whisper: token ID is outside the tokenizer vocabulary")
+	errTokenizerSpecialToken   = errors.New("whisper: input contains a special token")
+	errTokenizerNil            = errors.New("whisper: nil tokenizer")
 )
 
 // Whisper's public source list contains 100 languages. The reference
@@ -54,11 +54,11 @@ var tokenizerAssets embed.FS
 const whisperLanguageCount = 99
 const whisperTimestampCount = 1501
 
-// Tokenizer is an immutable byte-level BPE tokenizer. Its maps are built once
-// by NewTokenizer, so independent goroutines can encode and decode concurrently
+// tokenizer is an immutable byte-level BPE tokenizer. Its maps are built once
+// by newTokenizer, so independent goroutines can encode and decode concurrently
 // when each call has its own destination buffer.
-type Tokenizer struct {
-	kind       TokenizerKind
+type tokenizer struct {
+	kind       tokenizerKind
 	vocabSize  int
 	baseSize   int
 	encoder    map[string]int
@@ -78,10 +78,10 @@ type Tokenizer struct {
 	languageTokens [whisperLanguageCount]int
 }
 
-// NewTokenizer loads the pinned, bundled Whisper vocabulary and compiles its
+// newTokenizer loads the pinned, bundled Whisper vocabulary and compiles its
 // BPE merge rules. EnglishOnly is the 51864-token tiny.en tokenizer; Multilingual
 // includes the extra multilingual base token and has 51865 tokens.
-func NewTokenizer(kind TokenizerKind) (*Tokenizer, error) {
+func newTokenizer(kind tokenizerKind) (*tokenizer, error) {
 	var asset string
 	switch kind {
 	case EnglishOnly:
@@ -89,13 +89,13 @@ func NewTokenizer(kind TokenizerKind) (*Tokenizer, error) {
 	case Multilingual:
 		asset = "assets/multilingual.tiktoken"
 	default:
-		return nil, ErrTokenizerKind
+		return nil, errTokenizerKind
 	}
 	data, err := tokenizerAssets.ReadFile(asset)
 	if err != nil {
 		return nil, fmt.Errorf("read bundled Whisper vocabulary: %w", err)
 	}
-	t := &Tokenizer{
+	t := &tokenizer{
 		kind:       kind,
 		encoder:    make(map[string]int, 50257),
 		specialIDs: make(map[string]int, 1608),
@@ -111,7 +111,7 @@ func NewTokenizer(kind TokenizerKind) (*Tokenizer, error) {
 	return t, nil
 }
 
-func (t *Tokenizer) readRanks(data []byte) error {
+func (t *tokenizer) readRanks(data []byte) error {
 	s := bufio.NewScanner(bytes.NewReader(data))
 	// A handful of vocabulary entries are longer than Scanner's default token
 	// size; the pinned assets remain comfortably below this explicit limit.
@@ -172,7 +172,7 @@ func (t *Tokenizer) readRanks(data []byte) error {
 	return nil
 }
 
-func (t *Tokenizer) addSpecialTokens() error {
+func (t *tokenizer) addSpecialTokens() error {
 	id := t.baseSize
 	add := func(name string) int {
 		t.specialIDs[name] = id
@@ -203,7 +203,7 @@ func (t *Tokenizer) addSpecialTokens() error {
 	return nil
 }
 
-func (t *Tokenizer) compileMerges() {
+func (t *tokenizer) compileMerges() {
 	t.merges = make(map[uint64]int, len(t.encoder)*3)
 	for payload, merged := range t.encoder {
 		for split := 1; split < len(payload); split++ {
@@ -224,40 +224,40 @@ func mergeKey(left, right int) uint64 {
 }
 
 // Kind returns which bundled vocabulary this tokenizer uses.
-func (t *Tokenizer) Kind() TokenizerKind { return t.kind }
+func (t *tokenizer) Kind() tokenizerKind { return t.kind }
 
 // VocabSize returns the number of valid token IDs.
-func (t *Tokenizer) VocabSize() int { return t.vocabSize }
+func (t *tokenizer) VocabSize() int { return t.vocabSize }
 
 // EOT is the end-of-text token ID.
-func (t *Tokenizer) EOT() int { return t.eot }
+func (t *tokenizer) EOT() int { return t.eot }
 
 // SOT is the start-of-transcript token ID.
-func (t *Tokenizer) SOT() int { return t.sot }
+func (t *tokenizer) SOT() int { return t.sot }
 
 // Translate is the translate-task token ID.
-func (t *Tokenizer) Translate() int { return t.translate }
+func (t *tokenizer) Translate() int { return t.translate }
 
 // Transcribe is the transcribe-task token ID.
-func (t *Tokenizer) Transcribe() int { return t.transcribe }
+func (t *tokenizer) Transcribe() int { return t.transcribe }
 
 // SOTLM is the start-of-language-model token ID.
-func (t *Tokenizer) SOTLM() int { return t.sotLM }
+func (t *tokenizer) SOTLM() int { return t.sotLM }
 
 // SOTPrev is the start-of-previous-context token ID.
-func (t *Tokenizer) SOTPrev() int { return t.sotPrev }
+func (t *tokenizer) SOTPrev() int { return t.sotPrev }
 
 // NoSpeech is the no-speech token ID.
-func (t *Tokenizer) NoSpeech() int { return t.noSpeech }
+func (t *tokenizer) NoSpeech() int { return t.noSpeech }
 
 // NoTimestamps is the no-timestamps token ID.
-func (t *Tokenizer) NoTimestamps() int { return t.noTimestamps }
+func (t *tokenizer) NoTimestamps() int { return t.noTimestamps }
 
 // TimestampBegin is the ID of the first 20 ms timestamp token.
-func (t *Tokenizer) TimestampBegin() int { return t.timestampBegin }
+func (t *tokenizer) TimestampBegin() int { return t.timestampBegin }
 
-// LanguageToken returns the token ID for a Whisper language code.
-func (t *Tokenizer) LanguageToken(code string) (int, bool) {
+// languageToken returns the token ID for a Whisper language code.
+func (t *tokenizer) languageToken(code string) (int, bool) {
 	for i := 0; i < whisperLanguageCount; i++ {
 		if whisperLanguageCodes[i] == code {
 			return t.languageTokens[i], true
@@ -268,12 +268,12 @@ func (t *Tokenizer) LanguageToken(code string) (int, bool) {
 
 // EncodeInto appends the BPE encoding of text to dst. dst must have enough
 // capacity for the unmerged UTF-8 bytes in text. It performs no heap allocation.
-func (t *Tokenizer) EncodeInto(dst []int, text string) ([]int, error) {
+func (t *tokenizer) EncodeInto(dst []int, text string) ([]int, error) {
 	if t == nil {
-		return dst, ErrTokenizerNil
+		return dst, errTokenizerNil
 	}
 	if containsSpecialToken(text, t.specialIDs) {
-		return dst, ErrTokenizerSpecialToken
+		return dst, errTokenizerSpecialToken
 	}
 	for pos := 0; pos < len(text); {
 		end := nextPieceEnd(text, pos)
@@ -284,7 +284,7 @@ func (t *Tokenizer) EncodeInto(dst []int, text string) ([]int, error) {
 				return dst, errors.New("whisper: missing byte token in BPE vocabulary")
 			}
 			if len(dst) == cap(dst) {
-				return dst, ErrTokenizerOutputTooSmall
+				return dst, errTokenizerOutputTooSmall
 			}
 			dst = append(dst, id)
 		}
@@ -307,21 +307,21 @@ func (t *Tokenizer) EncodeInto(dst []int, text string) ([]int, error) {
 	return dst, nil
 }
 
-// DecodeInto appends decoded token bytes to dst. As in the reference Whisper
+// decodeInto appends decoded token bytes to dst. As in the reference Whisper
 // tokenizer, timestamp IDs and later IDs are omitted by the plain decode path.
-func (t *Tokenizer) DecodeInto(dst []byte, ids []int) ([]byte, error) {
+func (t *tokenizer) decodeInto(dst []byte, ids []int) ([]byte, error) {
 	if t == nil {
-		return dst, ErrTokenizerNil
+		return dst, errTokenizerNil
 	}
 	for _, id := range ids {
 		if id < 0 || id >= t.vocabSize {
-			return dst, ErrTokenizerTokenRange
+			return dst, errTokenizerTokenRange
 		}
 		if id >= t.timestampBegin {
 			continue
 		}
 		if len(dst)+len(t.decoder[id]) > cap(dst) {
-			return dst, ErrTokenizerOutputTooSmall
+			return dst, errTokenizerOutputTooSmall
 		}
 		dst = append(dst, t.decoder[id]...)
 	}

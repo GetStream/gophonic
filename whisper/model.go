@@ -28,30 +28,30 @@ const (
 	bundleVersionDims = uint32(2)
 	MelBins           = 80
 	MelFrames         = 3000
-	AudioFrames       = 1500
-	AudioState        = 384
-	AudioHeads        = 6
-	AudioLayers       = 4
-	TextContext       = 448
-	TextState         = 384
-	TextHeads         = 6
-	TextLayers        = 4
-	VocabSize         = 51864
+	audioFrames       = 1500
+	audioState        = 384
+	audioHeads        = 6
+	audioLayers       = 4
+	textContext       = 448
+	textState         = 384
+	textHeads         = 6
+	textLayers        = 4
+	vocabSize         = 51864
 )
 
-// Dims describes the variable width and depth of an English Whisper model.
+// modelDims describes the variable width and depth of an English Whisper model.
 // Mel bins, audio frames, text context, and vocabulary are shared by all
 // English checkpoints and remain package constants.
-type Dims struct {
+type modelDims struct {
 	AudioState, AudioHeads, AudioLayers int
 	TextState, TextHeads, TextLayers    int
 }
 
-// TinyENDims are the dimensions of the official tiny.en checkpoint.
-var TinyENDims = Dims{AudioState: AudioState, AudioHeads: AudioHeads, AudioLayers: AudioLayers,
-	TextState: TextState, TextHeads: TextHeads, TextLayers: TextLayers}
+// tinyENDims are the dimensions of the official tiny.en checkpoint.
+var tinyENDims = modelDims{AudioState: audioState, AudioHeads: audioHeads, AudioLayers: audioLayers,
+	TextState: textState, TextHeads: textHeads, TextLayers: textLayers}
 
-func (d Dims) valid() bool {
+func (d modelDims) valid() bool {
 	ok := func(state, heads, layers int) bool {
 		return state > 0 && state <= 4096 && heads > 0 && state%heads == 0 && layers > 0 && layers <= 64
 	}
@@ -63,7 +63,7 @@ func (d Dims) valid() bool {
 type Model struct {
 	memory  *arena.Arena
 	tensors map[string][]float32
-	dims    Dims
+	dims    modelDims
 
 	// Encoder packing is immutable and shared by every lane on this model.
 	encoderMu      sync.Mutex
@@ -114,26 +114,26 @@ func (m *Model) packedVector(name string, rows, k int) (*whispergemm.PackedVecto
 
 func (m *Model) tensor(name string) []float32 { return m.tensors[name] }
 
-// Dims returns the model's dimensions.
-func (m *Model) Dims() Dims { return m.dims }
+// dimensions returns the model's dimensions.
+func (m *Model) dimensions() modelDims { return m.dims }
 
 type tensorSpec struct {
 	name  string
 	shape []int
 }
 
-func expectedTensors(d Dims) []tensorSpec {
+func expectedTensors(d modelDims) []tensorSpec {
 	a, t := d.AudioState, d.TextState
 	s := []tensorSpec{
 		{"encoder.conv1.weight", []int{a, MelBins, 3}},
 		{"encoder.conv1.bias", []int{a}},
 		{"encoder.conv2.weight", []int{a, a, 3}},
 		{"encoder.conv2.bias", []int{a}},
-		{"encoder.positional_embedding", []int{AudioFrames, a}},
+		{"encoder.positional_embedding", []int{audioFrames, a}},
 		{"encoder.ln_post.weight", []int{a}},
 		{"encoder.ln_post.bias", []int{a}},
-		{"decoder.token_embedding.weight", []int{VocabSize, t}},
-		{"decoder.positional_embedding", []int{TextContext, t}},
+		{"decoder.token_embedding.weight", []int{vocabSize, t}},
+		{"decoder.positional_embedding", []int{textContext, t}},
 		{"decoder.ln.weight", []int{t}},
 		{"decoder.ln.bias", []int{t}},
 	}
@@ -204,14 +204,14 @@ func ReadWeights(r io.Reader) (*Model, error) {
 	}
 	hash := sha256.New()
 	payload := io.TeeReader(r, hash)
-	dims := TinyENDims
+	dims := tinyENDims
 	if version == bundleVersionDims {
 		// Version 2 records the dimensions inside the checksummed payload.
 		var raw [6]uint32
 		if err := binary.Read(payload, binary.LittleEndian, &raw); err != nil {
 			return nil, err
 		}
-		dims = Dims{int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3]), int(raw[4]), int(raw[5])}
+		dims = modelDims{int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3]), int(raw[4]), int(raw[5])}
 		if !dims.valid() {
 			return nil, fmt.Errorf("invalid Whisper dimensions %+v", dims)
 		}

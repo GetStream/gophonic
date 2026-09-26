@@ -35,11 +35,11 @@ var registerPoolFormat = sync.OnceFunc(func() {
 	gophonic.Register(gophonic.Format{
 		Name:  "pooled",
 		Match: func(p string) bool { return strings.HasSuffix(p, ".pooled") },
-		Open: func(string, gophonic.Options) (*gophonic.Model, error) {
+		Open: func(path string, _ gophonic.Options) (*gophonic.Model, error) {
 			c := poolCounts.Load()
 			c.opens.Add(1)
 			time.Sleep(5 * time.Millisecond) // concurrent Acquires overlap the load
-			m := gophonic.NewModel("pooled", func() error { c.closes.Add(1); return nil })
+			m := gophonic.NewModel("pooled", path, func() error { c.closes.Add(1); return nil })
 			return gophonic.Provide(m, func() (moderator, error) {
 				c.lanes.Add(1)
 				return countedLane{c}, nil

@@ -16,6 +16,12 @@
 // heads and the text projections run on the CPU. The codec decoder turns
 // the sixteen codebooks into 1920 samples on the CPU's matrix units,
 // concurrently with the GPU.
+//
+// The talker follows the text as it speaks, and one of its attention heads
+// shows where: at every frame it weighs most the text token being spoken,
+// as the few alignment heads of Whisper's decoder follow the audio. Each
+// frame is read with that head's weights, and Synthesizer.Voiced reports
+// what the audio read so far has spoken from them, to the token.
 package qwen3tts
 
 import (
@@ -23,12 +29,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/GetStream/gophonic/internal/q8gemm"
 	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/internal/safetensors"
 	"github.com/GetStream/gophonic/internal/whispergemm"
+	"github.com/GetStream/gophonic/speech"
 	"github.com/thesyncim/vibejson"
 )
 
@@ -43,9 +51,20 @@ const (
 	codes  = 2048 // entries per codebook
 )
 
+// alignHeads are the talker's alignment heads by checkpoint (size and
+// type): the layer and head that attend to the text token being spoken.
+// Each was found by ranking every head of the talker against Whisper's word
+// timings of the speech it made (layer 3, head 0 of the 1.7B CustomVoice
+// talker: 0.33 words from the word being spoken, on average, where the
+// median head is 6 words away); TestVoicedFollowsWords holds it to that.
+var alignHeads = map[[2]string][2]int{
+	{"1b7", "custom_voice"}: {3, 0},
+}
+
 type config struct {
 	ModelType     string `json:"model_type"`
 	TTSModelType  string `json:"tts_model_type"`
+	TTSModelSize  string `json:"tts_model_size"`
 	TokenizerType string `json:"tokenizer_type"`
 	TTSBOS        int    `json:"tts_bos_token_id"`
 	TTSEOS        int    `json:"tts_eos_token_id"`
@@ -104,6 +123,13 @@ type Model struct {
 	cpEval  *qwen3lm.Evaluator
 	unmap   []func() error
 	threads int
+	// align is the talker's alignment head; aligned reports whether this
+	// checkpoint has a known one.
+	align   [2]int
+	aligned bool
+	// The preset voices, sorted, and the languages they speak.
+	voices    []string
+	languages speech.LanguageSet
 
 	hidden, cpHidden int
 
@@ -121,10 +147,13 @@ type Model struct {
 	// codebook g's codes. proj projects the talker state.
 	cpRows [groups - 1][]float32
 	proj   dense
-	// head is the talker's codec head, and heads the code predictor's
-	// fifteen: on the CPU, where their states arrive, exact in FP32.
-	head  *whispergemm.PackedVector
-	heads [groups - 1]*whispergemm.PackedVector
+	// head is the talker's codec head, on the CPU in FP32. The code
+	// predictor's fifteen heads and its input tables run on the GPU with it
+	// when it does (cpDecode: a frame's fifteen codes in one submission),
+	// and on the CPU in FP32 otherwise (heads).
+	head     *whispergemm.PackedVector
+	heads    [groups - 1]*whispergemm.PackedVector
+	cpDecode *qwen3lm.Decoder
 	// Text rows of the TTS control tokens.
 	bosRow, eosRow, padRow []float32
 
@@ -149,12 +178,22 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 		return nil, errors.New("qwen3tts: unsupported codebook count or text width")
 	}
 	m := &Model{cfg: c, threads: opts.Threads, hidden: c.Talker.HiddenSize, cpHidden: c.Talker.CodePredictor.HiddenSize}
+	m.align, m.aligned = alignHeads[[2]string{c.TTSModelSize, c.TTSModelType}]
+	for name := range c.Talker.Speakers {
+		m.voices = append(m.voices, strings.ToLower(name))
+	}
+	for name := range c.Talker.Languages {
+		if l, ok := speech.ParseLanguage(name); ok {
+			m.languages = m.languages.With(l)
+		}
+	}
+	slices.Sort(m.voices)
 	if m.threads <= 0 {
 		m.threads = max(1, qwen3lm.PerformanceCores())
 	}
 	defer func() {
 		if err != nil {
-			m.Release()
+			m.Close()
 		}
 	}()
 	if m.tokens, err = qwen3lm.LoadTokenizer(dir); err != nil {
@@ -238,12 +277,16 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 	if m.head, err = whispergemm.NewPackedVector(head, h, c.Vocab, h); err != nil {
 		return err
 	}
+	gpu := m.cp.GPU()
+	var gpuHeads [][]float32
 	for g := range m.heads {
 		w, err := st.Float32(fmt.Sprintf("talker.code_predictor.lm_head.%d.weight", g), codes, ch)
 		if err != nil {
 			return err
 		}
-		if m.heads[g], err = whispergemm.NewPackedVector(w, ch, codes, ch); err != nil {
+		if gpu {
+			gpuHeads = append(gpuHeads, w)
+		} else if m.heads[g], err = whispergemm.NewPackedVector(w, ch, codes, ch); err != nil {
 			return err
 		}
 	}
@@ -267,6 +310,16 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 		m.cpRows[g] = make([]float32, codes*ch)
 		if err := m.proj.apply(exec, m.cpRows[g], table, codes); err != nil {
 			return err
+		}
+	}
+	if gpu {
+		// Codebook g's rows are the input after its code, for g = 1..14;
+		// the GPU keeps them, and the CPU only the first codebook's.
+		if m.cpDecode, err = m.cpEval.NewDecoder(gpuHeads, m.cpRows[1:], codes); err != nil {
+			return err
+		}
+		for g := 1; g < len(m.cpRows); g++ {
+			m.cpRows[g] = nil
 		}
 	}
 	// The TTS control tokens' text rows.
@@ -298,38 +351,31 @@ func (m *Model) textRows(exec *whispergemm.Executor, dst []float32, ids []int, t
 	return m.textFC2.apply(exec, dst[:n*h], tmp[:n*h], n)
 }
 
-// Speakers lists the preset voices, in lower case.
-func (m *Model) Speakers() []string {
-	var names []string
-	for name := range m.cfg.Talker.Speakers {
-		names = append(names, name)
-	}
-	return names
-}
+// Voices lists the preset voices, in lower case and sorted. The list is
+// the model's: callers must not modify it.
+func (m *Model) Voices() []string { return m.voices }
 
-// Languages lists the languages a voice can be asked to speak, in lower
-// case; an empty language lets the model follow the text.
-func (m *Model) Languages() []string {
-	var names []string
-	for name := range m.cfg.Talker.Languages {
-		if !strings.Contains(name, "dialect") {
-			names = append(names, name)
-		}
-	}
-	return names
-}
+// Languages is the set of languages a voice can be asked to speak;
+// speech.Unknown lets the model follow the text.
+func (m *Model) Languages() speech.LanguageSet { return m.languages }
 
-// Release frees the model's GPU memory and mappings; the model is unusable
-// afterwards.
-func (m *Model) Release() {
+// Close releases the model's GPU memory and mappings, once its lanes are
+// closed; the model is unusable afterwards. It is safe to call more than
+// once.
+func (m *Model) Close() error {
+	m.cpDecode.Close()
+	m.cpDecode = nil
 	if m.talker != nil {
 		m.talker.Release()
+		m.talker = nil
 	}
 	if m.cp != nil {
 		m.cp.Release()
+		m.cp = nil
 	}
 	for _, unmap := range m.unmap {
 		unmap()
 	}
 	m.unmap = nil
+	return nil
 }

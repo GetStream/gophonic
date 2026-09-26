@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 	"github.com/GetStream/gophonic/speech"
 )
 
@@ -46,8 +47,8 @@ func (s *cpuStreamTrace) run(t testing.TB, pcm []float32, frames []int) {
 // audio inputs. Each new transcription verifies the previous partial, and
 // completed encoder windows can be reused only after exact input comparison.
 func BenchmarkCPUStreaming(b *testing.B) {
-	m := loadModel(b, FormatF16)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(b, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}

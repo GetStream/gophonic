@@ -51,20 +51,20 @@ func TestPredictionMatchesOnnxOracle(t *testing.T) {
 	}
 }
 
-func TestSessionConstructorAndClosedState(t *testing.T) {
-	if _, err := NewSession(nil); !errors.Is(err, ErrNilModel) {
-		t.Fatalf("NewSession(nil) error = %v, want ErrNilModel", err)
+func TestDetectorConstructorAndClosedState(t *testing.T) {
+	if _, err := NewDetector(nil); !errors.Is(err, ErrNilModel) {
+		t.Fatalf("NewDetector(nil) error = %v, want ErrNilModel", err)
 	}
-	var s *Session
-	if _, err := s.PredictInto(nil, 16000, 1); !errors.Is(err, speech.ErrClosed) {
-		t.Fatalf("nil Session prediction error = %v, want speech.ErrClosed", err)
+	var s *Detector
+	if _, err := s.Predict(nil, 16000, 1); !errors.Is(err, speech.ErrClosed) {
+		t.Fatalf("nil Detector prediction error = %v, want speech.ErrClosed", err)
 	}
 	if err := s.Close(); err != nil {
-		t.Fatalf("closing nil Session: %v", err)
+		t.Fatalf("closing nil Detector: %v", err)
 	}
 }
 
-func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
+func TestDetectorAdapterParityAndZeroAllocations(t *testing.T) {
 	path := testmodels.Path(t, testmodels.SmartTurn)
 	model, err := Load(path)
 	if err != nil {
@@ -79,13 +79,13 @@ func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	concrete, err := NewSession(model)
+	concrete, err := NewDetector(model)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer concrete.Close()
-	var session speech.TurnDetector = concrete
-	got, err := session.PredictInto(pcm, 16000, 1)
+	var detector speech.TurnDetector = concrete
+	got, err := detector.Predict(pcm, 16000, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,20 +93,20 @@ func TestSessionAdapterParityAndZeroAllocations(t *testing.T) {
 		t.Fatalf("adapter prediction %+v, direct prediction %+v", got, want)
 	}
 	if allocs := testing.AllocsPerRun(3, func() {
-		if _, err := session.PredictInto(pcm, 16000, 1); err != nil {
+		if _, err := detector.Predict(pcm, 16000, 1); err != nil {
 			t.Fatal(err)
 		}
 	}); allocs != 0 {
-		t.Fatalf("interface-dispatched Smart Turn session allocated %.1f objects per warm prediction", allocs)
+		t.Fatalf("interface-dispatched Smart Turn detector allocated %.1f objects per warm prediction", allocs)
 	}
 
-	if err := session.Close(); err != nil {
+	if err := detector.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Close(); err != nil {
+	if err := detector.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if _, err := session.PredictInto(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
+	if _, err := detector.Predict(pcm, 16000, 1); !errors.Is(err, speech.ErrClosed) {
 		t.Fatalf("prediction after Close error = %v, want speech.ErrClosed", err)
 	}
 }

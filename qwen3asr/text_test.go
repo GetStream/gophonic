@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/GetStream/gophonic/speech"
 )
 
 // The expected values are the reference package's detect_and_fix_repetitions
@@ -27,7 +29,7 @@ func TestParseMatchesReference(t *testing.T) {
 		{"prefix\nlanguage spanish<asr_text>hola", "", "Spanish", "hola"},
 		{strings.Repeat("abc", 19) + "abX", strings.Repeat("abc", 19) + "abX", "", strings.Repeat("abc", 19) + "abX"},
 		{strings.Repeat("é", 21) + strings.Repeat("🙂", 40), "é🙂", "", "é🙂"},
-		{"language Klingon<asr_text>nuqneH", "", "Klingon", "nuqneH"},
+		{"language Klingon<asr_text>nuqneH", "", "", "nuqneH"}, // outside speech's languages: Unknown
 	} {
 		if tc.fixed != "" {
 			if got := string(fixPatternRepeats(fixCharRepeats([]rune(tc.raw)), nil)); got != tc.fixed {
@@ -35,12 +37,12 @@ func TestParseMatchesReference(t *testing.T) {
 			}
 		}
 		tr := &Transcriber{raw: []byte(tc.raw)}
-		if language := tr.parse(""); language != tc.language || string(tr.text) != tc.text {
+		if language := tr.parse(speech.Unknown); language.Name() != tc.language || string(tr.text) != tc.text {
 			t.Errorf("parse(%q) = %q, %q; want %q, %q", tc.raw, language, tr.text, tc.language, tc.text)
 		}
 	}
 	tr := &Transcriber{raw: []byte("  forced text ")}
-	if language := tr.parse("German"); language != "German" || string(tr.text) != "forced text" {
+	if language := tr.parse(speech.German); language != speech.German || string(tr.text) != "forced text" {
 		t.Errorf("forced language: %q, %q", language, tr.text)
 	}
 }

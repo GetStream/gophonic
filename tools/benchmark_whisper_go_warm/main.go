@@ -44,7 +44,7 @@ func main() {
 		fatal(err.Error())
 	}
 	defer model.Close()
-	worker, err := whisper.NewTranscriberWithWorkers(model, threads)
+	worker, err := whisper.NewTranscriber(model, whisper.LaneOptions{Threads: threads})
 	if err != nil {
 		fatal(err.Error())
 	}

@@ -5,7 +5,7 @@
 // agent you can just talk to. It listens to everyone, answers out loud,
 // lets you interrupt it, and knows when you have not finished, with every
 // model running in this process: Smart Turn and Qwen3-ASR to listen,
-// Qwen3-8B to think, and Qwen3-TTS to speak.
+// Qwen3.6-35B-A3B to think, and Qwen3-TTS to speak.
 //
 //	go run .   # then open the printed link and talk
 //
@@ -28,7 +28,10 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	rtc "github.com/GetStream/getstream-go-webrtc"
 	webaudio "github.com/GetStream/getstream-go-webrtc/audio"
@@ -43,7 +46,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/GetStream/gophonic"
-	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/duplex"
 	"github.com/GetStream/gophonic/speech"
 	"github.com/thesyncim/vibejson"
@@ -53,35 +55,38 @@ const self = "gopher" // our user ID; we never subscribe to ourselves
 
 var verbose *bool
 
-const prompt = `You are Gopher, a friendly voice assistant taking part in a live video call.
-Everything you write is spoken aloud, so answer in one to three short, natural sentences.
-Never use emoji, symbols, lists, or markdown. You run entirely on the user's own laptop, in Go.
-Today is %s. Your knowledge may be older than that: when someone tells you about something
-newer, believe them rather than insisting on what you knew.
-In a meeting, what people say reaches you as "name said: ..." and you answer only what is meant
-for you. Messages marked "wrote in the chat" are the call's text chat, typed rather than spoken.
-Use both when asked about them or when summarizing the meeting, but never read a chat message
-out loud or answer it unless someone asks you to.`
-
 func main() {
 	callFlag := flag.String("call", "", "call to join as type:id (default: a new call)")
 	asrPath := flag.String("asr", "../../models/Qwen3-ASR-1.7B", "speech recognition model")
-	turnPath := flag.String("turn", "../../models/smart-turn-v3.2.gophonic", "turn detection model")
-	llmPath := flag.String("llm", "../../models/Qwen3-8B", "language model")
+	turnPath := flag.String("turn", "", "turn detection model, for a speech recognizer that does not judge turns itself as Qwen3-ASR-1.7B does")
+	llmPath := flag.String("llm", "../../models/Qwen3.6-35B-A3B", "language model")
 	ttsPath := flag.String("tts", "../../models/Qwen3-TTS-12Hz-1.7B-CustomVoice", "speech synthesis model")
 	language := flag.String("language", "", "language spoken in the call (ISO 639-1); empty detects it, and Gopher answers in kind")
-	voice := flag.String("voice", "ryan", "voice: ryan, aiden, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
+	languages := flag.String("languages", "", "languages spoken in the call, comma-separated ISO 639-1 codes such as en,pt: what is heard is transcribed in one of them, and Gopher answers in kind")
+	voice := flag.String("voice", "aiden", "voice: aiden, ryan, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
 	pronto := flag.String("pronto", "https://pronto-staging.getstream.io", "Pronto app whose call to join")
 	verbose = flag.Bool("v", false, "log the input level every second")
+	var servers []string
+	flag.Func("mcp", "an MCP server whose tools Gopher may use: its command line, split at spaces; may be repeated", func(command string) error {
+		if len(strings.Fields(command)) == 0 {
+			return fmt.Errorf("an empty command")
+		}
+		servers = append(servers, command)
+		return nil
+	})
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// Load the four models at once; each maps its cached weights.
+	// Load the models at once; each maps its cached weights.
 	start := time.Now()
-	models := make([]*gophonic.Model, 4)
+	paths := []string{*asrPath, *llmPath, *ttsPath}
+	if *turnPath != "" {
+		paths = append(paths, *turnPath)
+	}
+	models := make([]*gophonic.Model, len(paths))
 	var wg sync.WaitGroup
-	for i, path := range []string{*asrPath, *turnPath, *llmPath, *ttsPath} {
+	for i, path := range paths {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -101,51 +106,37 @@ func main() {
 	}
 	// The call's chat opens once Gopher has joined, which creates its user.
 	var room *chatChannel
+	var live atomic.Pointer[liveCaptions] // the chat's captions, when closed captions are off
 	humans := &roster{}
+	present := &people{}
 	mix := newMixer()
 	// Closed captions are a server-side API: with the app's secret, what is
 	// said appears as the call's captions; without it, in the chat.
 	captions := newCaptions(apiKey, callType, callID)
-	agent, err := duplex.New(duplex.Config{
-		Prompt: fmt.Sprintf(prompt, time.Now().Format("Monday, January 2, 2006")),
-		Voice:  speech.SpeakOptions{Voice: *voice, Language: *language},
-		Listen: speech.Options{Language: *language},
-		Reply:  chat.Options{Temperature: 0.7, TopP: 0.9, MaxTokens: 160},
-		// Alone with one person Gopher answers everything; in a meeting,
-		// only what is addressed to it, and it keeps track of who said
-		// what, for when it is asked about the meeting.
-		Heard: func(text string) (string, bool) {
-			if humans.count() <= 1 {
-				return text, true
-			}
-			return mix.loudest() + " said: " + text, strings.Contains(strings.ToLower(text), "gopher")
-		},
-		OnText: func(role chat.Role, text string, final bool) {
-			if role == chat.Assistant {
-				// Captions follow the voice sentence by sentence.
-				captions.assistant(text, final)
-			} else {
-				captions.show(mix.loudest(), text)
-			}
-			if !final {
-				return
-			}
-			who := mix.loudest() + ":"
-			if role == chat.Assistant {
-				who = "Gopher:"
-			}
-			fmt.Printf("%s %s\n", who, text)
-			if room != nil && captions.call == nil {
-				go room.send(who + " " + text)
-			}
-		},
-		OnError: func(err error) { log.Printf("agent: %v", err) },
-		OnStage: func(stage string, elapsed time.Duration) {
-			if *verbose {
-				log.Printf("reply %s after %v", stage, elapsed.Round(time.Millisecond))
-			}
-		},
-	}, models...)
+	var spoken speech.Language
+	if *language != "" {
+		var ok bool
+		if spoken, ok = speech.ParseLanguage(*language); !ok {
+			log.Fatalf("unknown language %q", *language)
+		}
+	}
+	allowed, err := speech.ParseLanguages(*languages)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg := config(*voice, spoken, allowed)
+	tools, clients, err := connect(ctx, servers, cfg.Tools)
+	check(err)
+	for _, c := range clients {
+		defer c.Close()
+		log.Printf("MCP server %s %s", c.Server.Name, c.Server.Version)
+	}
+	cfg.Tools = tools
+	// Captions follow the voice: closed captions sentence by sentence with
+	// the app's secret; otherwise the call's chat, where each answer is one
+	// message that grows as it is spoken.
+	cfg.Observer = &observer{captions: captions, live: &live}
+	agent, err := duplex.New(cfg, models...)
 	check(err)
 	defer agent.Close()
 
@@ -171,6 +162,9 @@ func main() {
 		log.Printf("chat is off: %v", err)
 		room = nil
 	}
+	if room != nil && captions.call == nil {
+		live.Store(newLiveCaptions(room))
+	}
 	if room != nil {
 		// The call's chat is silent context: what people type joins the
 		// conversation without being spoken or answered, so a later
@@ -184,7 +178,8 @@ func main() {
 			if name == "" {
 				name = userID
 			}
-			if err := agent.Add(chat.User, name+" wrote in the chat: "+text); err != nil {
+			present.learn(userID, name)
+			if err := agent.Note(present.name(userID) + " wrote in the call's chat: " + text); err != nil {
 				log.Printf("chat: %v", err)
 			}
 		}); err != nil {
@@ -238,7 +233,27 @@ func main() {
 			log.Printf("subscribe: %v", err)
 		}
 	}
+	// Who is in the call, and who comes and goes, reaches the agent as
+	// notes, by name, as the chat does.
+	arrive := func(p *sfu_models.Participant, note string) {
+		if id := p.GetUserId(); id != self && present.arrive(id, p.GetName()) {
+			if err := agent.Note(present.name(id) + note); err != nil {
+				log.Printf("agent: %v", err)
+			}
+		}
+	}
+	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_ParticipantJoined) {
+		arrive(e.ParticipantJoined.GetParticipant(), " joined the call.")
+	})()
+	defer rtc.HandleCallEvent(call, func(e *sfu_events.SfuEvent_ParticipantLeft) {
+		if id := e.ParticipantLeft.GetParticipant().GetUserId(); id != self && present.leave(id) {
+			if err := agent.Note(present.name(id) + " left the call."); err != nil {
+				log.Printf("agent: %v", err)
+			}
+		}
+	})()
 	for _, p := range join.GetCallState().GetParticipants() {
+		arrive(p, " is in the call.")
 		for _, t := range p.GetPublishedTracks() {
 			if t == sfu_models.TrackType_TRACK_TYPE_AUDIO && p.GetUserId() != self {
 				mics[p.GetSessionId()] = &signal_rpc.TrackSubscriptionDetails{UserId: p.GetUserId(), SessionId: p.GetSessionId(),
@@ -268,12 +283,14 @@ func main() {
 	})()
 
 	fmt.Printf("🐹 Gopher is in the call. Join and say hi: %s/join/%s?type=%s\n", *pronto, url.PathEscape(callID), callType)
-	converse(ctx, agent, mix, writer)
+	converse(ctx, agent, mix, humans, present, writer)
 }
 
 // converse runs the agent on the call's clock: every 20 ms the room's audio
-// goes in and the agent's speech comes out.
-func converse(ctx context.Context, agent speech.Duplex, mix *mixer, writer *audiortc.TrackWriter) {
+// goes in and the agent's speech comes out. In a meeting, the loudest
+// participant is named as the speaker, so the conversation knows whose
+// words it hears.
+func converse(ctx context.Context, agent *duplex.Cascade, mix *mixer, humans *roster, present *people, writer *audiortc.TrackWriter) {
 	inSize, outSize := agent.Frame()
 	_, outRate := agent.Rates()
 	in, out := make([]float32, inSize), make([]float32, outSize)
@@ -287,11 +304,21 @@ func converse(ctx context.Context, agent speech.Duplex, mix *mixer, writer *audi
 			return
 		case <-tick.C:
 		}
-		mix.read(in)
-		for _, v := range in {
+		heard := in
+		if !mix.read(in) {
+			heard = nil // a packet is late: a gap, not silence
+		}
+		for _, v := range heard {
 			peak = max(peak, v, -v)
 		}
-		state, err := agent.Step(ctx, in, out)
+		if frames%10 == 0 {
+			if humans.count() > 1 {
+				agent.Speaker(present.name(mix.loudest()))
+			} else {
+				agent.Speaker("")
+			}
+		}
+		state, err := agent.Step(heard, out)
 		if err != nil {
 			return
 		}
@@ -350,9 +377,17 @@ type mixer struct {
 	mu     sync.Mutex
 	queues map[string][]float32
 	energy map[string]float32 // recent loudness per track, decaying
+	missed map[string]int     // frames each track has been late in a row
 }
 
-func newMixer() *mixer { return &mixer{queues: map[string][]float32{}, energy: map[string]float32{}} }
+func newMixer() *mixer {
+	return &mixer{queues: map[string][]float32{}, energy: map[string]float32{}, missed: map[string]int{}}
+}
+
+// maxGap is how long a track that was sending may be late before its
+// silence is taken for real: longer, and the sender stopped (a muted or
+// quiet microphone sends nothing).
+const maxGap = 3 // frames: 60 ms
 
 const maxQueue = speech.SampleRate / 5 // 200 ms
 
@@ -370,16 +405,36 @@ func (m *mixer) drop(key string) {
 	m.mu.Lock()
 	delete(m.queues, key)
 	delete(m.energy, key)
+	delete(m.missed, key)
 	m.mu.Unlock()
 }
 
-func (m *mixer) read(dst []float32) {
+// read mixes the next frame of every track into dst. It reports false,
+// consuming nothing, when a track that was sending is late: the frame is
+// not known yet, and its absence is not silence. The audio still arrives,
+// and is heard in order, at most maxGap frames later.
+func (m *mixer) read(dst []float32) bool {
 	clear(dst)
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	late := false
+	for key, q := range m.queues {
+		if len(q) >= len(dst) {
+			continue
+		}
+		if m.missed[key] < maxGap {
+			late = true
+		}
+		m.missed[key]++
+	}
+	if late {
+		return false
+	}
 	for key, q := range m.queues {
 		if len(q) < len(dst) {
 			continue
 		}
+		m.missed[key] = 0
 		var e float32
 		for i, v := range q[:len(dst)] {
 			dst[i] += v
@@ -388,7 +443,7 @@ func (m *mixer) read(dst []float32) {
 		m.energy[key] = 0.95*m.energy[key] + e
 		m.queues[key] = q[:copy(q, q[len(dst):])]
 	}
-	m.mu.Unlock()
+	return true
 }
 
 // loudest returns the user whose audio was loudest recently, the likely
@@ -406,11 +461,55 @@ func (m *mixer) loudest() string {
 	return id
 }
 
+// observer shows what is said: as the call's closed captions with the
+// app's secret, otherwise in its chat, and on the terminal.
+type observer struct {
+	duplex.Base
+	captions *captions
+	live     *atomic.Pointer[liveCaptions]
+}
+
+func (o *observer) Heard(speaker string, text []byte, final bool) {
+	if !final {
+		return
+	}
+	if speaker == "" {
+		speaker = "you"
+	}
+	o.captions.show(speaker, string(text))
+	if l := o.live.Load(); l != nil {
+		l.say(speaker + ": " + string(text))
+	}
+	fmt.Printf("%s: %s\n", speaker, text)
+}
+
+func (o *observer) Said(text []byte, voiced int, final bool) {
+	shown := string(text[:voiced])
+	if final {
+		shown = string(text)
+	}
+	o.captions.assistant(shown, final)
+	if l := o.live.Load(); l != nil {
+		l.answer(shown, final)
+	}
+	if final {
+		fmt.Printf("Gopher: %s\n", text)
+	}
+}
+
+func (o *observer) Stage(s duplex.Stage, elapsed time.Duration) {
+	if *verbose {
+		log.Printf("reply %s after %v", s, elapsed.Round(time.Millisecond))
+	}
+}
+
+func (o *observer) Error(err error) { log.Printf("agent: %v", err) }
+
 // captions sends what is said as the call's closed captions.
 type captions struct {
 	call *getstream.Call // nil without the app's secret
 	send chan getstream.SendClosedCaptionRequest
-	sent int // bytes of the current reply already captioned
+	cut  sentences // the current reply's sentences captioned
 }
 
 func newCaptions(apiKey, callType, callID string) *captions {
@@ -450,21 +549,51 @@ func (c *captions) show(speaker, text string) {
 
 // assistant captions each finished sentence of the reply growing in text.
 func (c *captions) assistant(text string, final bool) {
-	if c.sent > len(text) {
-		c.sent = 0 // a new reply
+	if spoken := c.cut.next(text, final); spoken != "" {
+		c.show(self, spoken)
 	}
-	rest := text[c.sent:]
-	end := strings.LastIndexAny(rest, ".!?…")
+}
+
+// sentences cuts a reply that grows, a word at a time, into its finished
+// sentences.
+type sentences struct{ sent int } // bytes of the reply already cut
+
+// next returns the sentences text finishes beyond those already cut, and
+// all the rest of it when final ends the reply.
+func (s *sentences) next(text string, final bool) string {
+	if s.sent > len(text) {
+		s.sent = 0 // a new reply
+	}
+	end := s.sent + sentenceEnd(text[s.sent:])
 	if final {
-		end = len(rest) - 1
+		end = len(text)
 	}
-	if end >= 0 {
-		c.show(self, rest[:end+1])
-		c.sent += end + 1
-	}
+	spoken := strings.TrimSpace(text[s.sent:end])
+	s.sent = end
 	if final {
-		c.sent = 0
+		s.sent = 0
 	}
+	return spoken
+}
+
+// sentenceEnd is where the last finished sentence in text ends, or 0: after
+// a full stop, question or exclamation mark, or ellipsis that ends a word
+// (the point in 3.5 does not), or after an ideographic one, which needs no
+// space.
+func sentenceEnd(text string) int {
+	for i := len(text); i > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:i])
+		switch r {
+		case '。', '！', '？':
+			return i
+		case '.', '!', '?', '…':
+			if next, _ := utf8.DecodeRuneInString(text[i:]); i == len(text) || unicode.IsSpace(next) {
+				return i
+			}
+		}
+		i -= size
+	}
+	return 0
 }
 
 // roster counts the people in the call.
@@ -494,6 +623,60 @@ func (r *roster) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.ids)
+}
+
+// people names the call's participants, from the call and its chat, and
+// counts their sessions, so that a second tab is not a second arrival.
+type people struct {
+	mu       sync.Mutex
+	names    map[string]string // user ID → display name
+	sessions map[string]int
+}
+
+// name returns id's display name, or id until one is known.
+func (p *people) name(id string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n := p.names[id]; n != "" {
+		return n
+	}
+	return id
+}
+
+// learn records id's display name.
+func (p *people) learn(id, name string) {
+	if name = strings.TrimSpace(name); name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.names == nil {
+		p.names = map[string]string{}
+	}
+	p.names[id] = name
+}
+
+// arrive counts a session of id, reporting whether id just came.
+func (p *people) arrive(id, name string) bool {
+	p.learn(id, name)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sessions == nil {
+		p.sessions = map[string]int{}
+	}
+	p.sessions[id]++
+	return p.sessions[id] == 1
+}
+
+// leave ends a session of id, reporting whether id is gone.
+func (p *people) leave(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sessions[id] == 0 {
+		return false
+	}
+	p.sessions[id]--
+	return p.sessions[id] == 0
 }
 
 // prontoToken asks a Pronto deployment for a user token for its app.

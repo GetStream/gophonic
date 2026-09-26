@@ -22,7 +22,7 @@ func TestTranscriberOfficialJFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(m)
+	worker, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestFullFileClearsZeroDurationSegment(t *testing.T) {
 	if !blankWhisperText([]byte("\u2003")) || !blankWhisperText([]byte{0x1c, 0x1d, 0x1e, 0x1f}) || blankWhisperText([]byte(" A")) {
 		t.Fatal("Whisper segment blank-text classification differs")
 	}
-	tokenizer, err := NewTokenizer(EnglishOnly)
+	tokenizer, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,10 +247,10 @@ func TestTranscriberUTF8Replacement(t *testing.T) {
 }
 
 func TestTranscriberRejectsClosedAndLongWindow(t *testing.T) {
-	if _, err := NewTranscriber(nil); err == nil {
+	if _, err := NewTranscriber(nil, LaneOptions{}); err == nil {
 		t.Fatal("accepted nil model")
 	}
-	worker, err := NewTranscriber(&Model{})
+	worker, err := NewTranscriber(&Model{}, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,12 +265,12 @@ func TestTranscriberRejectsClosedAndLongWindow(t *testing.T) {
 }
 
 func TestTranscriberExplicitWorkerBudget(t *testing.T) {
-	for _, workers := range []int{0, 65} {
-		if _, err := NewTranscriberWithWorkers(&Model{}, workers); err == nil {
+	for _, workers := range []int{-1, 65} {
+		if _, err := NewTranscriber(&Model{}, LaneOptions{Threads: workers}); err == nil {
 			t.Fatalf("accepted %d workers", workers)
 		}
 	}
-	worker, err := NewTranscriberWithWorkers(&Model{}, 12)
+	worker, err := NewTranscriber(&Model{}, LaneOptions{Threads: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestTranscriberExplicitWorkerBudget(t *testing.T) {
 }
 
 func TestSegmentTimestampOffsets(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestOfficialJFKSegmentTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestOfficialJFKWordTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := NewTranscriber(model)
+	worker, err := NewTranscriber(model, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
 
 func TestEnglishModelWordAlignmentHeads(t *testing.T) {
 	for _, tc := range []struct{ state, layers, heads, count int }{{384, 4, 6, 8}, {512, 6, 8, 5}, {768, 12, 12, 19}, {1024, 24, 16, 18}} {
-		selected := alignmentHeadsForDims(Dims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
+		selected := alignmentHeadsForDims(modelDims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
 		if len(selected) != tc.count {
 			t.Fatalf("%dx%d heads=%d, want %d", tc.layers, tc.heads, len(selected), tc.count)
 		}
@@ -432,7 +432,7 @@ func TestOfficialOtherEnglishModelWordTimestamps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			worker, err := NewTranscriber(model)
+			worker, err := NewTranscriber(model, LaneOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

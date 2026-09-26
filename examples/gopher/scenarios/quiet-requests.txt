@@ -1,0 +1,12 @@
+# Silence answers only a request for it: a lone word, perhaps misheard,
+# gets a reply; "wait" and "be quiet until" get silence, until the word.
+user: Return.
+gopher: speaks
+user: Wait.
+gopher: silent
+user: Be quiet until I say hi.
+gopher: silent
+user: What is two plus two?
+gopher: silent
+user: Hi!
+gopher: speaks

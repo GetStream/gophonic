@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -35,17 +36,56 @@ var (
 	wsBase   = "wss://chat.stream-io-api.com/connect"
 )
 
-type chatChannel struct{ apiKey, token, path string }
+type chatChannel struct {
+	apiKey, token, path string
+	edits               bool // the user may edit its own messages here
+}
 
-// open creates the channel if nobody has opened the call's chat yet.
+// open creates the channel if nobody has opened the call's chat yet, and
+// learns from the channel's capabilities whether c's user may edit its own
+// messages: a channel type may let users post but not edit, as Pronto's
+// videocall does.
 func (c *chatChannel) open() error {
-	_, err := c.post("/query", map[string]any{"state": false}, "")
-	return err
+	data, err := c.post("/query", map[string]any{"state": false}, "")
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Channel struct {
+			OwnCapabilities []string `json:"own_capabilities"`
+		} `json:"channel"`
+	}
+	if err := vibejson.Unmarshal(data, &resp); err != nil {
+		return err
+	}
+	c.edits = slices.Contains(resp.Channel.OwnCapabilities, "update-own-message")
+	return nil
 }
 
 // send posts text as a message from c's user.
 func (c *chatChannel) send(text string) error {
-	_, err := c.post("/message", map[string]any{"message": map[string]any{"text": text}}, "")
+	_, err := c.say(text)
+	return err
+}
+
+// say posts text as a message from c's user and returns its ID.
+func (c *chatChannel) say(text string) (string, error) {
+	data, err := c.post("/message", map[string]any{"message": map[string]any{"text": text}}, "")
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Message wsMessage `json:"message"`
+	}
+	if err := vibejson.Unmarshal(data, &resp); err != nil {
+		return "", err
+	}
+	return resp.Message.ID, nil
+}
+
+// edit replaces the text of c's user's message id.
+func (c *chatChannel) edit(id, text string) error {
+	_, err := c.request(restBase+"/messages/"+url.PathEscape(id), map[string]any{"message": map[string]any{"text": text}}, "")
 	return err
 }
 
@@ -53,11 +93,16 @@ func (c *chatChannel) send(text string) error {
 // connectionID, when not empty, ties the request to a websocket connection
 // that is watching the channel.
 func (c *chatChannel) post(endpoint string, body any, connectionID string) ([]byte, error) {
+	return c.request(restBase+c.path+endpoint, body, connectionID)
+}
+
+// request posts body as JSON to the API URL u and returns the response body.
+func (c *chatChannel) request(u string, body any, connectionID string) ([]byte, error) {
 	payload, err := vibejson.Marshal(&body)
 	if err != nil {
 		return nil, err
 	}
-	u := restBase + c.path + endpoint + "?api_key=" + url.QueryEscape(c.apiKey)
+	u += "?api_key=" + url.QueryEscape(c.apiKey)
 	if connectionID != "" {
 		u += "&connection_id=" + url.QueryEscape(connectionID)
 	}
@@ -84,7 +129,7 @@ func (c *chatChannel) post(endpoint string, body any, connectionID string) ([]by
 }
 
 // historyLimit caps how much of the channel's past Gopher loads on join.
-const historyLimit = 100
+const historyLimit = 300 // the API's most; Gopher's own captions fill much of it
 
 // healthEvery is how often Gopher pings the realtime connection to keep it
 // open; Stream expects one from the client at least every 30 s.
@@ -329,5 +374,92 @@ func (c *chatChannel) pump(ctx context.Context, conn *wsConn, connectionID strin
 			seen[m.ID] = true
 		}
 		onMessage(m.User.ID, strings.TrimSpace(m.User.Name), m.Text)
+	}
+}
+
+// liveCaptions writes the call's captions into its chat when closed
+// captions are off: what people say as messages, and each of Gopher's
+// answers as one message that grows as the voice speaks it, where the
+// channel lets Gopher edit its messages; where it does not, each sentence
+// is posted once it is spoken. Writes go out in order; while one is under
+// way, only the latest text of an answer waits to follow.
+type liveCaptions struct {
+	room *chatChannel
+	mu   sync.Mutex
+	wake chan struct{}
+	said []string  // messages to post, in order
+	next string    // the answer's newest text, when it changed
+	done bool      // the answer is final
+	cut  sentences // the answer's sentences posted, without edits
+}
+
+func newLiveCaptions(room *chatChannel) *liveCaptions {
+	l := &liveCaptions{room: room, wake: make(chan struct{}, 1)}
+	go l.run()
+	return l
+}
+
+// say posts a message.
+func (l *liveCaptions) say(text string) {
+	l.mu.Lock()
+	l.said = append(l.said, text)
+	l.mu.Unlock()
+	l.signal()
+}
+
+// answer shows the text of Gopher's answer spoken so far; final ends it.
+func (l *liveCaptions) answer(text string, final bool) {
+	l.mu.Lock()
+	if l.room.edits {
+		l.next, l.done = "Gopher: "+text, l.done || final
+	} else if spoken := l.cut.next(text, final); spoken != "" {
+		l.said = append(l.said, "Gopher: "+spoken)
+	}
+	l.mu.Unlock()
+	l.signal()
+}
+
+func (l *liveCaptions) signal() {
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (l *liveCaptions) run() {
+	id := "" // the answer's message
+	for range l.wake {
+		for {
+			l.mu.Lock()
+			said, next, done := l.said, l.next, l.done
+			l.said, l.next = nil, ""
+			if done && next == "" {
+				l.done = false
+			}
+			l.mu.Unlock()
+			if len(said) == 0 && next == "" {
+				if done {
+					id = ""
+				}
+				break
+			}
+			for _, text := range said {
+				if _, err := l.room.say(text); err != nil {
+					log.Printf("chat: %v", err)
+				}
+			}
+			if next == "" {
+				continue
+			}
+			var err error
+			if id == "" {
+				id, err = l.room.say(next)
+			} else {
+				err = l.room.edit(id, next)
+			}
+			if err != nil {
+				log.Printf("chat: %v", err)
+			}
+		}
 	}
 }

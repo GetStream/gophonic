@@ -18,8 +18,8 @@ import (
 // BenchmarkCPULogitsRows projects real prompt-tail hidden states through the
 // vocabulary head. Separate calls are the exact reference for the CPU batch.
 func BenchmarkCPULogitsRows(b *testing.B) {
-	m := loadModel(b, FormatF16)
-	tr, err := NewTranscriber(m, 0)
+	m := loadModel(b, qwen3lm.WeightsF16)
+	tr, err := NewTranscriber(m, LaneOptions{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -79,10 +79,10 @@ func BenchmarkCPULogitsRows(b *testing.B) {
 // BenchmarkCPUPartialTranscribe measures four public calls on strictly
 // growing PCM. Each continuation verifies the preceding call's transcript.
 func BenchmarkCPUPartialTranscribe(b *testing.B) {
-	m := loadModel(b, FormatF16)
+	m := loadModel(b, qwen3lm.WeightsF16)
 	for _, clip := range []string{"jfk", "zh"} {
 		b.Run(clip, func(b *testing.B) {
-			tr, err := NewTranscriber(m, 0)
+			tr, err := NewTranscriber(m, LaneOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -14,10 +14,10 @@ import (
 )
 
 func TestEncoderAttentionArenaOwnershipAndClose(t *testing.T) {
-	var lanes [2]*EncoderWorkspace
+	var lanes [2]*encoderWorkspace
 	for i := range lanes {
 		var err error
-		lanes[i], err = NewEncoderWorkspaceWithWorkers(8)
+		lanes[i], err = newEncoderWorkspaceWithWorkers(8)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +62,7 @@ func TestLanesShareOnlyImmutableEncoderPacking(t *testing.T) {
 	if !ok {
 		t.Fatal("invalid weights")
 	}
-	var w [2]*EncoderWorkspace
+	var w [2]*encoderWorkspace
 	for i := range w {
 		w[i], err = newEncoderWorkspace(m.dims, 1)
 		if err != nil {
@@ -101,37 +101,37 @@ func TestPromptWithoutLogitsPreservesDecoderState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	encoder, err := readFloatFixture("../testdata/whisper/jfk.encoder.f32le", AudioFrames*AudioState)
+	encoder, err := readFloatFixture("../testdata/whisper/jfk.encoder.f32le", audioFrames*audioState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := NewDecoderScratch()
-	if whispergemm.PackedVectorAccelerated() && len(s.crossKeys) != AudioFrames*AudioState {
+	s := newTinyDecoderScratch()
+	if whispergemm.PackedVectorAccelerated() && len(s.crossKeys) != audioFrames*audioState {
 		t.Fatal("raw cache retains more than one layer")
 	}
 	const first, second = 50257, 50362
-	want := make([]float32, VocabSize)
+	want := make([]float32, vocabSize)
 	// Reuse the same scratch across full and short audio to catch stale packed
 	// contents and layer scratch offsets after changing the cache shape.
-	for _, frames := range []int{AudioFrames, 37, AudioFrames} {
-		audio := encoder[:frames*AudioState]
-		if err := m.BeginDecode(audio, s); err != nil {
+	for _, frames := range []int{audioFrames, 37, audioFrames} {
+		audio := encoder[:frames*audioState]
+		if err := m.beginDecode(audio, s); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.LogitsForTokenInto(first, 0, s, s.logits); err != nil {
+		if err := m.logitsForTokenInto(first, 0, s, s.logits); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.LogitsForTokenInto(second, 1, s, want); err != nil {
+		if err := m.logitsForTokenInto(second, 1, s, want); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.BeginDecode(audio, s); err != nil {
+		if err := m.beginDecode(audio, s); err != nil {
 			t.Fatal(err)
 		}
 		if err := m.decodeTokenInto(first, 0, s, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		runtime.GC()
-		if err := m.LogitsForTokenInto(second, 1, s, s.logits); err != nil {
+		if err := m.logitsForTokenInto(second, 1, s, s.logits); err != nil {
 			t.Fatal(err)
 		}
 		for i, x := range want {

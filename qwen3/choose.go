@@ -74,10 +74,10 @@ func loadLetterHead(dir string, tokens *Tokenizer, hidden, vocab int) (*letterHe
 // builds no strings and does no map lookups. A Question is not safe for
 // concurrent use; calls on its Model are serialized anyway.
 type Question struct {
-	m       *Model
+	m       *encoder
 	labels  []string
-	kv      *PrefixKV // the prompt prefix's keys and values, never modified
-	suffix  []int     // end of turn and the empty non-thinking block
+	kv      *qwen3lm.PrefixKV // the prompt prefix's keys and values, never modified
+	suffix  []int             // end of turn and the empty non-thinking block
 	options int
 	ids     []int // token storage for a batch's inputs and suffixes
 	seqs    [][]int
@@ -95,14 +95,22 @@ type Question struct {
 const (
 	questionHeader = "<|im_start|>user\n"
 	questionFooter = "Answer with the letter only.\n\nInput:\n"
-	questionSuffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	questionSuffix = "<|im_end|>\n"
+)
+
+// Replies open with the assistant's header and, for hybrid thinking models
+// such as Qwen3-8B, an empty thinking block; the Instruct-2507 models have
+// none.
+const (
+	answerThinking = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+	answerPlain    = "<|im_start|>assistant\n"
 )
 
 // Question prepares a multiple-choice question with 2 to 26 options: it
 // tokenizes the prompt and evaluates its prefix once (about 288 KiB of keys
 // and values per prefix token). It allocates; reuse the result
 // for every input.
-func (e *Model) Question(question string, options []string) (*Question, error) {
+func (e *encoder) Question(question string, options []string) (*Question, error) {
 	if e == nil || e.letters == nil {
 		return nil, errors.New("qwen3: this model was opened without the language-model head")
 	}
@@ -119,7 +127,8 @@ func (e *Model) Question(question string, options []string) (*Question, error) {
 	if err != nil {
 		return nil, err
 	}
-	if q.suffix, err = e.tokens.EncodeInto(questionSuffix, make([]int, 0, len(questionSuffix)), &q.tok); err != nil {
+	suffix := questionSuffix + e.answer
+	if q.suffix, err = e.tokens.EncodeInto(suffix, make([]int, 0, len(suffix)), &q.tok); err != nil {
 		return nil, err
 	}
 	if len(prefix)+len(q.suffix) >= maxTokens {
@@ -168,7 +177,7 @@ func (q *Question) Close() error { return nil }
 
 // Classifier is Question as a speech.TextClassifier; with Close it makes a
 // Model a speech.ZeroShot.
-func (e *Model) Classifier(question string, labels []string) (speech.TextClassifier, error) {
+func (e *encoder) Classifier(question string, labels []string) (speech.TextClassifier, error) {
 	q, err := e.Question(question, labels)
 	if err != nil {
 		return nil, err
@@ -178,7 +187,7 @@ func (e *Model) Classifier(question string, labels []string) (speech.TextClassif
 
 var (
 	_ speech.TextClassifier = (*Question)(nil)
-	_ speech.ZeroShot       = (*Model)(nil)
+	_ speech.ZeroShot       = (*encoder)(nil)
 )
 
 // ChooseTokens is Choose for input already tokenized with the model's
@@ -304,7 +313,7 @@ func (q *Question) chooseTokens(ctx context.Context, inputs [][]int, probs [][]f
 }
 
 // letterProbs writes the softmax over the answer letters' next-token logits.
-func (e *Model) letterProbs(hidden, probs []float32) {
+func (e *encoder) letterProbs(hidden, probs []float32) {
 	rows := e.letters.rows
 	maxLogit := math.Inf(-1)
 	for i := range probs {
@@ -330,10 +339,10 @@ func (e *Model) letterProbs(hidden, probs []float32) {
 // A Stream is not safe for concurrent use.
 type Stream struct {
 	q        *Question
-	kv       *PrefixKV // question prefix, then the current input, then scratch
-	input    []int     // token IDs of the current input
-	ids      []int     // tokenized update
-	seq      []int     // new input tokens followed by the suffix
+	kv       *qwen3lm.PrefixKV // question prefix, then the current input, then scratch
+	input    []int             // token IDs of the current input
+	ids      []int             // tokenized update
+	seq      []int             // new input tokens followed by the suffix
 	hidden   []float32
 	last     []float32 // probabilities for input, valid when answered is set
 	answered bool

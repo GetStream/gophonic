@@ -175,7 +175,7 @@ func TestQwenNextPiece(t *testing.T) {
 		t.Run(tc.input, func(t *testing.T) {
 			var got []string
 			for i := 0; i < len(tc.input); {
-				start, end := qwenNextPiece([]byte(tc.input), i)
+				start, end := qwenNextPiece([]byte(tc.input), i, false)
 				got = append(got, tc.input[start:end])
 				i = end
 			}

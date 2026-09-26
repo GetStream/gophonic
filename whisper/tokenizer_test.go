@@ -14,12 +14,12 @@ import (
 )
 
 func TestEnglishTokenizerWhisperSpecialIDs(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.VocabSize() != VocabSize {
-		t.Fatalf("vocab size %d, want %d", tok.VocabSize(), VocabSize)
+	if tok.VocabSize() != vocabSize {
+		t.Fatalf("vocab size %d, want %d", tok.VocabSize(), vocabSize)
 	}
 	checks := []struct {
 		name string
@@ -38,13 +38,13 @@ func TestEnglishTokenizerWhisperSpecialIDs(t *testing.T) {
 			t.Errorf("%s ID %d, want %d", check.name, check.got, check.want)
 		}
 	}
-	if got, ok := tok.LanguageToken("en"); !ok || got != 50258 {
+	if got, ok := tok.languageToken("en"); !ok || got != 50258 {
 		t.Errorf("English language token = %d, %v; want 50258, true", got, ok)
 	}
 }
 
 func TestTokenizerOfficialJFKTokenTranscript(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestTokenizerOfficialJFKTokenTranscript(t *testing.T) {
 		t.Fatalf("JFK token IDs differ from the pinned oracle:\n got %v\nwant %v", encoded, oracle.Tokens)
 	}
 	decoded := make([]byte, 0, len(wantText))
-	decoded, err = tok.DecodeInto(decoded, encoded)
+	decoded, err = tok.decodeInto(decoded, encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestTokenizerOfficialJFKTokenTranscript(t *testing.T) {
 }
 
 func TestTokenizerOfficialWhitespaceVectors(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestTokenizerOfficialWhitespaceVectors(t *testing.T) {
 }
 
 func TestMultilingualTokenizerSpecialIDs(t *testing.T) {
-	tok, err := NewTokenizer(Multilingual)
+	tok, err := newTokenizer(Multilingual)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestMultilingualTokenizerSpecialIDs(t *testing.T) {
 }
 
 func TestTokenizerIntoSteadyStateAllocations(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestTokenizerIntoSteadyStateAllocations(t *testing.T) {
 	}
 	decodeAllocs := testing.AllocsPerRun(20, func() {
 		decoded = decoded[:0]
-		decoded, decodeErr = tok.DecodeInto(decoded, encoded)
+		decoded, decodeErr = tok.decodeInto(decoded, encoded)
 	})
 	if decodeErr != nil {
 		t.Fatal(decodeErr)

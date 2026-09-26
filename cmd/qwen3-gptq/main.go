@@ -15,18 +15,18 @@ import (
 	"os"
 	"time"
 
-	"github.com/GetStream/gophonic/qwen3"
+	"github.com/GetStream/gophonic/internal/qwen3lm"
 )
 
 func main() {
-	weights := flag.String("weights", qwen3.WeightsGPU, "weight format: gpu or gpu-q4")
+	weights := flag.String("weights", "gpu", "weight format: gpu or gpu-q4")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: qwen3-gptq [-weights gpu|gpu-q4] /path/to/Qwen3-8B")
 		os.Exit(2)
 	}
 	start := time.Now()
-	err := qwen3.QuantizeGPTQ(flag.Arg(0), *weights, func(layer, layers int) {
+	err := qwen3lm.QuantizeGPTQ(flag.Arg(0), *weights, func(layer, layers int) {
 		fmt.Fprintf(os.Stderr, "\rlayer %d/%d  %v", layer, layers, time.Since(start).Round(time.Second))
 	})
 	fmt.Fprintln(os.Stderr)

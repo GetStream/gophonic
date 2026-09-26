@@ -410,6 +410,15 @@ func (o *layerOp) attentionPrefix(worker, start, end int) {
 				softmaxScaled(row[:valid], scale)
 				clear(row[valid:])
 			}
+			if p := ws.probe; p != nil && p.Layer == o.layerIndex && p.Head == qh {
+				// A probe's extension is one token: this block's one row.
+				for i := range p.Probs {
+					p.Probs[i] = 0
+					if j := p.From + i; j < nk {
+						p.Probs[i] = scores[j]
+					}
+				}
+			}
 			// ctx = Σ chunks P[:, chunk]·Vchunk + P[:, past:]·Vown.
 			ctx := ws.ctx[off:]
 			must(sc.values.MulScratch(ctx, qdim, scores[past:], nk, qb, sc.gemm))

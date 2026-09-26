@@ -75,7 +75,7 @@ func TestSoftmaxRowsStableReference(t *testing.T) {
 }
 
 func BenchmarkAudioSoftmax(b *testing.B) {
-	const rows, columns = attentionTileRows, AudioFrames
+	const rows, columns = attentionTileRows, audioFrames
 	src, values := make([]float32, rows*columns), make([]float32, rows*columns)
 	for i := range src {
 		src[i] = float32(math.Sin(float64(i)*0.07)*8 + math.Cos(float64(i)*0.013)*4)

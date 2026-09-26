@@ -16,7 +16,7 @@ func (a *encoderActivation) ApplyRows(start, end int) {
 	nn.BiasGELU(a.values[start*a.width:end*a.width], a.bias, end-start, a.width)
 }
 
-func (w *EncoderWorkspace) activate(values, bias []float32, rows, width int) error {
+func (w *encoderWorkspace) activate(values, bias []float32, rows, width int) error {
 	w.activation = encoderActivation{values: values, bias: bias, width: width}
 	err := w.gemm.Rows(&w.activation, rows, 32)
 	w.activation = encoderActivation{}

@@ -36,7 +36,7 @@ func TestCPUConcurrentThroughput(t *testing.T) {
 		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
 	}
 	cputest.Run(t, func(index, workers int) cputest.Lane {
-		tr, err := NewTranscriberWithWorkers(m, workers)
+		tr, err := NewTranscriber(m, LaneOptions{Threads: workers})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestCPUConcurrentThroughput(t *testing.T) {
 					h.Write(bits[:])
 				}
 				h.Write(out.Text)
-				h.Write([]byte(out.Language))
+				h.Write([]byte{byte(out.Language)})
 				var sum [32]byte
 				h.Sum(sum[:0])
 				return sum

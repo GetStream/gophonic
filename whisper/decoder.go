@@ -15,15 +15,15 @@ import (
 
 var (
 	ErrDecoderNilModel       = errors.New("whisper: nil model")
-	ErrDecoderNilScratch     = errors.New("whisper: nil decoder scratch")
-	ErrDecoderNotStarted     = errors.New("whisper: decoder has not been started")
-	ErrDecoderEncoderShape   = errors.New("whisper: encoder features must contain 1 to 1500 time-major frames of 384 values")
-	ErrDecoderTokenRange     = errors.New("whisper: token ID is outside the model vocabulary")
-	ErrDecoderPosition       = errors.New("whisper: decoder position is out of sequence or exceeds the text context")
-	ErrDecoderLogitsTooSmall = errors.New("whisper: logits output is smaller than the vocabulary")
-	ErrDecoderPromptEmpty    = errors.New("whisper: greedy decoding needs at least one prompt token")
-	ErrDecoderPromptTooLong  = errors.New("whisper: prompt exceeds the text context")
-	ErrDecoderOutputTooSmall = errors.New("whisper: output cannot hold the prompt")
+	errDecoderNilScratch     = errors.New("whisper: nil decoder scratch")
+	errDecoderNotStarted     = errors.New("whisper: decoder has not been started")
+	errDecoderEncoderShape   = errors.New("whisper: encoder features must contain 1 to 1500 time-major frames of 384 values")
+	errDecoderTokenRange     = errors.New("whisper: token ID is outside the model vocabulary")
+	errDecoderPosition       = errors.New("whisper: decoder position is out of sequence or exceeds the text context")
+	errDecoderLogitsTooSmall = errors.New("whisper: logits output is smaller than the vocabulary")
+	errDecoderPromptEmpty    = errors.New("whisper: greedy decoding needs at least one prompt token")
+	errDecoderPromptTooLong  = errors.New("whisper: prompt exceeds the text context")
+	errDecoderOutputTooSmall = errors.New("whisper: output cannot hold the prompt")
 )
 
 const layerNormEpsilon = float32(1e-5)
@@ -121,18 +121,18 @@ type decoderWeights struct {
 	layers         []decoderLayerWeights
 }
 
-// DecoderScratch owns the incremental self-attention KV cache, projected
+// decoderScratch owns the incremental self-attention KV cache, projected
 // cross-attention KV cache, and all per-token work buffers. It is mutable and
 // must not be shared by concurrent decodes. Allocate it once per worker.
 //
 // Immutable weights are shared by all lanes on the model. With packed
 // cross-attention caches, raw projection scratch holds just one layer and is
 // reused while preparing the next layer; it never duplicates the full cache.
-type DecoderScratch struct {
+type decoderScratch struct {
 	weights    decoderWeights
 	weightsFor *Model
 	packedFor  *Model
-	dims       Dims
+	dims       modelDims
 	// crossKeyVec and crossValueVec hold each layer and head's cross-attention
 	// cache packed for the streaming GEMV kernel; nil without SME.
 	crossKeyVec   []*whispergemm.PackedVector
@@ -201,35 +201,35 @@ func (p *decoderVocabularyProjection) ApplyRows(start, end int) {
 		}
 		return
 	}
-	start, end = start*4, min(end*4, VocabSize)
+	start, end = start*4, min(end*4, vocabSize)
 	if err := whispergemm.MulVector(p.output[start:end], p.weight[start*p.state:], p.state, p.input, end-start); err != nil {
 		panic(err) // Bound model and fixed decoder shapes have already been checked.
 	}
 }
 
-// NewDecoderScratch allocates reusable state for one tiny.en decoder worker.
-// The first BeginDecode on a model also packs that model's cross-attention
+// newTinyDecoderScratch allocates reusable state for one tiny.en decoder worker.
+// The first beginDecode on a model also packs that model's cross-attention
 // key/value projections into the scratch; subsequent runs with the same model
 // reuse the packed weights.
-func NewDecoderScratch() *DecoderScratch {
-	return newDecoderScratch(TinyENDims)
+func newTinyDecoderScratch() *decoderScratch {
+	return newDecoderScratch(tinyENDims)
 }
 
-func newDecoderScratch(d Dims) *DecoderScratch {
+func newDecoderScratch(d modelDims) *decoderScratch {
 	textState, textLayers, textHeads, audioState := d.TextState, d.TextLayers, d.TextHeads, d.AudioState
 	crossLayers := textLayers
 	if whispergemm.PackedVectorAccelerated() {
 		crossLayers = 1
 	}
-	s := &DecoderScratch{
+	s := &decoderScratch{
 		dims:        d,
 		crossKey:    make([]*whispergemm.PackedB, textLayers),
 		crossValue:  make([]*whispergemm.PackedB, textLayers),
-		selfKey:     make([]float32, textLayers*TextContext*textState),
-		selfValue:   make([]float32, textLayers*TextContext*textState),
-		crossKeys:   make([]float32, crossLayers*AudioFrames*audioState),
-		crossValues: make([]float32, crossLayers*AudioFrames*audioState),
-		crossTemp:   make([]float32, AudioFrames*audioState),
+		selfKey:     make([]float32, textLayers*textContext*textState),
+		selfValue:   make([]float32, textLayers*textContext*textState),
+		crossKeys:   make([]float32, crossLayers*audioFrames*audioState),
+		crossValues: make([]float32, crossLayers*audioFrames*audioState),
+		crossTemp:   make([]float32, audioFrames*audioState),
 		x:           make([]float32, textState),
 		normalized:  make([]float32, textState),
 		query:       make([]float32, textState),
@@ -239,8 +239,8 @@ func newDecoderScratch(d Dims) *DecoderScratch {
 		context:     make([]float32, textState),
 		projected:   make([]float32, textState),
 		mlp:         make([]float32, 4*textState),
-		scores:      make([]float32, textHeads*max(AudioFrames, TextContext)),
-		logits:      make([]float32, VocabSize),
+		scores:      make([]float32, textHeads*max(audioFrames, textContext)),
+		logits:      make([]float32, vocabSize),
 	}
 	for i := 0; i < textLayers; i++ {
 		// These fixed positive dimensions cannot fail validation or overflow.
@@ -254,33 +254,33 @@ func newDecoderScratch(d Dims) *DecoderScratch {
 		s.crossValueVec = make([]*whispergemm.PackedVector, n)
 		for i := range n {
 			// One allocation fits either [frames,head] or [head,frames].
-			s.crossKeyVec[i], _ = whispergemm.NewPackedVectorFP32(AudioFrames, headSize)
-			s.crossValueVec[i], _ = whispergemm.NewPackedVectorFP32(AudioFrames, headSize)
+			s.crossKeyVec[i], _ = whispergemm.NewPackedVectorFP32(audioFrames, headSize)
+			s.crossValueVec[i], _ = whispergemm.NewPackedVectorFP32(audioFrames, headSize)
 		}
 	}
 	return s
 }
 
-// BeginDecode prepares the reusable decoder for one encoded audio sequence.
+// beginDecode prepares the reusable decoder for one encoded audio sequence.
 // It projects and caches cross-attention keys and values once; token steps then
 // reuse them. Encoder data is time-major [frames,TextState], with 1..1500
 // frames. A normal Whisper tiny.en encoder produces exactly 1500 frames.
-func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
+func (m *Model) beginDecode(encoder []float32, s *decoderScratch) error {
 	defer runtime.KeepAlive(s)
 	defer runtime.KeepAlive(m)
 	if m == nil {
 		return ErrDecoderNilModel
 	}
 	if s == nil {
-		return ErrDecoderNilScratch
+		return errDecoderNilScratch
 	}
 	d := s.dims
 	if m.dims != d {
 		return fmt.Errorf("whisper: decoder scratch dimensions %+v differ from model %+v", d, m.dims)
 	}
 	textState, textLayers, textHeads, audioState := d.TextState, d.TextLayers, d.TextHeads, d.AudioState
-	if len(encoder) == 0 || len(encoder)%audioState != 0 || len(encoder)/audioState > AudioFrames {
-		return ErrDecoderEncoderShape
+	if len(encoder) == 0 || len(encoder)%audioState != 0 || len(encoder)/audioState > audioFrames {
+		return errDecoderEncoderShape
 	}
 	if len(s.crossKey) == 0 || s.crossKey[0] == nil || s.crossValue[0] == nil {
 		return errors.New("whisper: decoder scratch is not initialized")
@@ -307,7 +307,7 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 
 	frames := len(encoder) / audioState
 	scale := float32(math.Pow(float64(textState/textHeads), -0.25))
-	if s.crossKeyVec != nil && frames == AudioFrames {
+	if s.crossKeyVec != nil && frames == audioFrames {
 		if err := s.beginPacked(encoder, scale); err != nil {
 			return err
 		}
@@ -317,7 +317,7 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 		return nil
 	}
 	for layer := 0; layer < textLayers; layer++ {
-		base := layer * AudioFrames * audioState
+		base := layer * audioFrames * audioState
 		if s.crossKeyVec != nil {
 			base = 0
 		}
@@ -331,7 +331,7 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 		}
 		bias := s.weights.layers[layer].crossV.bias
 		for d := 0; d < audioState; d++ {
-			valueRow := s.crossValues[base+d*AudioFrames : base+d*AudioFrames+frames]
+			valueRow := s.crossValues[base+d*audioFrames : base+d*audioFrames+frames]
 			for frame := range valueRow {
 				valueRow[frame] = values[frame*audioState+d] + bias[d]
 			}
@@ -346,8 +346,8 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 				if err := s.crossKeyVec[i].RepackShape(keys[head*headSize:], audioState, frames, headSize); err != nil {
 					return err
 				}
-				values := s.crossValues[base+head*headSize*AudioFrames:]
-				if err := s.crossValueVec[i].RepackShape(values, AudioFrames, headSize, frames); err != nil {
+				values := s.crossValues[base+head*headSize*audioFrames:]
+				if err := s.crossValueVec[i].RepackShape(values, audioFrames, headSize, frames); err != nil {
 					return err
 				}
 			}
@@ -364,35 +364,35 @@ func (m *Model) BeginDecode(encoder []float32, s *DecoderScratch) error {
 // each head's frames are contiguous; values keep [frame,state] so each head's
 // dimensions are contiguous. The SME GEMM sums every output in the same K
 // order either way, so keys are bit-identical to the untransposed product.
-func (s *DecoderScratch) beginPacked(encoder []float32, scale float32) error {
+func (s *decoderScratch) beginPacked(encoder []float32, scale float32) error {
 	d := s.dims
 	state, heads := d.TextState, d.TextHeads
 	headSize := state / heads
 	if s.encoderT == nil {
 		var err error
-		if s.encoderT, err = whispergemm.NewPackedB(state, AudioFrames); err != nil {
+		if s.encoderT, err = whispergemm.NewPackedB(state, audioFrames); err != nil {
 			return err
 		}
 	}
 	if err := s.encoderT.Pack(encoder, state, true); err != nil {
 		return err
 	}
-	keysT := s.crossKeys[:state*AudioFrames] // scratch: [state, frames]
-	values := s.crossTemp[:AudioFrames*state]
+	keysT := s.crossKeys[:state*audioFrames] // scratch: [state, frames]
+	values := s.crossTemp[:audioFrames*state]
 	for layer := 0; layer < d.TextLayers; layer++ {
 		w := &s.weights.layers[layer]
-		if err := s.multiply(s.encoderT, keysT, AudioFrames, w.crossK.weight, state, state); err != nil {
+		if err := s.multiply(s.encoderT, keysT, audioFrames, w.crossK.weight, state, state); err != nil {
 			return err
 		}
-		if err := s.multiply(s.crossValue[layer], values, state, encoder, state, AudioFrames); err != nil {
+		if err := s.multiply(s.crossValue[layer], values, state, encoder, state, audioFrames); err != nil {
 			return err
 		}
 		for head := 0; head < heads; head++ {
 			i := layer*heads + head
-			if err := s.crossKeyVec[i].RepackColumns(keysT[head*headSize*AudioFrames:], AudioFrames, AudioFrames, headSize, scale, nil); err != nil {
+			if err := s.crossKeyVec[i].RepackColumns(keysT[head*headSize*audioFrames:], audioFrames, audioFrames, headSize, scale, nil); err != nil {
 				return err
 			}
-			if err := s.crossValueVec[i].RepackColumns(values[head*headSize:], state, headSize, AudioFrames, 1, w.crossV.bias[head*headSize:]); err != nil {
+			if err := s.crossValueVec[i].RepackColumns(values[head*headSize:], state, headSize, audioFrames, 1, w.crossV.bias[head*headSize:]); err != nil {
 				return err
 			}
 		}
@@ -400,42 +400,42 @@ func (s *DecoderScratch) beginPacked(encoder []float32, scale float32) error {
 	return nil
 }
 
-func (s *DecoderScratch) multiply(b *whispergemm.PackedB, dst []float32, dstStride int, a []float32, aStride, rows int) error {
+func (s *decoderScratch) multiply(b *whispergemm.PackedB, dst []float32, dstStride int, a []float32, aStride, rows int) error {
 	if s.gemm != nil {
 		return s.gemm.Mul(b, dst, dstStride, a, aStride, rows)
 	}
 	return b.Mul(dst, dstStride, a, aStride, rows)
 }
 
-// LogitsForTokenInto runs one causal decoder position and writes the next-token
-// logits into caller-owned storage. Calls must follow BeginDecode and use
+// logitsForTokenInto runs one causal decoder position and writes the next-token
+// logits into caller-owned storage. Calls must follow beginDecode and use
 // positions 0,1,... without gaps. The logits slice must hold VocabSize values.
-// This operation is allocation-free after NewDecoderScratch and BeginDecode.
-func (m *Model) LogitsForTokenInto(tokenID, position int, s *DecoderScratch, logits []float32) error {
+// This operation is allocation-free after newTinyDecoderScratch and beginDecode.
+func (m *Model) logitsForTokenInto(tokenID, position int, s *decoderScratch, logits []float32) error {
 	return m.decodeTokenInto(tokenID, position, s, logits, true)
 }
 
 // decodeTokenInto may omit the vocabulary projection when only the KV state
 // or alignment is consumed. This never changes the next position's state.
-func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits []float32, project bool) error {
+func (m *Model) decodeTokenInto(tokenID, position int, s *decoderScratch, logits []float32, project bool) error {
 	defer runtime.KeepAlive(s)
 	if m == nil {
 		return ErrDecoderNilModel
 	}
 	if s == nil {
-		return ErrDecoderNilScratch
+		return errDecoderNilScratch
 	}
 	if !s.ready || s.weightsFor != m {
-		return ErrDecoderNotStarted
+		return errDecoderNotStarted
 	}
-	if tokenID < 0 || tokenID >= VocabSize {
-		return ErrDecoderTokenRange
+	if tokenID < 0 || tokenID >= vocabSize {
+		return errDecoderTokenRange
 	}
-	if position != s.nextPos || position < 0 || position >= TextContext {
-		return ErrDecoderPosition
+	if position != s.nextPos || position < 0 || position >= textContext {
+		return errDecoderPosition
 	}
-	if project && len(logits) < VocabSize {
-		return ErrDecoderLogitsTooSmall
+	if project && len(logits) < vocabSize {
+		return errDecoderLogitsTooSmall
 	}
 
 	d := s.dims
@@ -462,16 +462,16 @@ func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits
 		linearInto(s.query, s.normalized, &lw.selfQ, state, state)
 		linearInto(s.key, s.normalized, &lw.selfK, state, state)
 		linearInto(s.value, s.normalized, &lw.selfV, state, state)
-		cacheBase := (layer*TextContext + position) * state
+		cacheBase := (layer*textContext + position) * state
 		scale := float32(math.Pow(float64(state/textHeads), -0.25))
 		for d := 0; d < state; d++ {
 			s.selfKey[cacheBase+d] = s.key[d] * scale
-			s.selfValue[(layer*state+d)*TextContext+position] = s.value[d]
+			s.selfValue[(layer*state+d)*textContext+position] = s.value[d]
 		}
-		layerBase := layer * TextContext * state
+		layerBase := layer * textContext * state
 		cachedKeys := s.selfKey[layerBase : cacheBase+state]
-		cachedValues := s.selfValue[layerBase : layerBase+TextContext*state]
-		if err := s.attend(cachedKeys, cachedValues, position+1, TextContext); err != nil {
+		cachedValues := s.selfValue[layerBase : layerBase+textContext*state]
+		if err := s.attend(cachedKeys, cachedValues, position+1, textContext); err != nil {
 			return err
 		}
 		linearInto(s.projected, s.context, &lw.selfOut, state, state)
@@ -480,7 +480,7 @@ func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits
 		// The self-attention residual add is fused with this norm.
 		residualNormInto(s.x, s.normalized, s.projected, lw.crossNorm.weight, lw.crossNorm.bias)
 		linearInto(s.query, s.normalized, &lw.crossQ, state, state)
-		crossBase := layer * AudioFrames * audioState
+		crossBase := layer * audioFrames * audioState
 		if s.crossKeyVec != nil {
 			crossBase = 0
 		}
@@ -490,7 +490,7 @@ func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits
 			s.layerKeys = s.crossKeyVec[layer*textHeads : (layer+1)*textHeads]
 			s.layerValues = s.crossValueVec[layer*textHeads : (layer+1)*textHeads]
 		}
-		err := s.attend(s.crossKeys[crossBase:crossEnd], s.crossValues[crossBase:crossBase+AudioFrames*audioState], s.audioFrames, AudioFrames)
+		err := s.attend(s.crossKeys[crossBase:crossEnd], s.crossValues[crossBase:crossBase+audioFrames*audioState], s.audioFrames, audioFrames)
 		if err == nil && s.alignment != nil {
 			s.alignment.capture(layer, position, s.scores)
 		}
@@ -532,12 +532,12 @@ func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits
 			}
 		}
 	} else if s.gemm == nil {
-		if err := whispergemm.MulVector(logits, weights.tokenEmbedding, state, s.normalized, VocabSize); err != nil {
+		if err := whispergemm.MulVector(logits, weights.tokenEmbedding, state, s.normalized, vocabSize); err != nil {
 			return err
 		}
 	} else {
 		s.vocabulary = decoderVocabularyProjection{state: state, weight: weights.tokenEmbedding, input: s.normalized, output: logits}
-		err := s.gemm.Rows(&s.vocabulary, (VocabSize+3)/4, 256)
+		err := s.gemm.Rows(&s.vocabulary, (vocabSize+3)/4, 256)
 		s.vocabulary = decoderVocabularyProjection{}
 		if err != nil {
 			return err
@@ -547,33 +547,33 @@ func (m *Model) decodeTokenInto(tokenID, position int, s *DecoderScratch, logits
 	return nil
 }
 
-// GreedyDecodeInto runs raw greedy argmax decoding. prompt is the caller's
+// greedyDecodeInto runs raw greedy argmax decoding. prompt is the caller's
 // initial token sequence; output receives prompt followed by generated tokens,
 // including eosID when it is selected. It returns the number of valid output
-// IDs, stopping at EOS or when output is full. Use GreedyPolicy in the outer
+// IDs, stopping at EOS or when output is full. Use greedyPolicy in the outer
 // generation loop when Whisper suppression or task-specific filtering is
 // required; this convenience method intentionally performs unfiltered argmax.
 //
 // Once scratch has been created, successful calls allocate no memory.
-func (m *Model) GreedyDecodeInto(encoder []float32, prompt, output []int, s *DecoderScratch, eosID int) (int, error) {
+func (m *Model) greedyDecodeInto(encoder []float32, prompt, output []int, s *decoderScratch, eosID int) (int, error) {
 	if len(prompt) == 0 {
-		return 0, ErrDecoderPromptEmpty
+		return 0, errDecoderPromptEmpty
 	}
-	if len(prompt) > TextContext {
-		return 0, ErrDecoderPromptTooLong
+	if len(prompt) > textContext {
+		return 0, errDecoderPromptTooLong
 	}
 	if len(output) < len(prompt) {
-		return 0, ErrDecoderOutputTooSmall
+		return 0, errDecoderOutputTooSmall
 	}
-	if eosID < 0 || eosID >= VocabSize {
-		return 0, ErrDecoderTokenRange
+	if eosID < 0 || eosID >= vocabSize {
+		return 0, errDecoderTokenRange
 	}
 	for _, id := range prompt {
-		if id < 0 || id >= VocabSize {
-			return 0, ErrDecoderTokenRange
+		if id < 0 || id >= vocabSize {
+			return 0, errDecoderTokenRange
 		}
 	}
-	if err := m.BeginDecode(encoder, s); err != nil {
+	if err := m.beginDecode(encoder, s); err != nil {
 		return 0, err
 	}
 	copy(output, prompt)
@@ -588,10 +588,10 @@ func (m *Model) GreedyDecodeInto(encoder []float32, prompt, output []int, s *Dec
 		next := argmax(logits)
 		output[n] = next
 		n++
-		if next == eosID || s.nextPos >= TextContext {
+		if next == eosID || s.nextPos >= textContext {
 			return n, nil
 		}
-		if err := m.LogitsForTokenInto(next, s.nextPos, s, logits); err != nil {
+		if err := m.logitsForTokenInto(next, s.nextPos, s, logits); err != nil {
 			return n, err
 		}
 	}
@@ -607,13 +607,13 @@ func loadDecoderWeights(m *Model, dst *decoderWeights) error {
 	if len(dst.layers) != textLayers {
 		dst.layers = make([]decoderLayerWeights, textLayers)
 	}
-	if dst.tokenEmbedding, err = checkedTensor(m, decoderNames.tokenEmbedding, VocabSize*textState); err != nil {
+	if dst.tokenEmbedding, err = checkedTensor(m, decoderNames.tokenEmbedding, vocabSize*textState); err != nil {
 		return err
 	}
-	if dst.vocabulary, err = m.packedVector(decoderNames.tokenEmbedding, VocabSize, textState); err != nil {
+	if dst.vocabulary, err = m.packedVector(decoderNames.tokenEmbedding, vocabSize, textState); err != nil {
 		return err
 	}
-	if dst.position, err = checkedTensor(m, decoderNames.positionEmbedding, TextContext*textState); err != nil {
+	if dst.position, err = checkedTensor(m, decoderNames.positionEmbedding, textContext*textState); err != nil {
 		return err
 	}
 	if err = loadNorm(m, decoderNames.finalNorm, textState, &dst.finalNorm); err != nil {
@@ -804,7 +804,7 @@ func attentionInto(dst, query, keys, values []float32, frames, heads int, scores
 // Cached keys already contain Whisper's head-size^-1/4 scale. Values keep
 // their reduction axis contiguous so the same GEMV kernel handles both
 // attention products without repacking at each generated token.
-func (s *DecoderScratch) attend(keys, values []float32, frames, valueStride int) error {
+func (s *decoderScratch) attend(keys, values []float32, frames, valueStride int) error {
 	heads := s.dims.TextHeads
 	headSize := s.dims.TextState / heads
 	scale := float32(math.Pow(float64(headSize), -0.25))
@@ -830,7 +830,7 @@ func (s *DecoderScratch) attend(keys, values []float32, frames, valueStride int)
 func attentionPackedInto(dst, scaledQuery []float32, keys, values []*whispergemm.PackedVector, frames, heads int, scores []float32, firstHead, lastHead int) {
 	headSize := len(scaledQuery) / heads
 	for head := firstHead; head < lastHead; head++ {
-		probabilities := scores[head*AudioFrames : head*AudioFrames+frames]
+		probabilities := scores[head*audioFrames : head*audioFrames+frames]
 		start, end := head*headSize, (head+1)*headSize
 		if err := keys[head].Mul(probabilities, scaledQuery[start:end]); err != nil {
 			panic(err)
@@ -850,7 +850,7 @@ func attentionCachedInto(dst, scaledQuery, keys, values []float32, frames, value
 	state := len(scaledQuery)
 	headSize := state / heads
 	for head := firstHead; head < lastHead; head++ {
-		probabilities := scores[head*AudioFrames : head*AudioFrames+frames]
+		probabilities := scores[head*audioFrames : head*audioFrames+frames]
 		start, end := head*headSize, (head+1)*headSize
 		if err := whispergemm.MulVector(probabilities, keys[start:], state, scaledQuery[start:end], frames); err != nil {
 			panic(err)

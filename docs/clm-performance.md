@@ -37,7 +37,7 @@ texts, so it stays opt-in.
 
 ### GPU, one token
 
-With `Options{Weights: "gpu"}` the model runs on the M4 Max GPU through a
+With `Options{Format: "gpu"}` the model runs on the M4 Max GPU through a
 pure-Go Metal binding. One token takes 15.8 ms with int8 weights (cosine
 0.99933) and 10.9 ms with `gpu-q4` (0.953). llama.cpp's Metal backend takes
 19.5 ms for Q8_0 (0.99933), 12.0 ms for Q4_0 (0.863), and 12.5 ms for
@@ -48,7 +48,7 @@ floor. Batched GPU kernels take 12 tokens in 25 ms (llama.cpp Metal Q8_0:
 57 ms; CPU: 90 ms), about 70 tokens in 123 ms, and 16 texts of 12 tokens in
 281 ms.
 
-The int8 mode (`Options{Weights: "int8"}`) rotates each projection's input
+The int8 mode (`Options{Format: "int8"}`) rotates each projection's input
 with a randomized Hadamard transform and runs int8×int8 `SMOPA` with exact
 int32 accumulation (≈35 ms per 16-row tile, against ≈62 ms for FP16). With
 four or more tiles, four SME workers and the remaining performance cores
@@ -91,7 +91,7 @@ power of two, so each projection row is stored as FP16 with a power-of-two row
 scale. Every official weight is represented without rounding (a loader test
 checks this bit for bit). This is the main quality gain: the previous per-row
 int8 weights were the dominant error. Per-row int8 remains available with
-`Options{Weights: "int8"}` for half the memory.
+`Options{Format: "int8"}` for half the memory.
 
 **FP16-activation SME kernel.** Activations are scaled per row by a power of
 two into `[2^14, 2^15)`, rounded to FP16 (11-bit significand, finer than the

@@ -1,0 +1,8 @@
+# The agent answers what it hears; it never reads it back.
+user: I just got back from a long walk along the river and the weather was lovely.
+gopher: speaks
+gopher: does not repeat the user
+user: Could you tell me what the tallest mountain in Europe is?
+gopher: speaks within 20s
+gopher: says that the tallest mountain in Europe is Elbrus, or Mont Blanc
+gopher: does not repeat the user

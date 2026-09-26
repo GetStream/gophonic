@@ -27,7 +27,7 @@ const (
 // parse writes the transcript text of t.raw to t.text and returns the
 // language: forced, when the caller forced one, otherwise the one the model
 // named, or empty.
-func (t *Transcriber) parse(forced string) string {
+func (t *Transcriber) parse(forced speech.Language) speech.Language {
 	s := bytes.TrimFunc(t.raw, isSpace)
 	if len(s) == 0 {
 		return forced
@@ -43,15 +43,15 @@ func (t *Transcriber) parse(forced string) string {
 	for _, r := range t.fixed {
 		t.text = utf8.AppendRune(t.text, r)
 	}
-	if forced != "" {
+	if forced != speech.Unknown {
 		return forced
 	}
 	meta, text, tagged := bytes.Cut(t.text, []byte("<asr_text>"))
 	if !tagged {
 		t.text = bytes.TrimFunc(t.text, isSpace)
-		return ""
+		return speech.Unknown
 	}
-	language := ""
+	language := speech.Unknown
 	if containsFold(meta, "language none") {
 		meta = nil
 	}
@@ -62,7 +62,7 @@ func (t *Transcriber) parse(forced string) string {
 		}
 		if len(line) >= len("language ") && hasPrefixFold(line, "language ") {
 			if value := bytes.TrimFunc(line[len("language "):], isSpace); len(value) > 0 {
-				language = t.languageName(value)
+				language, _ = speech.ParseLanguage(value)
 			}
 			break
 		}
@@ -70,29 +70,6 @@ func (t *Transcriber) parse(forced string) string {
 	text = bytes.TrimFunc(text, isSpace)
 	t.text = t.text[:copy(t.text, text)]
 	return language
-}
-
-// languageName maps the model's language name to speech's English name
-// without allocating; a name outside speech.Languages is kept as written,
-// capitalized like the reference's normalize_language_name.
-func (t *Transcriber) languageName(value []byte) string {
-	if name, ok := speech.LanguageNameBytes(value); ok {
-		return name
-	}
-	var lower [32]byte
-	if len(value) <= len(lower) {
-		for i, b := range value {
-			if b >= 'A' && b <= 'Z' {
-				b += 'a' - 'A'
-			}
-			lower[i] = b
-		}
-		if name, ok := speech.LanguageNameBytes(lower[:len(value)]); ok {
-			return name
-		}
-	}
-	r, n := utf8.DecodeRune(value)
-	return string(unicode.ToUpper(r)) + string(bytes.ToLower(value[n:]))
 }
 
 // isSpace matches the characters Python's str.strip removes.

@@ -64,9 +64,6 @@ type Lease[T any] struct {
 // Model returns the model the lane belongs to.
 func (l Lease[T]) Model() *Model { return l.m.model }
 
-// Path returns the path the model was acquired by.
-func (l Lease[T]) Path() string { return l.m.path }
-
 // Release returns the lane to its pool for reuse. Call it exactly once, and
 // do not use the lane afterwards.
 func (l Lease[T]) Release() {
