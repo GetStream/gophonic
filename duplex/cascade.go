@@ -1378,12 +1378,6 @@ func (c *Cascade) run(j job) {
 			c.obs.Stage(Dropped, time.Since(j.at))
 		}
 		if err == nil && ctx.Err() == nil {
-			switch {
-			case len(bytes.TrimSpace(c.said)) > 0:
-				c.silentUntil = "" // speaking ends a silence
-			case c.rw.until != "":
-				c.silentUntil, c.silentSince = c.rw.until, time.Now()
-			}
 			if len(bytes.TrimSpace(c.said)) == 0 {
 				c.obs.Stage(Silent, time.Since(j.at))
 			}
@@ -1443,6 +1437,16 @@ func (c *Cascade) run(j job) {
 	}
 	if final && !silent {
 		c.obs.Said(c.said, len(c.said), true)
+	}
+	// A reply that stands, and only one, changes the silence: the
+	// conversation forgets a superseded one.
+	if final && err == nil {
+		switch {
+		case !silent:
+			c.silentUntil = "" // speaking ends a silence
+		case c.rw.until != "":
+			c.silentUntil, c.silentSince = c.rw.until, time.Now()
+		}
 	}
 	if !interrupted && err == nil && c.rw.wait > 0 {
 		c.planned.Reset(c.rw.wait)
