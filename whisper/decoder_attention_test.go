@@ -16,9 +16,9 @@ func TestDecoderAttentionCacheLayoutAndWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, frames := range []int{1, 7, 128, AudioFrames} {
-		query := make([]float32, TextState)
-		keys, values := make([]float32, frames*TextState), make([]float32, frames*TextState)
+	for _, frames := range []int{1, 7, 128, audioFrames} {
+		query := make([]float32, textState)
+		keys, values := make([]float32, frames*textState), make([]float32, frames*textState)
 		for i := range query {
 			query[i] = float32(i%31-15) / 16
 		}
@@ -26,19 +26,19 @@ func TestDecoderAttentionCacheLayoutAndWorkers(t *testing.T) {
 			keys[i] = float32(i%37-18) / 19
 			values[i] = float32(i%41-20) / 21
 		}
-		want := make([]float32, TextState)
-		attentionInto(want, query, keys, values, frames, TextHeads, make([]float32, frames))
-		scale := float32(math.Pow(float64(TextState/TextHeads), -0.25))
+		want := make([]float32, textState)
+		attentionInto(want, query, keys, values, frames, textHeads, make([]float32, frames))
+		scale := float32(math.Pow(float64(textState/textHeads), -0.25))
 		for i := range keys {
 			keys[i] *= scale
 		}
 		transposed := make([]float32, len(values))
 		for frame := 0; frame < frames; frame++ {
-			for d := 0; d < TextState; d++ {
-				transposed[d*frames+frame] = values[frame*TextState+d]
+			for d := 0; d < textState; d++ {
+				transposed[d*frames+frame] = values[frame*textState+d]
 			}
 		}
-		s := &DecoderScratch{dims: TinyENDims, query: query, context: make([]float32, TextState), scaledQuery: make([]float32, TextState), scores: make([]float32, TextHeads*AudioFrames)}
+		s := &decoderScratch{dims: tinyENDims, query: query, context: make([]float32, textState), scaledQuery: make([]float32, textState), scores: make([]float32, textHeads*audioFrames)}
 		if err := s.attend(keys, transposed, frames, frames); err != nil {
 			t.Fatal(err)
 		}

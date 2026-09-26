@@ -159,7 +159,7 @@ func TestFullFileClearsZeroDurationSegment(t *testing.T) {
 	if !blankWhisperText([]byte("\u2003")) || !blankWhisperText([]byte{0x1c, 0x1d, 0x1e, 0x1f}) || blankWhisperText([]byte(" A")) {
 		t.Fatal("Whisper segment blank-text classification differs")
 	}
-	tokenizer, err := NewTokenizer(EnglishOnly)
+	tokenizer, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestTranscriberExplicitWorkerBudget(t *testing.T) {
 }
 
 func TestSegmentTimestampOffsets(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestOfficialJFKWordTimestampsWarmZeroAlloc(t *testing.T) {
 
 func TestEnglishModelWordAlignmentHeads(t *testing.T) {
 	for _, tc := range []struct{ state, layers, heads, count int }{{384, 4, 6, 8}, {512, 6, 8, 5}, {768, 12, 12, 19}, {1024, 24, 16, 18}} {
-		selected := alignmentHeadsForDims(Dims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
+		selected := alignmentHeadsForDims(modelDims{TextState: tc.state, TextLayers: tc.layers, TextHeads: tc.heads})
 		if len(selected) != tc.count {
 			t.Fatalf("%dx%d heads=%d, want %d", tc.layers, tc.heads, len(selected), tc.count)
 		}

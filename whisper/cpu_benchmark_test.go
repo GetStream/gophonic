@@ -20,19 +20,19 @@ func BenchmarkCPUContextPrompt(b *testing.B) {
 	m, encoder, oracle := decoderBenchmarkFixture(b)
 	for _, count := range []int{2, 64, 128} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
-			s := NewDecoderScratch()
+			s := newTinyDecoderScratch()
 			prompt, output := make([]int, count), make([]int, count+1)
 			copy(prompt, oracle.Prefix)
 			for i := len(oracle.Prefix); i < count; i++ {
 				prompt[i] = oracle.Tokens[(i-len(oracle.Prefix))%(len(oracle.Tokens)-1)]
 			}
-			if _, err := m.GreedyDecodeInto(encoder, prompt, output, s, 50256); err != nil {
+			if _, err := m.greedyDecodeInto(encoder, prompt, output, s, 50256); err != nil {
 				b.Fatal(err)
 			}
 			want := output[count]
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := m.GreedyDecodeInto(encoder, prompt, output, s, 50256); err != nil {
+				if _, err := m.greedyDecodeInto(encoder, prompt, output, s, 50256); err != nil {
 					b.Fatal(err)
 				}
 				if output[count] != want {

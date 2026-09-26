@@ -29,7 +29,7 @@ and the checksum are all validated.
 | medium.en | 1024 | 16 | 24 / 24 |
 
 All English models share 80 mel bins, 1500 audio frames, a 448-token text
-context, and a 51,864-token vocabulary. `Model.Dims()` reports the rest, and
+context, and a 51,864-token vocabulary. The model knows the rest, and
 transcribers size their scratch from it.
 
 ## Pipeline

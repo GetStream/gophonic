@@ -25,16 +25,16 @@ func BenchmarkOfficialTinyENEncoder(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	w := NewEncoderWorkspace()
+	w := newTinyEncoderWorkspace()
 	defer w.Close()
-	out := make([]float32, AudioFrames*AudioState)
-	if err := m.EncodeInto(mel, out, w); err != nil {
+	out := make([]float32, audioFrames*audioState)
+	if err := m.encode(mel, out, w); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if err := m.EncodeInto(mel, out, w); err != nil {
+		if err := m.encode(mel, out, w); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -37,16 +37,16 @@ func TestSIMDEncoderPreservesOfficialGreedyTokens(t *testing.T) {
 	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		t.Fatal(err)
 	}
-	workspace := NewEncoderWorkspace()
+	workspace := newTinyEncoderWorkspace()
 	defer workspace.Close()
-	encoded := make([]float32, AudioFrames*AudioState)
-	if err := m.EncodeInto(mel, encoded, workspace); err != nil {
+	encoded := make([]float32, audioFrames*audioState)
+	if err := m.encode(mel, encoded, workspace); err != nil {
 		t.Fatal(err)
 	}
-	decoder := NewDecoderScratch()
+	decoder := newTinyDecoderScratch()
 	decoder.gemm = workspace.gemm
 	output := make([]int, len(oracle.Prefix)+len(oracle.Tokens)+1)
-	n, err := m.GreedyDecodeInto(encoded, oracle.Prefix, output, decoder, 50256)
+	n, err := m.greedyDecodeInto(encoded, oracle.Prefix, output, decoder, 50256)
 	if err != nil || n != len(output) {
 		t.Fatalf("greedy count=%d, want %d; error=%v", n, len(output), err)
 	}

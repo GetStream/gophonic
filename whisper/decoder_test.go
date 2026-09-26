@@ -95,11 +95,11 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 	if err := vibejson.Unmarshal(manifest, &oracle); err != nil {
 		t.Fatal(err)
 	}
-	encoder, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.encoder.f32le"), AudioFrames*AudioState)
+	encoder, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.encoder.f32le"), audioFrames*audioState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantLogits, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.prefix_logits.f32le"), VocabSize)
+	wantLogits, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.prefix_logits.f32le"), vocabSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,12 +107,12 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 		t.Fatal("oracle manifest is missing the prefix or decoded tokens")
 	}
 
-	s := NewDecoderScratch()
-	if err := m.BeginDecode(encoder, s); err != nil {
+	s := newTinyDecoderScratch()
+	if err := m.beginDecode(encoder, s); err != nil {
 		t.Fatal(err)
 	}
 	for position, tokenID := range oracle.Prefix {
-		if err := m.LogitsForTokenInto(tokenID, position, s, s.logits); err != nil {
+		if err := m.logitsForTokenInto(tokenID, position, s, s.logits); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -127,16 +127,16 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 		}
 		sumSq += diff * diff
 	}
-	rms := math.Sqrt(sumSq / float64(VocabSize))
+	rms := math.Sqrt(sumSq / float64(vocabSize))
 	if maxAbs > 2e-2 || rms > 2e-3 {
 		t.Fatalf("prefix logits differ from official PyTorch: max abs %.6g, RMS %.6g", maxAbs, rms)
 	}
 	// The next position must consume the self-KV cached by the full prefix.
-	afterFirst, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.after_843_logits.f32le"), VocabSize)
+	afterFirst, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.after_843_logits.f32le"), vocabSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.LogitsForTokenInto(843, len(oracle.Prefix), s, s.logits); err != nil {
+	if err := m.logitsForTokenInto(843, len(oracle.Prefix), s, s.logits); err != nil {
 		t.Fatal(err)
 	}
 	compareDecoderLogits(t, "after first generated token", s.logits, afterFirst)
@@ -146,22 +146,22 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 	for i, value := range encoder {
 		halfAudio[i] = value * 0.5
 	}
-	halfWant, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.half_audio_prefix_logits.f32le"), VocabSize)
+	halfWant, err := readF32Fixture(filepath.Join(fixtureDir, "jfk.half_audio_prefix_logits.f32le"), vocabSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.BeginDecode(halfAudio, s); err != nil {
+	if err := m.beginDecode(halfAudio, s); err != nil {
 		t.Fatal(err)
 	}
 	for position, tokenID := range oracle.Prefix {
-		if err := m.LogitsForTokenInto(tokenID, position, s, s.logits); err != nil {
+		if err := m.logitsForTokenInto(tokenID, position, s, s.logits); err != nil {
 			t.Fatal(err)
 		}
 	}
 	compareDecoderLogits(t, "second audio window", s.logits, halfWant)
 
 	output := make([]int, len(oracle.Prefix)+len(oracle.Tokens)+1)
-	n, err := m.GreedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
+	n, err := m.greedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,17 +185,17 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 
 	// Measure the complete steady-state token operation, including a fresh
 	// cross-attention cache for the next input. Weight packing is already warm.
-	if err := m.BeginDecode(encoder, s); err != nil {
+	if err := m.beginDecode(encoder, s); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.LogitsForTokenInto(oracle.Prefix[0], 0, s, s.logits); err != nil {
+	if err := m.logitsForTokenInto(oracle.Prefix[0], 0, s, s.logits); err != nil {
 		t.Fatal(err)
 	}
 	var hotErr error
 	allocs := testing.AllocsPerRun(3, func() {
-		hotErr = m.BeginDecode(encoder, s)
+		hotErr = m.beginDecode(encoder, s)
 		if hotErr == nil {
-			hotErr = m.LogitsForTokenInto(oracle.Prefix[0], 0, s, s.logits)
+			hotErr = m.logitsForTokenInto(oracle.Prefix[0], 0, s, s.logits)
 		}
 	})
 	if hotErr != nil {
@@ -210,16 +210,16 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.gemm = pool
-		if err := m.BeginDecode(encoder, s); err != nil {
+		if err := m.beginDecode(encoder, s); err != nil {
 			t.Fatal(err)
 		}
 		for position, tokenID := range oracle.Prefix {
-			if err := m.LogitsForTokenInto(tokenID, position, s, s.logits); err != nil {
+			if err := m.logitsForTokenInto(tokenID, position, s, s.logits); err != nil {
 				t.Fatal(err)
 			}
 		}
 		compareDecoderLogits(t, "borrowed executor prefix", s.logits, wantLogits)
-		n, err := m.GreedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
+		n, err := m.greedyDecodeInto(encoder, oracle.Prefix, output, s, 50256)
 		if err != nil || n != wantN || output[n-1] != 50256 {
 			t.Fatalf("workers=%d: count %d error %v", workers, n, err)
 		}
@@ -229,9 +229,9 @@ func TestDecoderOfficialPrefixAndGreedyTokenOracle(t *testing.T) {
 			}
 		}
 		allocs := testing.AllocsPerRun(2, func() {
-			hotErr = m.BeginDecode(encoder, s)
+			hotErr = m.beginDecode(encoder, s)
 			if hotErr == nil {
-				hotErr = m.LogitsForTokenInto(oracle.Prefix[0], 0, s, s.logits)
+				hotErr = m.logitsForTokenInto(oracle.Prefix[0], 0, s, s.logits)
 			}
 		})
 		if hotErr != nil || allocs != 0 {

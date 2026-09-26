@@ -14,15 +14,15 @@ import (
 )
 
 func TestGreedyEnglishPromptAndOfficialSuppression(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := NewGreedyPolicy(tok, GreedyOptions{WithoutTimestamps: true})
+	policy, err := newGreedyPolicy(tok, greedyOptions{WithoutTimestamps: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := make([]int, 0, TextContext)
+	prompt := make([]int, 0, textContext)
 	sampleBegin, err := policy.PromptInto(prompt, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestGreedyEnglishPromptAndOfficialSuppression(t *testing.T) {
 	logits[220] = 99
 	logits[tok.Transcribe()] = 98
 	filtered := make([]float32, tok.VocabSize())
-	next, err := policy.SelectNextInto(filtered, logits, prompt)
+	next, err := policy.selectNextInto(filtered, logits, prompt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,22 +84,22 @@ func TestGreedyEnglishPromptAndOfficialSuppression(t *testing.T) {
 }
 
 func TestGreedyTimestampRuleAndNoTimestampMode(t *testing.T) {
-	tok, err := NewTokenizer(Multilingual)
+	tok, err := newTokenizer(Multilingual)
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := NewGreedyPolicy(tok, GreedyOptions{DisableNonSpeechSuppression: true})
+	policy, err := newGreedyPolicy(tok, greedyOptions{DisableNonSpeechSuppression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	history := make([]int, 0, TextContext)
+	history := make([]int, 0, textContext)
 	n, err := policy.PromptInto(history, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	history = history[:n]
 	wantPrefix := []int{tok.SOT()}
-	language, ok := tok.LanguageToken("en")
+	language, ok := tok.languageToken("en")
 	if !ok {
 		t.Fatal("English language token missing")
 	}
@@ -117,7 +117,7 @@ func TestGreedyTimestampRuleAndNoTimestampMode(t *testing.T) {
 	logits[begin+10] = 5
 	logits[begin+51] = 50 // Beyond the default one second initial limit.
 	filtered := make([]float32, tok.VocabSize())
-	next, err := policy.SelectNextInto(filtered, logits, history)
+	next, err := policy.selectNextInto(filtered, logits, history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +128,11 @@ func TestGreedyTimestampRuleAndNoTimestampMode(t *testing.T) {
 		t.Fatal("initial timestamp limit did not mask timestamps after one second")
 	}
 
-	noTimestamp, err := NewGreedyPolicy(tok, GreedyOptions{WithoutTimestamps: true, DisableNonSpeechSuppression: true})
+	noTimestamp, err := newGreedyPolicy(tok, greedyOptions{WithoutTimestamps: true, DisableNonSpeechSuppression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain := make([]int, 0, TextContext)
+	plain := make([]int, 0, textContext)
 	plainN, err := noTimestamp.PromptInto(plain, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestGreedyTimestampRuleAndNoTimestampMode(t *testing.T) {
 	logits[begin+10] = 5
 	filtered = filtered[:0]
 	filtered = make([]float32, tok.VocabSize())
-	next, err = noTimestamp.SelectNextInto(filtered, logits, plain)
+	next, err = noTimestamp.selectNextInto(filtered, logits, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,15 +157,15 @@ func TestGreedyTimestampRuleAndNoTimestampMode(t *testing.T) {
 }
 
 func TestGreedyEnglishTimestampMode(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := NewGreedyPolicy(tok, GreedyOptions{DisableNonSpeechSuppression: true})
+	policy, err := newGreedyPolicy(tok, greedyOptions{DisableNonSpeechSuppression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	history := make([]int, 0, TextContext)
+	history := make([]int, 0, textContext)
 	n, err := policy.PromptInto(history, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestGreedyEnglishTimestampMode(t *testing.T) {
 	logits[begin+10] = 5
 	logits[begin+51] = 50
 	filtered := make([]float32, tok.VocabSize())
-	next, err := policy.SelectNextInto(filtered, logits, history)
+	next, err := policy.selectNextInto(filtered, logits, history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestGreedyEnglishTimestampMode(t *testing.T) {
 	}
 	logits[0] = 5
 	logits[begin+11] = 10
-	next, err = policy.SelectNextInto(filtered, logits, history)
+	next, err = policy.selectNextInto(filtered, logits, history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,15 +214,15 @@ func TestGreedyEnglishTimestampMode(t *testing.T) {
 }
 
 func TestGreedySteadyStateAllocations(t *testing.T) {
-	tok, err := NewTokenizer(EnglishOnly)
+	tok, err := newTokenizer(EnglishOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := NewGreedyPolicy(tok, GreedyOptions{})
+	policy, err := newGreedyPolicy(tok, greedyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	history := make([]int, 0, TextContext)
+	history := make([]int, 0, textContext)
 	n, err := policy.PromptInto(history, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +233,7 @@ func TestGreedySteadyStateAllocations(t *testing.T) {
 	var next int
 	var selectErr error
 	allocs := testing.AllocsPerRun(20, func() {
-		next, selectErr = policy.SelectNextInto(filtered, logits, history)
+		next, selectErr = policy.selectNextInto(filtered, logits, history)
 	})
 	if selectErr != nil {
 		t.Fatal(selectErr)
