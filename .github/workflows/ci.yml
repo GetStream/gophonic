@@ -8,6 +8,31 @@ permissions:
   contents: read
 
 jobs:
+  gpu-portable-vulkan:
+    name: Portable GPU / lavapipe / CGO=0
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOEXPERIMENT: simd
+      GOPHONIC_GPU_TESTS: "1"
+      GOPHONIC_GPU_ALLOW_CPU_VULKAN: "1"
+      GOPHONIC_GPU_REQUIRE_VULKAN: "1"
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install lavapipe Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers
+      - name: Verify lavapipe ICD
+        run: test -r "$VK_ICD_FILENAMES"
+      - name: Test real Vulkan compute
+        run: go test ./internal/gpuportable -count=1 -v
+
   go:
     name: Go ${{ matrix.os }} / SIMD=${{ matrix.simd }}
     runs-on: ${{ matrix.os }}
