@@ -64,3 +64,41 @@ GOPHONIC_MODELS=/path/to/models \
 Do not run another GPU workload during measurement. Compare full-call results
 alongside projections; changing threadgroup geometry can improve an isolated
 shape while slowing a complete decode.
+
+## Matched projection stream
+
+The native and portable benchmarks use the same deterministic, nonzero Q8B
+weight generator, 28 distinct 2048×2048 matrices, and one nonzero activation
+vector. The packed weights total 124,780,544 bytes, larger than a single
+projection. Outputs are distinct per matrix; one submission executes all
+projections and reads back the final output. Input/weight uploads are outside
+the timed loop. The native benchmark independently checks every final output
+row with FP64 accumulation before timing.
+
+Recorded local samples (see the adjacent raw files):
+
+| Provider | Elapsed samples | Median | Go allocations/op |
+| --- | --- | --- | --- |
+| Native Metal | 463, 706, 429 µs | 463 µs | 0 |
+| Pinned GoGPU, logical 32-lane tiles, WG128/RPS2 | 698, 701, 686 µs | 698 µs | 2,282–2,286 |
+| Isolated GoGPU ABI-signature cache experiment | 748, 784, 945 µs | 784 µs | 2,016–2,020 |
+
+The experiment cached immutable prepared call interfaces and copied them per
+invocation. It reduced allocations but did **not** improve latency, so it is
+not part of the runtime dependencies. Native samples used 1 second per count;
+portable samples used 300 ms. Variability is visible, and these are projection
+measurements, not complete ASR speedups. The portable path has not cleared the
+replacement gate. Older zero-filled native buffer measurements are excluded
+from this comparison.
+
+```sh
+CODEX_AGENT_ID=gpu-measure CGO_ENABLED=0 GOEXPERIMENT=simd \
+/Users/thesyncim/.codex/bin/project-env go test ./internal/qwen3lm \
+  -run '^$' -bench '^BenchmarkGPUQ8BProjectionStream$' -benchtime=1s -count=3
+
+CODEX_AGENT_ID=gpu-measure CGO_ENABLED=0 GOEXPERIMENT=simd \
+GOPHONIC_GPU_BENCH=1 \
+/Users/thesyncim/.codex/bin/project-env go test ./internal/gpuportable \
+  -run '^$' -bench '^BenchmarkLinearProjectionStream$/Q8B/wg128-r2$' \
+  -benchtime=300ms -count=3
+```

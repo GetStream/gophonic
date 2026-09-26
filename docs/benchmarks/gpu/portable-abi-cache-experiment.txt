@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/internal/gpuportable
+cpu: Apple M4 Max
+BenchmarkLinearProjectionStream/Q8B/wg128-r2-16         	     436	    747836 ns/op	166855.60 MB/s	   93088 B/op	    2016 allocs/op
+BenchmarkLinearProjectionStream/Q8B/wg128-r2-16         	     387	    783907 ns/op	159177.83 MB/s	   97452 B/op	    2018 allocs/op
+BenchmarkLinearProjectionStream/Q8B/wg128-r2-16         	     460	    944670 ns/op	132089.07 MB/s	  104276 B/op	    2020 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/internal/gpuportable	6.055s
