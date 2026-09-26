@@ -26,7 +26,7 @@ if err != nil {
 }
 defer model.Close()
 if gophonic.Supports[speech.Transcriber](model) {
-	lane, err := gophonic.Lane[speech.Transcriber](model) // or model.NewTranscriber()
+	lane, err := gophonic.Lane[speech.Transcriber](model)
 	// ...
 }
 ```
@@ -133,7 +133,7 @@ their last leases are released.
 ## Transcription
 
 ```go
-lane, err := model.NewTranscriber()
+lane, err := gophonic.Lane[speech.Transcriber](model)
 if err != nil {
 	return err
 }
@@ -203,13 +203,13 @@ no conversion. The CLI decodes Ogg Opus directly at 16 kHz with `gopus`.
 ## Turn detection
 
 ```go
-detector, err := model.NewTurnDetector()
+detector, err := gophonic.Lane[speech.TurnDetector](model)
 if err != nil {
 	return err
 }
 defer detector.Close()
 
-prediction, err := detector.PredictInto(pcm, 48000, 2) // on each VAD pause
+prediction, err := detector.Predict(pcm, 48000, 2) // on each VAD pause
 if err != nil {
 	return err
 }
@@ -218,7 +218,7 @@ if prediction.Complete {
 }
 ```
 
-`PredictInto` takes interleaved mono or stereo PCM at 8–96 kHz. Audio must be
+`Predict` takes interleaved mono or stereo PCM at 8–96 kHz. Audio must be
 nonempty, contain complete frames, and be finite where it is read.
 `Prediction.Probability` is the model's probability that the turn is complete;
 `Complete` applies that model's threshold (Smart Turn `> 0.5`, TinyMelNet
@@ -314,27 +314,24 @@ See the [package README](../qwen3/README.md): `Open`, `Embed`, `Question`,
 `Context`, and the low-level `Evaluator` for pretokenized batches.
 
 Qwen3 models also provide `chat.Generator`, conversations that keep their
-context evaluated between replies. A session may offer tools, described by
-`chat.ToolSpec`; the model calls them in Qwen3's own format, calls reach
-`Session.Calls` rather than the reply's text, and results join the
-conversation as `chat.Tool` messages:
+context evaluated between replies. `Session.Reply` writes the reply to an
+`io.Writer` as it is decoded. A session may offer tools: a `chat.Tool` is
+a spec (what the model sees) and a `Call`; `chat.Func` makes one of a Go
+function whose arguments struct is its schema. The model calls tools in
+Qwen3's own format, calls reach `Session.Calls` rather than the reply's
+text, and results join the conversation as `chat.ToolResult` messages.
+`chat.Answer` is the loop: reply, run the calls, reply again knowing them.
 
 ```go
-s, err := gen.NewSession("You are a helpful assistant.", chat.ToolSpec{
-	Name: "now", Description: "The current time.",
-	Parameters: `{"type": "object", "properties": {}}`,
-})
+tools := []chat.Tool{chat.Func("now", "The current time.",
+	func(ctx context.Context, args struct{}) (string, error) { return time.Now().String(), nil })}
+s, err := gen.NewSession("You are a helpful assistant.", chat.Specs(tools)...)
 s.Add(chat.User, "What time is it?")
-err = s.Reply(ctx, chat.Options{}, speak)
-for _, call := range s.Calls() {
-	s.Add(chat.Tool, run(call.Name, call.Arguments))
-}
-err = s.Reply(ctx, chat.Options{}, speak) // answers with the result
+err = chat.Answer(ctx, s, tools, chat.Options{}, os.Stdout, 4)
 ```
 
 A call's fixed parts, `{"name": "now", "arguments":`, are drafted and checked
 in one pass, sampling each position as decoding one token at a time would.
-`duplex.Func` derives a tool's schema from a Go function's arguments struct.
 
 ## The turn detectors' frontend
 
@@ -397,7 +394,7 @@ func OpenSession(model *Model, threshold float32) (*Session, error) {
 	return &Session{model: model, scratch: NewScratch(), threshold: threshold}, nil
 }
 
-func (s *Session) PredictInto(pcm []float32, rate, channels int) (speech.Prediction, error) {
+func (s *Session) Predict(pcm []float32, rate, channels int) (speech.Prediction, error) {
 	if s == nil || s.closed {
 		return speech.Prediction{}, speech.ErrClosed
 	}

@@ -101,7 +101,7 @@ if err != nil {
 }
 defer model.Close()
 
-lane, err := model.NewTranscriber() // one lane per concurrent caller
+lane, err := gophonic.Lane[speech.Transcriber](model) // one lane per concurrent caller
 if err != nil {
 	return err
 }
@@ -156,11 +156,13 @@ goes in and comes out 20 ms at a time, and the agent decides when to talk.
 agent, err := duplex.New(duplex.Config{
 	Prompt: "You are Gopher.",
 	Listen: speech.Options{Languages: []string{"en", "pt"}},
-	Tools:  []duplex.Tool{duplex.Func("now", "The current time.", now)},
+	Tools:  []chat.Tool{chat.Func("now", "The current time.", now)},
+	Idle:   45 * time.Second,
 }, asr, llm, tts)
 for { // every 20 ms
-	state, err := agent.Step(ctx, micFrame, speakerFrame)
+	state, err := agent.Step(micFrame, speakerFrame)
 }
+agent.Note("Ana joined the call.") // anything that happens, in words
 ```
 
 It works while you talk, so that almost nothing is left when you stop:
@@ -182,12 +184,16 @@ It works while you talk, so that almost nothing is left when you stop:
   utterance is heard again. Talk over it later and it judges, in context,
   whether you are interrupting or just saying "mm-hmm".
 
-- **It may say nothing.** The model can answer with silence, now or until
-  something it names happens ("stop talking until I say hi"), and a one-token
-  question to the same model tells when that has happened. Speech clearly
-  meant for someone else in a meeting gets no answer.
+- **It acts at moments, and may say nothing.** The agent is asked what to
+  say after each utterance, after each note (a chat message, someone
+  joining), when a pause it asked for is over, and after a quiet spell.
+  Speech and silence are its only primitives: it answers with words, with
+  `<silent>` (to speech meant for someone else, or while asked to be quiet
+  until something happens: it judges that in context, every time), or with
+  words that end in `<silent 30s>`, which asks to be asked again then, so
+  "remind me in thirty seconds" needs no tool.
 - **It acts with tools.** A tool is a Go function whose arguments struct is
-  its schema (`duplex.Func`); the model calls it in Qwen3's own format, the
+  its schema (`chat.Func`); the model calls it in Qwen3's own format, the
   call's fixed parts are drafted and checked in one pass, and its result
   becomes part of the answer, on the same voice.
 - **It speaks your languages.** `Languages` limits the recognizer to the
@@ -195,8 +201,11 @@ It works while you talk, so that almost nothing is left when you stop:
   English and Portuguese call cannot come out as Chinese.
 
 It remembers only what you heard, keeps a meeting's typed chat and who comes
-and goes as context ([`Add`](duplex)), and [`examples/gopher`](examples/gopher)
-puts it in a video call.
+and goes as context (`Note`), knows who is speaking (`Speaker`), and
+[`examples/gopher`](examples/gopher) puts it in a video call. Package
+`scenario` tests any `speech.Duplex` from a text script, with real audio:
+the user's lines are synthesized, the agent's answers transcribed, and a
+local model judges what it said.
 
 ## Example: an AI listener on a video call
 

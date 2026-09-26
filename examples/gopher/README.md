@@ -35,9 +35,11 @@ call's mixed audio goes in and the agent's speech comes out, on one clock.
 `duplex.New` builds it from the models by what they provide:
 
 ```go
-agent, err := duplex.New(duplex.Config{Prompt: prompt, Tools: tools(), Listen: listen}, asr, llm, tts)
+agent, err := duplex.New(duplex.Config{Prompt: prompt, Tools: tools(), Listen: listen, Idle: idle}, asr, llm, tts)
 ...
-state, err := agent.Step(ctx, in, out) // every 20 ms
+state, err := agent.Step(in, out) // every 20 ms
+agent.Speaker(name)               // who is talking, in a meeting
+agent.Note("Ana joined the call.")
 ```
 
 Inside, the cascade works while you talk:
@@ -49,9 +51,12 @@ Inside, the cascade works while you talk:
 - Talk before Gopher's answer is heard and it drops the answer and keeps
   listening to your whole sentence. Talk over its speech and it stops within
   a frame; a short "mm-hmm" lets it go on.
-- Gopher may choose to say nothing: to speech meant for someone else, or
-  when asked to be quiet ("stop talking until I say hi"), which lasts until
-  that happens.
+- Gopher acts at moments: after you speak, when something is noted (a chat
+  message, someone joining), when a pause it asked for is over, and after a
+  quiet spell. Each time it may say nothing: to speech meant for someone
+  else, or when asked to be quiet ("stop talking until I say hi"), which it
+  judges again, in context, every time. "Remind me in thirty seconds" is a
+  reply that ends in `<silent 30s>`: it is asked again then.
 - Its memory holds only what you heard: an interrupted answer is cut where
   it stopped.
 
@@ -59,16 +64,35 @@ Its tools are plain Go functions ([`tools.go`](tools.go)); the arguments
 struct tells the model how to call each:
 
 ```go
-duplex.Func("now", "The current date and time: here, or in another time zone.",
+chat.Func("now", "The current date and time: here, or in another time zone.",
 	func(ctx context.Context, args struct {
 		Timezone string `json:"timezone,omitempty" desc:"an IANA time zone such as Asia/Tokyo"`
 	}) (string, error) { ... })
 ```
 
 Gopher also watches the call's text chat over Stream Chat's realtime API,
-and who comes and goes: both join its conversation as notes, never spoken on
+and who comes and goes: both reach it as notes (`Note`), never spoken on
 their own, so it can answer "what did Alice write?" or summarize the meeting
-later.
+later. In a meeting the loudest participant is named as the speaker
+(`Speaker`), so the conversation knows whose words it hears without the
+words themselves being reframed.
+
+## Scenarios
+
+[`scenarios/`](scenarios) holds what Gopher must do, as dialogues:
+
+```
+user: Gopher, stop talking until I say hi.
+gopher: silent
+user: Hi!
+gopher: speaks
+```
+
+`go test -run TestScenarios .` speaks each `user:` line with Qwen3-TTS in
+another voice, transcribes Gopher's answers with Qwen3-ASR, and has Qwen3-8B
+judge each `says` claim, in real time with the three models (see package
+`scenario`). A script whose first line is `# expect: fail` documents a
+behavior that does not work yet.
 
 `e2e` joins a call as a second participant, speaks a recording three times
 (after joining, after muting and unmuting, after rejoining), and reports how
