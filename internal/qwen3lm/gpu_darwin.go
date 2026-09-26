@@ -87,10 +87,11 @@ type gpuModel struct {
 	positions              int  // RoPE table rows
 	// lm is the language-model head W·Rᵀ as Q8B int8 blocks with FP16
 	// scales, padded with zero rows to lmRows; nil unless loaded.
-	lm      *metal.Buffer
-	lmScale int // byte offset of the scales in lm
-	lmRows  int
-	cache   *wcache.File // holds the layer and head buffers' memory
+	lm        *metal.Buffer
+	lmScale   int // byte offset of the scales in lm
+	lmRows    int
+	cache     *wcache.File // holds the layer buffers' memory
+	headCache *wcache.File // holds the head's, once it is loaded
 }
 
 // gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
@@ -140,7 +141,7 @@ var (
 
 // loadGPU quantizes every projection, and the head when named, into GPU
 // buffers.
-func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string) error {
+func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	c := &m.cfg
 	if err := gpuGeometry(c); err != nil {
 		return err
@@ -278,34 +279,17 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		}
 		sizes[i] = layerBytes
 	}
-	headBytes := 0
-	if headName != "" {
-		// The head always stores W·Rᵀ as int8 blocks (Q8B): LogitsInto
-		// rotates the normalized state.
-		g.lmRows = (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
-		g.lmScale = alignUp(g.lmRows * h)
-		headBytes = g.lmScale + 2*g.lmRows*(h/q4Group)
-	}
 	// The buffers are regions of a cache entry: quantized on the first load,
-	// mapped as they are afterwards.
-	cut := func(l *wcache.Layout) (layers [][]byte, lm []byte) {
+	// mapped as they are afterwards. The head has an entry of its own.
+	cut := func(l *wcache.Layout) (layers [][]byte) {
 		for _, n := range sizes {
 			layers = append(layers, l.Take(n))
 		}
-		if headBytes > 0 {
-			lm = l.Take(headBytes)
-		}
-		return layers, lm
+		return layers
 	}
 	size := wcache.NewLayout(nil)
 	cut(size)
-	// Weights with and without a head are different entries, so loaders of
-	// both keep both.
-	kind := m.format
-	if headName != "" {
-		kind += "-head"
-	}
-	key, err := wcache.Key(st.Dir(), kind, gpuCacheVersion, m.prefix, headName)
+	key, err := wcache.Key(st.Dir(), m.format, gpuCacheVersion, m.prefix, "")
 	if err != nil {
 		return err
 	}
@@ -313,28 +297,59 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 		return err
 	}
 	if g.cache.Fresh() {
-		layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
-		if err := m.prepareGPU(st, g, shapes, layers, lm, downIn, headName, g.cache.Done); err != nil {
+		if err := m.prepareGPU(st, g, shapes, cut(wcache.NewLayout(g.cache.Payload())), nil, downIn, "", g.cache.Done); err != nil {
 			return err
 		}
 		g.cache.Commit()
 	}
 	// The GPU reads the committed, read-only entry in place.
-	layers, lm := cut(wcache.NewLayout(g.cache.Payload()))
+	layers := cut(wcache.NewLayout(g.cache.Payload()))
 	for i := range g.layers {
 		g.layers[i] = shapes[i]
 		if g.layers[i].buf, err = dev.Wrap(layers[i]); err != nil {
 			return err
 		}
 	}
-	if lm != nil {
-		if g.lm, err = dev.Wrap(lm); err != nil {
-			return err
-		}
-	}
 	if c.hybrid {
 		return g.uploadDeltaNet(m)
 	}
+	return nil
+}
+
+// loadHead quantizes the head named name, W·Rᵀ as int8 blocks (Q8B), into
+// a cache entry of its own beside the layers': LogitsInto rotates the
+// normalized state.
+func (g *gpuModel) loadHead(m *Weights, st *safetensors.Checkpoint, name string) error {
+	c := &m.cfg
+	h := c.hidden
+	rows := (c.vocab + gpuRows(9) - 1) / gpuRows(9) * gpuRows(9)
+	scale := alignUp(rows * h)
+	n := scale + 2*rows*(h/q4Group)
+	key, err := wcache.Key(st.Dir(), m.format+"-lm", gpuCacheVersion, m.prefix, name)
+	if err != nil {
+		return err
+	}
+	size := wcache.NewLayout(nil)
+	size.Take(n)
+	cache, err := wcache.Open(key, size.Size())
+	if err != nil {
+		return err
+	}
+	g.lmRows, g.lmScale = rows, scale
+	if cache.Fresh() {
+		if err := m.prepareGPU(st, g, nil, nil, wcache.NewLayout(cache.Payload()).Take(n), nil, name, cache.Done); err != nil {
+			cache.Close()
+			g.lmRows, g.lmScale = 0, 0
+			return err
+		}
+		cache.Commit()
+	}
+	if g.lm, err = g.dev.Wrap(wcache.NewLayout(cache.Payload()).Take(n)); err != nil {
+		cache.Close()
+		g.lmRows, g.lmScale = 0, 0
+		return err
+	}
+	g.headCache = cache
 	return nil
 }
 
@@ -354,8 +369,8 @@ type gpuJob struct {
 	dims     []int  // the tensor's shape when not [n][k], as stacked experts'
 }
 
-// prepareGPU quantizes every projection into its layer's region, and the
-// head, when named, into lm.
+// prepareGPU quantizes every projection into its layer's region (layers
+// may be none), and the head, when named, into lm.
 func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shapes []gpuLayer, layers [][]byte, lm []byte, downIn *rotation, headName string, filled func([]byte)) error {
 	c := &m.cfg
 	bits := g.bits
@@ -363,7 +378,7 @@ func (m *Weights) prepareGPU(st *safetensors.Checkpoint, g *gpuModel, shapes []g
 
 	type job = gpuJob
 	var jobs []job
-	for i := range m.layers {
+	for i := range layers {
 		l, gl, buf := &m.layers[i], &shapes[i], layers[i]
 		p := fmt.Sprintf("%slayers.%d.", m.prefix, i)
 		if c.hybrid {
@@ -1106,13 +1121,8 @@ func (w *gpuWorkspace) batchPacked(m *Weights, seqs [][]int, dst [][]float32, pr
 // in one command buffer.
 func (w *gpuWorkspace) logitsRowsInto(m *Weights, hidden, dst []float32, k int) error {
 	g, c := w.g, &m.cfg
-	if k > w.logitRows {
-		b, err := g.dev.Buffer(4 * k * g.lmRows)
-		if err != nil {
-			return err
-		}
-		w.logits.Release()
-		w.logits, w.logitRows = b, k
+	if err := w.fitHead(k); err != nil {
+		return err
 	}
 	x := floats(w.h.Bytes())[:k*c.hidden]
 	copy(x, hidden)
@@ -1140,9 +1150,29 @@ func (w *gpuWorkspace) logitsRowsInto(m *Weights, hidden, dst []float32, k int) 
 	return nil
 }
 
+// fitHead sizes the logits buffer for k rows of the head, which may have
+// loaded after the workspace was made.
+func (w *gpuWorkspace) fitHead(k int) error {
+	g := w.g
+	w.headArgs.n = uint32(g.lmRows)
+	if len(w.logits.Bytes()) >= 4*k*g.lmRows {
+		return nil
+	}
+	b, err := g.dev.Buffer(4 * max(k, w.logitRows) * g.lmRows)
+	if err != nil {
+		return err
+	}
+	w.logits.Release()
+	w.logits, w.logitRows = b, max(k, w.logitRows)
+	return nil
+}
+
 // logits writes the head's logits for one post-final-norm state.
 func (w *gpuWorkspace) logitsInto(m *Weights, hidden, dst []float32) error {
 	g, c := w.g, &m.cfg
+	if err := w.fitHead(1); err != nil {
+		return err
+	}
 	x := floats(w.h.Bytes())[:c.hidden]
 	copy(x, hidden)
 	g.hidden.apply(x)
@@ -1619,6 +1649,7 @@ func (m *Weights) releaseGPU() {
 		b.Release()
 	}
 	g.cache.Close()
+	g.headCache.Close()
 	g.dev.Close()
 	m.gpu = nil
 }

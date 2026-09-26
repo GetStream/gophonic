@@ -24,7 +24,7 @@ func (g *gpuModel) newPrefix(int) (*gpuPrefix, error) {
 	return nil, errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 
-func (m *Weights) loadGPU(*safetensors.Checkpoint, int, string) error {
+func (m *Weights) loadGPU(*safetensors.Checkpoint, int) error {
 	return errors.New("qwen3: the GPU backend requires darwin/arm64")
 }
 
@@ -80,5 +80,9 @@ func (g *gpuModel) newDecoder([][]float32, [][]float32, int, []float32) (*gpuDec
 func (d *gpuDecoder) release() {}
 
 func (w *gpuWorkspace) decode(*Weights, *gpuDecoder, *gpuPrefix, int, []int, Embeds, Sampling, []int, []float32) error {
+	return errors.New("qwen3: no GPU")
+}
+
+func (g *gpuModel) loadHead(*Weights, *safetensors.Checkpoint, string) error {
 	return errors.New("qwen3: no GPU")
 }

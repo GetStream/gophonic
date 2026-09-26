@@ -59,6 +59,12 @@ type Weights struct {
 	format    string
 	gpu       *gpuModel      // set for WeightsGPU
 	unmap     []func() error // mappings to release
+	// The checkpoint, and the head loaded from it (empty: none yet): with
+	// LoadOptions.Head, or later with LoadHead.
+	dir        string
+	headMu     sync.Mutex
+	headName   string
+	headMemory *arena.Arena // the CPU's FP16 head
 }
 
 type modelLayer struct {
@@ -272,7 +278,7 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 	}
 	defer st.Close()
 
-	m := &Weights{cfg: cfg, format: format, prefix: prefix, layers: make([]modelLayer, cfg.layers)}
+	m := &Weights{cfg: cfg, format: format, prefix: prefix, layers: make([]modelLayer, cfg.layers), dir: dir}
 	defer func() {
 		if err != nil {
 			m.Release()
@@ -296,10 +302,10 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 		if err := m.loadHybrid(st); err != nil {
 			return nil, err
 		}
-		if err := m.loadGPU(st, 9, opts.Head); err != nil {
+		if err := m.loadGPU(st, 9); err != nil {
 			return nil, err
 		}
-		return m, nil
+		return m, m.loadHeadFrom(st, opts.Head)
 	}
 	if m.finalNorm, err = st.Float32(prefix+"norm.weight", h); err != nil {
 		return nil, err
@@ -313,7 +319,6 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 		n, k int
 		dst  *linear
 		rot  *rotation
-		rows [2]int // for the head: the row range this job packs into dst
 	}
 	var jobs []job
 	for i := range m.layers {
@@ -334,35 +339,28 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 			}
 		}
 		jobs = append(jobs,
-			job{p + "self_attn.q_proj.weight", qdim, h, &l.q, rotHidden, [2]int{}},
-			job{p + "self_attn.k_proj.weight", kv, h, &l.k, rotHidden, [2]int{}},
-			job{p + "self_attn.v_proj.weight", kv, h, &l.v, rotHidden, [2]int{}},
-			job{p + "self_attn.o_proj.weight", h, qdim, &l.o, rotContext, [2]int{}},
-			job{p + "mlp.gate_proj.weight", inter, h, &l.gate, rotHidden, [2]int{}},
-			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden, [2]int{}},
-			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter, [2]int{}},
+			job{p + "self_attn.q_proj.weight", qdim, h, &l.q, rotHidden},
+			job{p + "self_attn.k_proj.weight", kv, h, &l.k, rotHidden},
+			job{p + "self_attn.v_proj.weight", kv, h, &l.v, rotHidden},
+			job{p + "self_attn.o_proj.weight", h, qdim, &l.o, rotContext},
+			job{p + "mlp.gate_proj.weight", inter, h, &l.gate, rotHidden},
+			job{p + "mlp.up_proj.weight", inter, h, &l.up, rotHidden},
+			job{p + "mlp.down_proj.weight", h, inter, &l.down, rotInter},
 		)
 	}
 	if format == WeightsGPU || format == WeightsGPUQ8 || format == WeightsGPUQ4 {
 		bits := map[string]int{WeightsGPU: 8, WeightsGPUQ8: 9, WeightsGPUQ4: 4}[format]
-		if err := m.loadGPU(st, bits, opts.Head); err != nil {
+		if err := m.loadGPU(st, bits); err != nil {
 			return nil, err
 		}
-		return m, nil
+		return m, m.loadHeadFrom(st, opts.Head)
 	}
 	if format == WeightsF16 {
-		sizes := make([]int, len(jobs), len(jobs)+1)
+		sizes := make([]int, len(jobs))
 		for i, j := range jobs {
 			if sizes[i], err = q8gemm.WeightsF16Bytes(j.k, j.n); err != nil {
 				return nil, err
 			}
-		}
-		if opts.Head != "" {
-			size, e := q8gemm.WeightsF16Bytes(h, cfg.vocab)
-			if e != nil {
-				return nil, e
-			}
-			sizes = append(sizes, size)
 		}
 		if m.memory, err = arena.NewBytes(sizes...); err != nil {
 			return nil, err
@@ -372,29 +370,8 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 				return nil, err
 			}
 		}
-		if opts.Head != "" {
-			if m.head.f16, err = q8gemm.NewWeightsF16Buffer(h, cfg.vocab, m.memory.TakeBytes(sizes[len(jobs)])); err != nil {
-				return nil, err
-			}
-		}
 	}
 	maxSize := max(inter*h, qdim*h)
-	if opts.Head != "" {
-		// The head is the largest matrix (vocabulary × hidden); it is read
-		// and packed in row chunks no larger than a layer projection.
-		if format != WeightsF16 {
-			if m.head, err = newHead(&cfg, format, rotHidden); err != nil {
-				return nil, err
-			}
-		}
-		step := max(q8gemm.OutputPanel, maxSize/h/q8gemm.OutputPanel*q8gemm.OutputPanel)
-		if headChunkRows > 0 {
-			step = headChunkRows
-		}
-		for r := 0; r < cfg.vocab; r += step {
-			jobs = append(jobs, job{opts.Head, cfg.vocab, h, &m.head, rotHidden, [2]int{r, min(r+step, cfg.vocab)}})
-		}
-	}
 	workers := min(runtime.GOMAXPROCS(0), 8, len(jobs))
 	var (
 		wg    sync.WaitGroup
@@ -417,9 +394,7 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 				next++
 				mu.Unlock()
 				var err error
-				if j.rows[1] > 0 {
-					err = loadRows(st, j.name, j.n, j.k, j.rows[0], j.rows[1], buf, j.dst)
-				} else if format == WeightsF16 {
+				if format == WeightsF16 {
 					err = loadRows(st, j.name, j.n, j.k, 0, j.n, buf, j.dst)
 				} else {
 					var w linear
@@ -439,14 +414,133 @@ func Load(dir string, opts LoadOptions) (_ *Weights, err error) {
 	if first != nil {
 		return nil, first
 	}
-	return m, nil
+	return m, m.loadHeadFrom(st, opts.Head)
+}
+
+// HasHead reports whether the language-model head is loaded.
+func (m *Weights) HasHead() bool {
+	m.headMu.Lock()
+	defer m.headMu.Unlock()
+	return m.headName != ""
+}
+
+// LoadHead loads the language-model head named name, such as
+// "lm_head.weight", as LoadOptions.Head does at load: a model opened for
+// what needs no head pays for one only when it first generates. Loading the
+// head already loaded does nothing.
+func (m *Weights) LoadHead(name string) error {
+	m.headMu.Lock()
+	loaded := m.headName
+	m.headMu.Unlock()
+	if loaded == name {
+		return nil
+	}
+	st, err := safetensors.Open(m.dir)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return m.loadHeadFrom(st, name)
+}
+
+// loadHeadFrom loads the head named name from st, if name is not empty.
+func (m *Weights) loadHeadFrom(st *safetensors.Checkpoint, name string) error {
+	if name == "" {
+		return nil
+	}
+	m.headMu.Lock()
+	defer m.headMu.Unlock()
+	switch m.headName {
+	case name:
+		return nil
+	case "":
+	default:
+		return fmt.Errorf("qwen3: the weights have the head %s, not %s", m.headName, name)
+	}
+	var err error
+	if m.gpu != nil {
+		err = m.gpu.loadHead(m, st, name)
+	} else {
+		err = m.loadCPUHead(st, name)
+	}
+	if err != nil {
+		return err
+	}
+	m.headName = name
+	return nil
+}
+
+// loadCPUHead reads and packs the head, the largest matrix (vocabulary ×
+// hidden), in row chunks no larger than a layer projection, on as many
+// workers as Load uses.
+func (m *Weights) loadCPUHead(st *safetensors.Checkpoint, name string) error {
+	c := &m.cfg
+	h := c.hidden
+	var err error
+	if m.format == WeightsF16 {
+		size, err := q8gemm.WeightsF16Bytes(h, c.vocab)
+		if err != nil {
+			return err
+		}
+		if m.headMemory, err = arena.NewBytes(size); err != nil {
+			return err
+		}
+		if m.head.f16, err = q8gemm.NewWeightsF16Buffer(h, c.vocab, m.headMemory.TakeBytes(size)); err != nil {
+			return err
+		}
+	} else {
+		var rot *rotation
+		if m.format == WeightsInt8 {
+			rot = newRotation(h) // as the layers' inputs are rotated
+		}
+		if m.head, err = newHead(c, m.format, rot); err != nil {
+			return err
+		}
+	}
+	maxSize := max(c.intermediate*h, c.heads*c.headDim*h)
+	step := max(q8gemm.OutputPanel, maxSize/h/q8gemm.OutputPanel*q8gemm.OutputPanel)
+	if headChunkRows > 0 {
+		step = headChunkRows
+	}
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+		next  int
+	)
+	for range min(runtime.GOMAXPROCS(0), 8, (c.vocab+step-1)/step) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buf := make([]uint16, maxSize)
+			for {
+				mu.Lock()
+				r := next
+				next += step
+				if first != nil || r >= c.vocab {
+					mu.Unlock()
+					return
+				}
+				mu.Unlock()
+				if err := loadRows(st, name, c.vocab, h, r, min(r+step, c.vocab), buf, &m.head); err != nil {
+					mu.Lock()
+					first = errors.Join(first, err)
+					mu.Unlock()
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return first
 }
 
 // Release frees what the Weights hold outside the Go heap: GPU buffers and
 // mapped files. The Weights are unusable afterwards.
 func (m *Weights) Release() {
 	_ = m.memory.Close()
-	m.memory = nil
+	_ = m.headMemory.Close()
+	m.memory, m.headMemory = nil, nil
 	m.releaseGPU()
 	for _, unmap := range m.unmap {
 		unmap()
