@@ -129,17 +129,9 @@ func TestGreedyCodesMatchReference(t *testing.T) {
 	}
 	defer s.Close()
 	s.Greedy = true
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return []byte(ref.Text), nil
-	}
 	var got [][groups]int
 	start := time.Now()
-	err = s.generate(context.Background(), speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, next,
+	err = s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, ref.Text,
 		func(f *[groups]int) error { got = append(got, *f); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -199,16 +191,8 @@ func TestFirstStepMatchesReference(t *testing.T) {
 		}
 		step++
 	}
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return []byte(ref.Text), nil
-	}
 	n := 0
-	s.generate(context.Background(), speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, next,
+	s.generateText(speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}, ref.Text,
 		func(*[groups]int) error {
 			n++
 			if n == 4 {
@@ -308,16 +292,8 @@ func TestVoicePromptReuse(t *testing.T) {
 	s.Greedy = true
 	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language}
 	speak := func() [][groups]int {
-		sent := false
-		next := func() ([]byte, error) {
-			if sent {
-				return nil, io.EOF
-			}
-			sent = true
-			return []byte(ref.Text), nil
-		}
 		var got [][groups]int
-		if err := s.generate(context.Background(), opts, next, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
 			t.Fatal(err)
 		}
 		return got
@@ -343,8 +319,9 @@ func TestVoicePromptReuse(t *testing.T) {
 	}
 }
 
-// The first piece of text is tokenized as it stands, so speech starts
-// without waiting for the next piece; later pieces wait for a word boundary.
+// A first word with nothing after it is tokenized as it stands, so speech
+// starts without waiting for more text; later text waits for a word
+// boundary, and every token knows the byte of the text it ends at.
 func TestFirstPieceTokens(t *testing.T) {
 	m := loadModel(t)
 	s, err := NewSynthesizer(m)
@@ -353,36 +330,49 @@ func TestFirstPieceTokens(t *testing.T) {
 	}
 	defer s.Close()
 	s.reset()
+	s.hold()
 	pieces := []string{"Sure", ",", " the", " answer", " is", " simple", "."}
-	i := 0
-	next := func() ([]byte, error) {
-		if i == len(pieces) {
-			return nil, io.EOF
+	ctx := context.Background()
+	for i, p := range pieces {
+		s.mu.Lock()
+		s.written = append(s.written, p...)
+		s.mu.Unlock()
+		if err := s.pull(ctx); err != nil {
+			t.Fatal(err)
 		}
-		i++
-		return []byte(pieces[i-1]), nil
+		if i == 0 && len(s.text) != 1 {
+			t.Fatalf("after the first piece: %d tokens, want 1", len(s.text))
+		}
 	}
-	if err := s.pull(next); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.text) != 1 {
-		t.Fatalf("after the first piece: %d tokens, want 1", len(s.text))
-	}
+	s.mu.Lock()
+	s.ended = true
+	s.mu.Unlock()
 	for !s.textDone {
-		if err := s.pull(next); err != nil {
+		if err := s.pull(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := m.tokens.EncodeInto(strings.Join(pieces, ""), make([]int, 0, 64), &qwen3lm.TokenizerWorkspace{})
+	text := strings.Join(pieces, "")
+	want, err := m.tokens.EncodeInto(text, make([]int, 0, 64), &qwen3lm.TokenizerWorkspace{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(s.text, want) {
 		t.Fatalf("tokens %v, want %v", s.text, want)
 	}
+	at := 0
+	for i, id := range s.text {
+		at += len(m.tokens.Piece(id))
+		if s.textEnd[i] != at {
+			t.Fatalf("token %d ends at byte %d, want %d", i, s.textEnd[i], at)
+		}
+	}
+	if at != len(text) {
+		t.Fatalf("tokens end at byte %d of %d", at, len(text))
+	}
 }
 
-// Warm Speak calls allocate nothing.
+// A warm utterance allocates nothing, on any of the lane's goroutines.
 func TestSpeakAllocations(t *testing.T) {
 	m := loadModel(t)
 	s, err := NewSynthesizer(m)
@@ -393,31 +383,24 @@ func TestSpeakAllocations(t *testing.T) {
 	s.Greedy = true
 	opts := speech.SpeakOptions{Voice: "Ryan", Language: "en"}
 	text := []byte("Hello there.")
-	sent := false
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return text, nil
-	}
-	frames := 0
-	out := func([]float32) error {
-		frames++
-		if frames == 4 {
-			return io.EOF
-		}
-		return nil
-	}
+	pcm := make([]float32, FrameSamples/4)
 	speak := func() {
-		sent, frames = false, 0
-		if err := s.Speak(context.Background(), opts, next, out); err != nil && !errors.Is(err, io.EOF) {
+		if err := s.Begin(context.Background(), opts); err != nil {
 			t.Fatal(err)
+		}
+		s.Write(text)
+		s.End()
+		for {
+			if _, err := s.Read(pcm); errors.Is(err, io.EOF) {
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	speak()
 	if allocs := testing.AllocsPerRun(3, speak); allocs != 0 {
-		t.Fatalf("Speak allocates %v times", allocs)
+		t.Fatalf("an utterance allocates %v times", allocs)
 	}
 }
 
@@ -433,17 +416,9 @@ func TestStyle(t *testing.T) {
 	defer s.Close()
 	s.Greedy = true
 	speak := func(style string) [][groups]int {
-		sent := false
-		next := func() ([]byte, error) {
-			if sent {
-				return nil, io.EOF
-			}
-			sent = true
-			return []byte(ref.Text), nil
-		}
 		var got [][groups]int
 		opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: style}
-		if err := s.generate(context.Background(), opts, next, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
+		if err := s.generateText(opts, ref.Text, func(f *[groups]int) error { got = append(got, *f); return nil }); err != nil {
 			t.Fatal(err)
 		}
 		return got
@@ -459,21 +434,36 @@ func TestStyle(t *testing.T) {
 		t.Fatalf("the cached styled prompt differs: first frame %v, want %v", again[0], calm[0])
 	}
 	t.Logf("%d frames plain, %d calm", len(plain), len(calm))
-	sent, text := false, []byte(ref.Text)
-	next := func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return text, nil
-	}
 	opts := speech.SpeakOptions{Voice: ref.Speaker, Language: ref.Language, Style: "Speak slowly, in a calm and even voice."}
 	if n := testing.AllocsPerRun(2, func() {
-		sent = false
-		if err := s.generate(context.Background(), opts, next, func(*[groups]int) error { return nil }); err != nil {
+		if err := s.generateText(opts, ref.Text, func(*[groups]int) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}); n != 0 {
 		t.Errorf("%v allocations per warm styled call", n)
 	}
+}
+
+// generateText generates text's codes in opts's voice on the caller's
+// goroutine, passing each frame to emit: the reference tests' path.
+func (s *Synthesizer) generateText(opts speech.SpeakOptions, text string, emit func(*[groups]int) error) error {
+	speaker, language, err := s.m.voiceOf(opts)
+	if err != nil {
+		return err
+	}
+	s.hold()
+	s.mu.Lock()
+	s.written, s.taken, s.ended = append(s.written[:0], text...), 0, true
+	s.mu.Unlock()
+	return s.generate(context.Background(), speaker, language, opts.Style, emit)
+}
+
+// hold makes the caller's goroutine the lane's worker for a new utterance,
+// as the tests that drive the talker directly need.
+func (s *Synthesizer) hold() {
+	s.mu.Lock()
+	s.id++
+	s.cur, s.ctx = s.id, context.Background()
+	s.written, s.taken, s.ended = s.written[:0], 0, false
+	s.mu.Unlock()
 }

@@ -5,7 +5,6 @@ package scenario
 
 import (
 	"context"
-	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/speech"
+	"github.com/GetStream/gophonic/speech/speechtest"
 )
 
 // echoDuplex is a speech.Duplex that, a moment after hearing a second of
@@ -71,32 +71,6 @@ func (d *echoDuplex) Note(text string) error {
 	return nil
 }
 func (d *echoDuplex) Close() error { return nil }
-
-// toneVoice speaks a second of sound for any text.
-type toneVoice struct{}
-
-func (toneVoice) SampleRate() int  { return 24000 }
-func (toneVoice) Voices() []string { return nil }
-func (toneVoice) Speak(_ context.Context, _ speech.SpeakOptions, next func() ([]byte, error), out func([]float32) error) error {
-	for {
-		if _, err := next(); errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			return err
-		}
-	}
-	frame := make([]float32, 1920)
-	for i := range frame {
-		frame[i] = 0.5
-	}
-	for range 13 {
-		if err := out(frame); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func (toneVoice) Close() error { return nil }
 
 // fixedEars hears the same words in any sound.
 type fixedEars struct{ text string }
@@ -185,7 +159,7 @@ note: something happened
 // reports silence and failures as they are.
 func TestRun(t *testing.T) {
 	agent := &echoDuplex{}
-	cfg := Config{Agent: agent, Voice: toneVoice{}, Ears: fixedEars{"a tone"}, Judge: yesJudge{},
+	cfg := Config{Agent: agent, Voice: speechtest.NewTone(80 * time.Millisecond), Ears: fixedEars{"a tone"}, Judge: yesJudge{},
 		Answer: 3 * time.Second, Quiet: time.Second, Log: t.Logf}
 	report, err := Run(context.Background(), cfg, `
 user: Say something.

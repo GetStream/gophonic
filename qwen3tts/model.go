@@ -16,6 +16,12 @@
 // heads and the text projections run on the CPU. The codec decoder turns
 // the sixteen codebooks into 1920 samples on the CPU's matrix units,
 // concurrently with the GPU.
+//
+// The talker follows the text as it speaks, and one of its attention heads
+// shows where: at every frame it weighs most the text token being spoken,
+// as the few alignment heads of Whisper's decoder follow the audio. Each
+// frame is read with that head's weights, and Synthesizer.Voiced reports
+// what the audio read so far has spoken from them, to the token.
 package qwen3tts
 
 import (
@@ -43,9 +49,20 @@ const (
 	codes  = 2048 // entries per codebook
 )
 
+// alignHeads are the talker's alignment heads by checkpoint (size and
+// type): the layer and head that attend to the text token being spoken.
+// Each was found by ranking every head of the talker against Whisper's word
+// timings of the speech it made (layer 3, head 0 of the 1.7B CustomVoice
+// talker: 0.33 words from the word being spoken, on average, where the
+// median head is 6 words away); TestVoicedFollowsWords holds it to that.
+var alignHeads = map[[2]string][2]int{
+	{"1b7", "custom_voice"}: {3, 0},
+}
+
 type config struct {
 	ModelType     string `json:"model_type"`
 	TTSModelType  string `json:"tts_model_type"`
+	TTSModelSize  string `json:"tts_model_size"`
 	TokenizerType string `json:"tokenizer_type"`
 	TTSBOS        int    `json:"tts_bos_token_id"`
 	TTSEOS        int    `json:"tts_eos_token_id"`
@@ -104,6 +121,10 @@ type Model struct {
 	cpEval  *qwen3lm.Evaluator
 	unmap   []func() error
 	threads int
+	// align is the talker's alignment head; aligned reports whether this
+	// checkpoint has a known one.
+	align   [2]int
+	aligned bool
 
 	hidden, cpHidden int
 
@@ -149,6 +170,7 @@ func Load(dir string, opts Options) (_ *Model, err error) {
 		return nil, errors.New("qwen3tts: unsupported codebook count or text width")
 	}
 	m := &Model{cfg: c, threads: opts.Threads, hidden: c.Talker.HiddenSize, cpHidden: c.Talker.CodePredictor.HiddenSize}
+	m.align, m.aligned = alignHeads[[2]string{c.TTSModelSize, c.TTSModelType}]
 	if m.threads <= 0 {
 		m.threads = max(1, qwen3lm.PerformanceCores())
 	}

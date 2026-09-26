@@ -29,7 +29,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -346,7 +345,7 @@ func (r *runner) speak(text string, lang string) error {
 	if lang != "" {
 		opts.Language = lang
 	}
-	pcm, err := synthesize(r.ctx, r.cfg.Voice, opts, text)
+	pcm, err := speech.Synthesize(r.ctx, r.cfg.Voice, opts, text, nil)
 	if err != nil {
 		return err
 	}
@@ -376,23 +375,6 @@ func (r *runner) speak(text string, lang string) error {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-}
-
-// synthesize speaks text in one call.
-func synthesize(ctx context.Context, s speech.Synthesizer, opts speech.SpeakOptions, text string) ([]float32, error) {
-	var pcm []float32
-	sent := false
-	err := s.Speak(ctx, opts, func() ([]byte, error) {
-		if sent {
-			return nil, io.EOF
-		}
-		sent = true
-		return []byte(text), nil
-	}, func(frame []float32) error {
-		pcm = append(pcm, frame...)
-		return nil
-	})
-	return pcm, err
 }
 
 // wait lets d pass.

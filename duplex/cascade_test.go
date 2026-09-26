@@ -6,7 +6,6 @@ package duplex
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"math"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/GetStream/gophonic/chat"
 	"github.com/GetStream/gophonic/speech"
+	"github.com/GetStream/gophonic/speech/speechtest"
 )
 
 // Fake lanes: the cascade's behavior, not the models', is under test. A
@@ -124,42 +124,10 @@ func (s *fakeSession) conversation() string {
 	return strings.Join(s.messages, "|")
 }
 
-// fakeSynth speaks a constant for any text: frames of 80 ms, 62 (five
-// seconds) by default.
-type fakeSynth struct{ frames int }
-
-func (fakeSynth) SampleRate() int  { return 24000 }
-func (fakeSynth) Voices() []string { return nil }
-func (f fakeSynth) Speak(ctx context.Context, _ speech.SpeakOptions, next func() ([]byte, error), out func([]float32) error) error {
-	said := 0
-	for {
-		p, err := next()
-		if errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			return err
-		}
-		said += len(p)
-	}
-	if said == 0 {
-		return nil // nothing to say
-	}
-	frame := make([]float32, 1920)
-	for i := range frame {
-		frame[i] = 0.5
-	}
-	frames := f.frames
-	if frames == 0 {
-		frames = 62
-	}
-	for range frames {
-		if err := out(frame); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func (fakeSynth) Close() error { return nil }
+// The fakes' voices speak each byte of a reply for a fixed time: the slow
+// one "Hi there, friend." in five seconds, the quick one in a moment.
+func slowVoice() *speechtest.Tone  { return speechtest.NewTone(300 * time.Millisecond) }
+func quickVoice() *speechtest.Tone { return speechtest.NewTone(25 * time.Millisecond) }
 
 // recorder keeps the final words heard and said, in order.
 type recorder struct {
@@ -248,7 +216,7 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 func answersAndStops(t *testing.T, asr fakeTranscriber, turns speech.TurnDetector) {
 	session := &fakeSession{}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: fakeSynth{}, Observer: rec})
+	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: slowVoice(), Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +240,12 @@ func answersAndStops(t *testing.T, asr fakeTranscriber, turns speech.TurnDetecto
 	if len(said) < 2 || said[0] != "hello gopher" || !strings.HasSuffix(said[1], "…") {
 		t.Fatalf("transcript %q; want the utterance and an interrupted reply", said)
 	}
-	if session.truncated > len("Hi there, friend.") {
-		t.Fatalf("truncated to %d bytes", session.truncated)
+	// The conversation keeps what the voice spoke before it was cut, to
+	// the piece the model wrote (four bytes, here).
+	heard := strings.TrimSuffix(said[1], "…")
+	if reply := "Hi there, friend."; !strings.HasPrefix(reply, heard) || len(heard) == len(reply) ||
+		session.truncated > len(heard) || session.truncated <= len(heard)-4 {
+		t.Fatalf("heard %q, truncated to %d bytes", heard, session.truncated)
 	}
 }
 
@@ -288,7 +260,7 @@ func TestCascadeLetsTheSpeakerGoOn(t *testing.T) {
 func letsTheSpeakerGoOn(t *testing.T, asr fakeTranscriber, turns speech.TurnDetector) {
 	session := &fakeSession{}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: fakeSynth{}, Observer: rec})
+	c, err := New(Config{Transcriber: asr, Turns: turns, Session: session, Voice: slowVoice(), Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +290,7 @@ func letsTheSpeakerGoOn(t *testing.T, asr fakeTranscriber, turns speech.TurnDete
 }
 
 func TestCascadeStepAllocatesNothing(t *testing.T) {
-	c, err := New(Config{Transcriber: fakeTranscriber{}, Turns: fakeTurns{}, Session: &fakeSession{}, Voice: fakeSynth{}})
+	c, err := New(Config{Transcriber: fakeTranscriber{}, Turns: fakeTurns{}, Session: &fakeSession{}, Voice: slowVoice()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +315,7 @@ func TestCascadeRunsTools(t *testing.T) {
 		runs.Add(1)
 		return "found " + args.Q, nil
 	})
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{}, Tools: []chat.Tool{lookup}})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: slowVoice(), Tools: []chat.Tool{lookup}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +334,7 @@ func TestCascadeRunsTools(t *testing.T) {
 func TestCascadeKeepsSilence(t *testing.T) {
 	session := &fakeSession{script: []string{`<silent until "hi">`, "<silent>", "<silent>", "<silent>", "<silent>", "<silent>"}}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{}, Observer: rec})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: slowVoice(), Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +379,7 @@ func (fakeQuiet) Close() error { return nil }
 func TestCascadeWakes(t *testing.T) {
 	session := &fakeSession{script: []string{`<silent until "hi">`, "Hello!"}}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5},
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: quickVoice(),
 		Wake: fakeQuiet{asks: false}, Observer: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -435,7 +407,7 @@ func TestCascadeWakes(t *testing.T) {
 // is overruled: the agent answers, told why.
 func TestCascadeOverrulesSilence(t *testing.T) {
 	session := &fakeSession{script: []string{`<silent until "return">`}}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Return."}, Session: session, Voice: fakeSynth{frames: 5},
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Return."}, Session: session, Voice: quickVoice(),
 		Quiet: fakeQuiet{asks: false}})
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +422,7 @@ func TestCascadeOverrulesSilence(t *testing.T) {
 	}
 	// Asked for, the silence stands.
 	session = &fakeSession{script: []string{`<silent until "hi">`, "<silent>", "<silent>", "<silent>"}}
-	c2, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Be quiet until I say hi."}, Session: session, Voice: fakeSynth{frames: 5},
+	c2, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "Be quiet until I say hi."}, Session: session, Voice: quickVoice(),
 		Quiet: fakeQuiet{asks: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +438,7 @@ func TestCascadeOverrulesSilence(t *testing.T) {
 func TestCascadePlansAMoment(t *testing.T) {
 	session := &fakeSession{script: []string{"Sure, I will remind you. <silent 1s>", "This is your reminder."}}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}, Observer: rec})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: quickVoice(), Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +469,7 @@ func TestCascadePlansAMoment(t *testing.T) {
 // A note is a moment: the agent may answer it, once no one is speaking.
 func TestCascadeAnswersNotes(t *testing.T) {
 	session := &fakeSession{script: []string{"Hi Ana!"}}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: quickVoice()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +490,7 @@ func TestCascadeAnswersNotes(t *testing.T) {
 // say.
 func TestCascadeIdleMoment(t *testing.T) {
 	session := &fakeSession{script: []string{"Is anyone there?"}}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}, Idle: 300 * time.Millisecond})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: quickVoice(), Idle: 300 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +508,7 @@ func TestCascadeIdleMoment(t *testing.T) {
 // changes, and the words stay as they were said.
 func TestCascadeNotesTheSpeaker(t *testing.T) {
 	session := &fakeSession{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: fakeSynth{frames: 5}})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: quickVoice()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +582,7 @@ func TestEchoOf(t *testing.T) {
 func TestCascadeDropsEcho(t *testing.T) {
 	session := &fakeSession{script: []string{"How is it going? Fine, thanks."}}
 	rec := &recorder{}
-	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "How is it going?"}, Session: session, Voice: fakeSynth{}, Observer: rec})
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, text: "How is it going?"}, Session: session, Voice: slowVoice(), Observer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,5 +595,60 @@ func TestCascadeDropsEcho(t *testing.T) {
 	said := rec.said()
 	if got := session.conversation(); len(said) < 2 || said[1] != "Fine, thanks." || !strings.HasSuffix(got, "|Fine, thanks.") {
 		t.Fatalf("said %q; conversation %q", said, got)
+	}
+}
+
+func TestWordEnd(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		n    int
+		want int
+	}{
+		{"Hi there, friend.", 0, 0},
+		{"Hi there, friend.", 2, 2},
+		{"Hi there, friend.", 3, 3},
+		{"Hi there, friend.", 6, 3}, // "the" of "there": back to "Hi "
+		{"Hi there, friend.", 8, 8}, // "there", before its comma
+		{"Hi there, friend.", 17, 17},
+		{"It's three o'clock.", 13, 11}, // within "o'clock"
+		{"Olá, você está bem?", 9, 6},   // within "você"
+		{"今天天气很好", 6, 6},                // one character in, a whole word
+		{"今天天气很好", 7, 6},                // within a character's bytes
+		{"Photosynthesis", 5, 0},
+	} {
+		if got := wordEnd([]byte(c.s), c.n); got != c.want {
+			t.Errorf("wordEnd(%q, %d) = %d, want %d", c.s, c.n, got, c.want)
+		}
+	}
+}
+
+// Captions follow the voice: the reply shows a word at a time as the
+// voice speaks it, never half of one, and whole once it is heard.
+func TestCascadeCaptionsFollowTheVoice(t *testing.T) {
+	session := &fakeSession{}
+	rec := &recorder{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true}, Session: session, Voice: speechtest.NewTone(120 * time.Millisecond), Observer: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if !run(t, c, speechClip(t), speaking, 5*time.Second) {
+		t.Fatal("the agent never spoke")
+	}
+	run(t, c, nil, notSpeaking, 5*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	reply := "Hi there, friend."
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	shown, last := map[int]bool{}, 0
+	for _, v := range rec.voiced {
+		if v < last || v > len(reply) || wordEnd([]byte(reply), v) != v {
+			t.Fatalf("captions at %v of %q", rec.voiced, reply)
+		}
+		last = v
+		shown[v] = true
+	}
+	if last != len(reply) || len(shown) < 4 {
+		t.Fatalf("captions at %v of %q: want it word by word to the end", rec.voiced, reply)
 	}
 }

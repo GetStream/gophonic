@@ -1,11 +1,11 @@
 # API redesign: every public surface
 
-Status: design and first four steps, 2026-09-25, branch `feat/asr-turn`.
+Status: design and first five steps, 2026-09-26, branch `feat/asr-turn`.
 Nothing is released, so every change below is breaking and meant to be.
 The migration plan at the end orders the work as PR-sized steps that each
 keep the tests green.
 
-Implemented in the tree (steps 1–4 of section 12, with what the MoE branch
+Implemented in the tree (steps 1–5 of section 12, with what the MoE branch
 needed carried over): `chat.Session.Reply` into an `io.Writer`,
 `chat.Tool`/`Func`/`Specs`/`Answer`, `chat.Options.Presence`, the role
 `chat.ToolResult`; `speech.Duplex.Step(in, out)` and `Note`,
@@ -28,7 +28,21 @@ two judges and one note fixed all but the last. The `qwen3`
 package reads the checkpoint's chat template (`thinks`) so the
 Instruct-2507 models, whose template has no thinking block, open replies
 and zero-shot answers after the assistant header, and `IsModelDir` accepts
-`qwen3_moe`. Steps 5–12 remain as planned.
+`qwen3_moe`.
+
+Step 5 is in the tree too: `speech.Synthesizer` is `Begin`, `Write`, `End`,
+`Read`, and `Voiced`, with `speech.Synthesize` and package `speechtest`
+(`Tone` and the `TestSynthesizer` conformance suite). `Voiced` departs from
+section 7's design, which took the offset of the last text token fed: the
+talker is fed 12.5 tokens a second and speaks three or four, so that offset
+runs seconds ahead of the voice. It comes instead from the talker's
+alignment head (layer 3, head 0 of 448, found by ranking every head against
+Whisper's word timings; 0.27 words from the word being spoken, where the
+median head is 6 away), read each frame through `qwen3lm.Probe`, a
+one-token extension's view of one head, on the CPU and in a `probe1` Metal
+kernel. The cascade's pump reads the voice, captions show whole words up to
+`Voiced` at the sample playing, and an interruption keeps the reply's bytes
+that were heard. Steps 6–12 remain as planned.
 
 ## 0. The decisions in one page
 

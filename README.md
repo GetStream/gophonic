@@ -200,8 +200,10 @@ It works while you talk, so that almost nothing is left when you stop:
   languages of the call, their names and their scripts: a noise in an
   English and Portuguese call cannot come out as Chinese.
 
-It remembers only what you heard, keeps a meeting's typed chat and who comes
-and goes as context (`Note`), knows who is speaking (`Speaker`), and
+It remembers only what you heard, to the word: the voice reports how far it
+has spoken from the TTS model's own attention, which also times the
+captions. It keeps a meeting's typed chat and who comes and goes as context
+(`Note`), knows who is speaking (`Speaker`), and
 [`examples/gopher`](examples/gopher) puts it in a video call. Package
 `scenario` tests any `speech.Duplex` from a text script, with real audio:
 the user's lines are synthesized, the agent's answers transcribed, and a

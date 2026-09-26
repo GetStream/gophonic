@@ -224,7 +224,62 @@ nonempty, contain complete frames, and be finite where it is read.
 `Complete` applies that model's threshold (Smart Turn `> 0.5`, TinyMelNet
 `> 0.57`). The result does not borrow lane storage.
 
+## Speech synthesis
+
+A `speech.Synthesizer` lane speaks one utterance at a time, pushed as text
+and pulled as audio: `Begin` starts an utterance, `Write` adds its text as a
+language model writes it, `End` completes it, and `Read` returns samples as
+they are decoded. Text and audio may be on two goroutines, and neither
+waits for the other.
+
+```go
+tts, err := gophonic.Lane[speech.Synthesizer](model)
+if err != nil {
+	return err
+}
+defer tts.Close()
+
+err = tts.Begin(ctx, speech.SpeakOptions{Voice: "ryan", Language: "en"})
+go func() { // a Synthesizer is an io.Writer: the model writes at its own pace
+	session.Reply(ctx, chat.Options{}, tts)
+	tts.End()
+}()
+frame := make([]float32, tts.SampleRate()/50)
+for {
+	n, err := tts.Read(frame)
+	if err == io.EOF {
+		break
+	}
+	play(frame[:n])
+	spoken(tts.Voiced()) // bytes of the reply the audio so far has spoken
+}
+```
+
+`Voiced` reports how many bytes of the text the samples read so far have
+spoken: it never decreases and reaches all of the text at `io.EOF`. Captions
+follow the voice with it, and an interrupted agent keeps only what was
+heard. `Begin` drops an utterance in progress, and cancelling its context
+cuts it: `Read` then returns the context's error. `speech.Synthesize` speaks
+a whole text in one call. A warm utterance allocates nothing, on any of the
+lane's goroutines.
+
+Package `speechtest` checks any implementation against this contract
+(`speechtest.TestSynthesizer`) and provides `Tone`, a synthesizer whose audio
+and `Voiced` are exact, for testing code that drives one.
+
 ## Model packages
+
+### qwen3tts
+
+Qwen3-TTS-12Hz-1.7B-CustomVoice's lane decodes each 80 ms frame on the CPU
+while the GPU generates the next, and caches the voice prompt (speaker,
+language, and `SpeakOptions.Style`) across utterances. Its `Voiced` is the
+talker's own position in the text: one attention head of the talker (layer
+3, head 0) weighs most the text token being spoken, as Whisper's alignment
+heads follow the audio, and each frame is read with it for the cost of one
+head's softmax. Against Whisper's word timings of the speech, streamed a
+word at a time, it is 0.27 words from the word being spoken on average and
+two at worst (`TestVoicedFollowsWords`).
 
 ### qwen3asr
 

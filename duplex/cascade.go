@@ -93,9 +93,11 @@ const (
 	overlapEnd  = 160 * time.Millisecond
 	overlapPeek = 560 * time.Millisecond // talk over the agent this long is judged while it goes on
 	overlapLong = 1500 * time.Millisecond
-	// Text speed, for estimating how much of a reply the voice has spoken
-	// until the synthesizer reports its own position.
-	charsPerSecond = 14
+	// firstAudio bounds how long the model waits, once it has written the
+	// first words, for the voice to sound them: the listener waits for that
+	// frame, not for the words after it, and until it is out the voice has
+	// the GPU to itself. A voice that needs more text to start gets it then.
+	firstAudio = 300 * time.Millisecond
 	// Transcription while speaking: the speech an utterance needs before it
 	// is first transcribed, and the new speech that starts another pass.
 	scribeFirst = inRate / 2
@@ -258,16 +260,32 @@ type Cascade struct {
 	silentUntil string
 	silentSince time.Time
 	t, partialT speech.Transcript
-	// The voice: pieces of said to speak (nil ends them), and its signals.
-	pieces    chan []byte
-	voiceEv   chan struct{} // the voice asked for text, or its first audio played
+	// The voice. The responder writes said to it as it grows (voiceAt bytes
+	// so far; voicing once it began an utterance), and spans maps each
+	// length of said to the length of reply it was spoken from. The pump
+	// reads the utterance's audio into play, marking after each read how
+	// much of said the voice has spoken.
+	voicing   bool
+	voiceAt   int
+	spans     []span
+	firstSent time.Time
+	pumpJobs  chan job
+	voiceEv   chan struct{} // the voice's first audio is out, or it ended
 	speakDone chan error
 	sounded   atomic.Bool
-	asked     atomic.Int32 // pieces the voice has asked for
-	sent      int32        // pieces written
-	captioned int          // bytes of said captioned as voiced
+	marksMu   sync.Mutex
+	marks     []voiceMark
+	markAt    int // the responder's place in marks
+	captioned int // bytes of said captioned as voiced
 	userShown bool
 }
+
+// span is a length of said and the length of the reply it came from.
+type span struct{ said, reply int }
+
+// voiceMark is the samples of an utterance read after a read, and the
+// bytes of its text the voice had spoken by then.
+type voiceMark struct{ read, voiced int }
 
 // job is one moment: an utterance to transcribe and answer, text to say,
 // or a moment with nothing new but the notes. A held job plays only once
@@ -384,7 +402,7 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 		utt: utterance{pcm: make([]float32, 0, longest)}, uttReady: make(chan struct{}, 1), prefill: make(chan struct{}, 1),
 		jobs: make(chan job, 4), noted: make(chan struct{}, 1), stop: make(chan struct{}),
 		probs: make([]float32, 2), quietProbs: make([]float32, 2), wakeProbs: make([]float32, 2),
-		pieces: make(chan []byte, 2), voiceEv: make(chan struct{}, 1), speakDone: make(chan error, 1)}
+		pumpJobs: make(chan job, 1), voiceEv: make(chan struct{}, 1), speakDone: make(chan error, 1)}
 	c.pass = passContext{Context: context.Background(), c: c}
 	c.rw.c = c
 	c.planned = time.AfterFunc(time.Hour, c.plannedMoment)
@@ -404,10 +422,11 @@ func New(cfg Config, models ...*gophonic.Model) (_ *Cascade, err error) {
 			return nil, err
 		}
 	}
-	c.wg.Add(3)
+	c.wg.Add(4)
 	go c.listen(vad)
 	go c.scribe()
 	go c.respond()
+	go c.pump()
 	c.active()
 	return c, nil
 }
@@ -449,14 +468,19 @@ func (c *Cascade) warm() error {
 	if err != nil {
 		return err
 	}
-	said := false
-	return c.cfg.Voice.Speak(context.Background(), c.cfg.Speak, func() ([]byte, error) {
-		if said {
-			return nil, io.EOF
+	v := c.cfg.Voice
+	if err := v.Begin(context.Background(), c.cfg.Speak); err != nil {
+		return err
+	}
+	v.Write([]byte("Hi."))
+	v.End()
+	for pcm := make([]float32, c.outSize); ; {
+		if _, err := v.Read(pcm); errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return err
 		}
-		said = true
-		return []byte("Hi."), nil
-	}, func([]float32) error { return nil })
+	}
 }
 
 // Rates: 16 kHz in, the synthesizer's rate out.
@@ -1291,22 +1315,20 @@ func (c *Cascade) run(j job) {
 	c.rw.begin(j, text)
 	c.captioned, c.userShown = 0, false
 	c.sounded.Store(false)
-	c.asked.Store(0)
-	c.sent = 0
-	for len(c.pieces) > 0 {
-		<-c.pieces
-	}
-	go c.speak(ctx, j)
+	c.voicing, c.voiceAt, c.spans, c.markAt = false, 0, c.spans[:0], 0
+	c.marksMu.Lock()
+	c.marks = c.marks[:0]
+	c.marksMu.Unlock()
 	var err error
 	if j.say != "" {
+		c.reply = append(c.reply, j.say...)
 		c.said = append(c.said, j.say...)
-		c.pieces <- c.said
+		c.spans = append(c.spans, span{len(c.said), len(c.reply)})
+		err = c.voice()
 		c.cfg.Session.Add(chat.Assistant, j.say)
 	} else {
 		if j.audio == nil {
 			if err := c.remindSilence(); err != nil {
-				c.pieces <- nil
-				<-c.speakDone
 				c.finish(cancel, err)
 				return
 			}
@@ -1317,6 +1339,7 @@ func (c *Cascade) run(j job) {
 			// answer again, on the same voice.
 			called := false
 			for round := 0; ; round++ {
+				c.rw.round = len(c.reply)
 				err = c.cfg.Session.Reply(ctx, c.cfg.Reply, &c.rw)
 				if errors.Is(err, errReplyEnded) {
 					err = nil
@@ -1354,7 +1377,7 @@ func (c *Cascade) run(j job) {
 			if err = c.cfg.Session.Add(chat.System, note); err != nil {
 				break
 			}
-			c.reply, c.said = c.reply[:0], c.said[:0]
+			c.reply, c.said, c.spans = c.reply[:0], c.said[:0], c.spans[:0]
 			c.rw.begin(j, text)
 		}
 		c.said = bytes.TrimRightFunc(c.said, unicode.IsSpace) // before a marker
@@ -1380,8 +1403,11 @@ func (c *Cascade) run(j job) {
 			}
 		}
 	}
-	c.pieces <- nil
-	speakErr := <-c.speakDone
+	var speakErr error
+	if c.voicing {
+		c.cfg.Voice.End()
+		speakErr = <-c.speakDone
+	}
 	silent := len(bytes.TrimSpace(c.said)) == 0
 	if silent && j.audio != nil && c.awaitTurn(ctx, j.id) {
 		// Silence, once the turn is over, shows only what was said.
@@ -1414,9 +1440,15 @@ func (c *Cascade) run(j job) {
 		c.cfg.Session.Restore(mark)
 		final = false
 	case interrupted:
-		heard := min(len(c.said), int(time.Duration(played)*time.Second/time.Duration(c.outRate)*charsPerSecond/time.Second))
+		heard := min(len(c.said), c.voicedAt(played))
 		if j.audio != nil {
-			c.cfg.Session.Truncate(heard)
+			// The conversation keeps what was heard: of the reply it holds,
+			// or of said when the reply was replaced by it.
+			n := heard
+			if !c.rw.echoed {
+				n = max(0, c.replyOf(heard)-c.rw.round)
+			}
+			c.cfg.Session.Truncate(n)
 		}
 		c.said = append(c.said[:cut(c.said, heard)], "…"...)
 	}
@@ -1528,42 +1560,80 @@ func (c *Cascade) remindSilence() error {
 	return c.cfg.Session.Add(chat.System, view(c.noteBuf))
 }
 
-// speak voices the pieces of the reply as they are written, on its own
-// goroutine, and reports when the voice is done.
-func (c *Cascade) speak(ctx context.Context, j job) {
-	eof := false
-	err := c.cfg.Voice.Speak(ctx, c.cfg.Speak, func() ([]byte, error) {
-		c.asked.Add(1)
-		c.signalVoice()
+// pump plays each utterance the responder begins: it reads the voice into
+// play as the audio is decoded, marks after each read how much of said
+// has been spoken, and reports when the utterance ends. Audio read after
+// an interruption never plays.
+func (c *Cascade) pump() {
+	defer c.wg.Done()
+	pcm := make([]float32, c.outSize)
+	for {
+		var j job
 		select {
-		case p := <-c.pieces:
-			if p == nil {
-				eof = true
-				return nil, io.EOF
+		case <-c.stop:
+			return
+		case j = <-c.pumpJobs:
+		}
+		gen, read := c.play.generation(), 0
+		var err error
+		for {
+			var n int
+			n, err = c.cfg.Voice.Read(pcm)
+			if n > 0 {
+				if read == 0 {
+					c.obs.Stage(FirstAudio, time.Since(j.at))
+				}
+				read += n
+				c.marksMu.Lock()
+				c.marks = append(c.marks, voiceMark{read, c.cfg.Voice.Voiced()})
+				c.marksMu.Unlock()
+				c.play.writeAt(gen, pcm[:n])
+				if !c.sounded.Load() {
+					c.sounded.Store(true)
+					c.signalVoice()
+				}
 			}
-			return p, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+			if err != nil {
+				break
+			}
 		}
-	}, func(pcm []float32) error {
-		if c.play.len() == 0 && c.played.Load() == 0 {
-			c.obs.Stage(FirstAudio, time.Since(j.at))
+		if errors.Is(err, io.EOF) {
+			err = nil
 		}
-		c.play.write(pcm)
-		if !c.sounded.Load() {
-			c.sounded.Store(true)
-			c.signalVoice()
-		}
-		return ctx.Err()
-	})
-	c.sounded.Store(true)
-	c.signalVoice()
-	// A voice that stopped early still takes the pieces the model writes,
-	// so the responder never waits on it.
-	for !eof {
-		eof = <-c.pieces == nil
+		c.sounded.Store(true)
+		c.signalVoice()
+		c.speakDone <- err
 	}
-	c.speakDone <- err
+}
+
+// voicedAt reports how many bytes of said the voice has spoken by the
+// played-th sample of the reply: as it had after the read that held it.
+func (c *Cascade) voicedAt(played int64) int {
+	if played <= 0 {
+		return 0
+	}
+	c.marksMu.Lock()
+	defer c.marksMu.Unlock()
+	for c.markAt < len(c.marks)-1 && int64(c.marks[c.markAt].read) < played {
+		c.markAt++
+	}
+	if c.markAt == len(c.marks) {
+		return 0
+	}
+	return c.marks[c.markAt].voiced
+}
+
+// replyOf returns the length of the reply that the first n bytes of said
+// were spoken from, to the piece.
+func (c *Cascade) replyOf(n int) int {
+	r := 0
+	for _, sp := range c.spans {
+		if sp.said > n {
+			break
+		}
+		r = sp.reply
+	}
+	return r
 }
 
 func (c *Cascade) signalVoice() {
@@ -1583,10 +1653,7 @@ func (c *Cascade) caption(j job, text []byte) {
 	if !c.userShown && j.audio != nil {
 		return
 	}
-	n := min(len(c.said), int(c.played.Load()*charsPerSecond/int64(c.outRate)))
-	if n < len(c.said) {
-		n = max(0, bytes.LastIndexFunc(c.said[:n], unicode.IsSpace))
-	}
+	n := wordEnd(c.said, min(len(c.said), c.voicedAt(c.played.Load())))
 	if n > c.captioned {
 		c.captioned = n
 		c.obs.Said(c.said, n, false)
@@ -1650,11 +1717,12 @@ type replyWriter struct {
 	ended    bool   // a marker ended the reply
 	wait     time.Duration
 	until    string // what the marker named as ending the silence
+	round    int    // bytes of c.reply before the last tool round's reply
 	j        job
 }
 
 func (w *replyWriter) begin(j job, answers []byte) {
-	w.answers, w.spoken, w.decided, w.echoed, w.trimLead, w.ended, w.wait, w.until, w.j = answers, 0, false, false, false, false, 0, "", j
+	w.answers, w.spoken, w.decided, w.echoed, w.trimLead, w.ended, w.wait, w.until, w.round, w.j = answers, 0, false, false, false, false, 0, "", 0, j
 }
 
 func (w *replyWriter) Write(p []byte) (int, error) {
@@ -1725,33 +1793,40 @@ func (w *replyWriter) speak(n int, flush bool) error {
 		}
 		w.trimLead = false
 	}
-	from := len(c.said)
 	c.said = appendSpeakable(c.said, src)
 	w.spoken += len(src)
+	c.spans = append(c.spans, span{len(c.said), w.spoken})
 	c.mu.Lock()
 	c.saying = append(c.saying[:0], c.said...)
 	c.mu.Unlock()
 	c.caption(w.j, w.answers)
-	if len(bytes.TrimSpace(c.said[from:])) == 0 {
-		return nil
-	}
-	return c.send(c.said[from:])
+	return c.voice()
 }
 
-// send passes a piece to the voice, and before the first audio waits until
-// it sounds or the voice needs more text: the listener waits for that
-// frame, not for the words after it.
-func (c *Cascade) send(piece []byte) error {
-	ctx := c.replyCtx
-	select {
-	case c.pieces <- piece:
-		c.sent++
-	case <-ctx.Done():
-		return ctx.Err()
+// voice writes to the synthesizer what said holds beyond what it has, once
+// said holds words; the first write begins the utterance, and the pump
+// plays it. Until the voice first sounds, and for at most firstAudio, the
+// writer then waits for it.
+func (c *Cascade) voice() error {
+	if c.voiceAt == len(c.said) || len(bytes.TrimSpace(c.said)) == 0 {
+		return nil
 	}
-	for c.asked.Load() <= c.sent && !c.sounded.Load() {
+	ctx := c.replyCtx
+	if !c.voicing {
+		if err := c.cfg.Voice.Begin(ctx, c.cfg.Speak); err != nil {
+			return err
+		}
+		c.voicing, c.firstSent = true, time.Now()
+		c.pumpJobs <- c.rw.j
+	}
+	if _, err := c.cfg.Voice.Write(c.said[c.voiceAt:]); err != nil {
+		return err
+	}
+	c.voiceAt = len(c.said)
+	for !c.sounded.Load() && time.Since(c.firstSent) < firstAudio {
 		select {
 		case <-c.voiceEv:
+		case <-c.tick.C:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1888,12 +1963,36 @@ func cut(s []byte, n int) int {
 	return n
 }
 
+// wordEnd returns n backed off to the end of a whole word of s: captions
+// show a word once the voice speaks it, and never half of one. Words of
+// scripts written without spaces are single characters.
+func wordEnd(s []byte, n int) int {
+	n = cut(s, n)
+	for n > 0 && n < len(s) {
+		prev, size := utf8.DecodeLastRune(s[:n])
+		next, _ := utf8.DecodeRune(s[n:])
+		if !inWord(prev) || !inWord(next) {
+			break
+		}
+		n -= size
+	}
+	return n
+}
+
+// inWord reports whether r continues a word written with spaces.
+func inWord(r rune) bool {
+	return (unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '\'' || r == '’') &&
+		!unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Thai)
+}
+
 // ring is a bounded FIFO of samples, safe for one writer and one reader.
+// Each reset starts a generation, so that a writer can tell it is late.
 type ring[T any] struct {
 	mu   sync.Mutex
 	buf  []T
 	head int // next to read
 	n    int
+	gen  uint32
 }
 
 func newRing[T any](capacity int) *ring[T] { return &ring[T]{buf: make([]T, capacity)} }
@@ -1902,6 +2001,19 @@ func newRing[T any](capacity int) *ring[T] { return &ring[T]{buf: make([]T, capa
 func (r *ring[T]) write(v []T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.append(v)
+}
+
+// writeAt is write unless the ring was reset since generation gen.
+func (r *ring[T]) writeAt(gen uint32, v []T) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.gen == gen {
+		r.append(v)
+	}
+}
+
+func (r *ring[T]) append(v []T) {
 	for len(v) > 0 {
 		if r.n == len(r.buf) {
 			r.head = (r.head + 1) % len(r.buf)
@@ -1937,5 +2049,13 @@ func (r *ring[T]) len() int {
 func (r *ring[T]) reset() {
 	r.mu.Lock()
 	r.head, r.n = 0, 0
+	r.gen++
 	r.mu.Unlock()
+}
+
+// generation reports the ring's resets so far.
+func (r *ring[T]) generation() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gen
 }
