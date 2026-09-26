@@ -18,7 +18,11 @@
 // A line that starts with the user speaks; wait, note, chat, join, leave,
 // and say are directives; any other name is the agent, whose line is an
 // assertion: silent [for 20s], speaks [within 40s], says <claim>, does
-// not repeat the user, captions follow the voice. user(pt) speaks
+// not repeat the user, captions follow the voice. Talk over the agent is
+// scripted with starts [within 10s], which waits for the agent to begin a
+// reply and not for its end, then a user line: stops within 1.5s holds if
+// the words stopped the agent within that long of their start, and goes
+// on if the reply went on to its end. user(pt) speaks
 // Portuguese, and gopher(pt) is transcribed as Portuguese. A script whose
 // first line is "# expect: fail" documents a behavior that does not work
 // yet: its failures are reported, not counted. Scenarios run in real time,
@@ -77,11 +81,12 @@ type Report struct {
 
 // Step is one line's outcome.
 type Step struct {
-	Line   string
-	Heard  string        // what the agent said, transcribed, for an assertion
-	After  time.Duration // from the end of the user's line to the agent's first sound
-	OK     bool
-	Reason string
+	Line    string
+	Heard   string        // what the agent said, transcribed, for an assertion
+	After   time.Duration // from the end of the user's line to the agent's first sound
+	Stopped time.Duration // for "stops": from the user's first sound to the agent stopping
+	OK      bool
+	Reason  string
 }
 
 // OK reports whether every step passed.
@@ -99,15 +104,34 @@ func (r Report) OK() bool {
 // through Log, when set (Test sets it).
 type Captions struct {
 	duplex.Base
-	Log  func(format string, args ...any)
-	mu   sync.Mutex
-	said []caption
+	Log         func(format string, args ...any)
+	mu          sync.Mutex
+	said        []caption
+	interrupted []time.Time // when speech over the agent stopped it
 }
 
 func (c *Captions) Stage(s duplex.Stage, elapsed time.Duration) {
+	if s == duplex.Interrupted {
+		c.mu.Lock()
+		c.interrupted = append(c.interrupted, time.Now())
+		c.mu.Unlock()
+	}
 	if c.Log != nil {
 		c.Log("stage %s after %v", s, elapsed.Round(time.Millisecond))
 	}
+}
+
+// interruptedSince returns when speech over the agent first stopped it at
+// or after t.
+func (c *Captions) interruptedSince(t time.Time) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, at := range c.interrupted {
+		if !at.Before(t) {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (c *Captions) Error(err error) {
@@ -223,6 +247,9 @@ func Run(ctx context.Context, cfg Config, script string) (Report, error) {
 
 func (s Step) detail() string {
 	var b strings.Builder
+	if s.Stopped > 0 {
+		fmt.Fprintf(&b, " (after %v)", s.Stopped.Round(10*time.Millisecond))
+	}
 	if s.Heard != "" {
 		fmt.Fprintf(&b, " (heard %q", s.Heard)
 		if s.After > 0 {
@@ -250,6 +277,12 @@ type runner struct {
 	lastSound  time.Time
 	firstSound time.Time // since the last user line
 	userEnded  time.Time // when the user's last audio was fed
+	userLead   int       // samples of silence before the user's line sounds
+	userFed    int       // samples of the user's line fed so far
+	userBegan  time.Time // when the user's line began to sound
+	quietAt    time.Time // when the agent last stopped speaking
+	quietMark  int       // len(spoke) then
+	resumedAt  time.Time // the agent's first sound after quietAt
 	resampler  *speech.Resampler
 	lastUser   string
 	speaker    func(string)
@@ -309,6 +342,9 @@ func (r *runner) loop() {
 		if n > 0 && len(r.queue) == 0 {
 			r.userEnded = time.Now()
 		}
+		if r.userFed += n; n > 0 && r.userFed > r.userLead && r.userBegan.IsZero() {
+			r.userBegan = time.Now()
+		}
 		r.mu.Unlock()
 		state, err := r.cfg.Agent.Step(in, out)
 		if err != nil {
@@ -320,6 +356,9 @@ func (r *runner) loop() {
 		}
 		loud := state == speech.Speaking && math.Sqrt(energy/float64(len(out))) > 0.005
 		r.mu.Lock()
+		if r.state == speech.Speaking && state != speech.Speaking {
+			r.quietAt, r.quietMark, r.resumedAt = time.Now(), len(r.spoke), time.Time{}
+		}
 		r.state = state
 		if loud {
 			now := time.Now()
@@ -328,6 +367,9 @@ func (r *runner) loop() {
 			}
 			if r.firstSound.IsZero() {
 				r.firstSound = now
+			}
+			if !r.quietAt.IsZero() && r.resumedAt.IsZero() {
+				r.resumedAt = now
 			}
 			r.lastSound = now
 			r.spoke = append(r.spoke, out...)
@@ -356,7 +398,7 @@ func (r *runner) speak(text string, lang speech.Language) error {
 		opts.Language = lang
 	}
 	var line []float32
-	for try, missed := 0, 2.0; try < sayings && missed > clearly; try++ {
+	for try, missed := 0, math.Inf(1); try < sayings && missed > clearly; try++ {
 		pcm, err := speech.Synthesize(r.ctx, r.cfg.Voice, opts, text, nil)
 		if err != nil {
 			return err
@@ -376,9 +418,14 @@ func (r *runner) speak(text string, lang speech.Language) error {
 			r.cfg.Log("the user's %q sounded like %q: said again", text, heard)
 		}
 	}
+	lead := 0
+	for lead < len(line) && math.Abs(float64(line[lead])) < 0.01 {
+		lead++
+	}
 	r.mu.Lock()
 	r.queue = append(r.queue, line...)
 	r.spoke, r.firstSound = r.spoke[:0], time.Time{}
+	r.userLead, r.userFed, r.userBegan = lead, 0, time.Time{}
 	r.lastUser = text
 	r.mu.Unlock()
 	for {
@@ -576,6 +623,77 @@ func (r *runner) step(l line) (Step, error) {
 			s.Reason = "the agent spoke"
 			return s, nil
 		}
+		s.OK = true
+	case "starts":
+		d := l.dur
+		if d == 0 {
+			d = r.cfg.Answer
+		}
+		for end := time.Now().Add(d); ; {
+			r.mu.Lock()
+			started := r.speaking
+			r.mu.Unlock()
+			if started {
+				break
+			}
+			if !time.Now().Before(end) {
+				s.Reason = fmt.Sprintf("the agent said nothing in %v", d)
+				return s, nil
+			}
+			if err := r.wait(20 * time.Millisecond); err != nil {
+				return s, err
+			}
+		}
+		r.fresh, r.lastPCM = true, nil
+		s.OK = true
+	case "stops":
+		if r.cfg.Captions == nil {
+			s.Reason = "no captions observer"
+			return s, nil
+		}
+		r.mu.Lock()
+		began := r.userBegan
+		r.mu.Unlock()
+		if began.IsZero() {
+			s.Reason = "the user said nothing"
+			return s, nil
+		}
+		if err := r.wait(time.Until(began.Add(l.dur))); err != nil {
+			return s, err
+		}
+		at, ok := r.cfg.Captions.interruptedSince(began)
+		if !ok || at.Sub(began) > l.dur {
+			s.Reason = fmt.Sprintf("the agent went on through %v of the user's words", l.dur)
+			return s, nil
+		}
+		s.Stopped, s.OK = at.Sub(began), true
+		// What follows is the answer to the words that stopped the agent,
+		// without what it said before them.
+		r.mu.Lock()
+		if !r.quietAt.Before(began) {
+			cut := min(r.quietMark, len(r.spoke))
+			r.spoke, r.firstSound = r.spoke[:copy(r.spoke, r.spoke[cut:])], r.resumedAt
+		}
+		r.mu.Unlock()
+		r.fresh, r.lastPCM = true, nil
+	case "goes on":
+		r.mu.Lock()
+		began := r.userBegan
+		r.mu.Unlock()
+		if r.cfg.Captions == nil || began.IsZero() {
+			s.Reason = "no captions observer, or the user said nothing"
+			return s, nil
+		}
+		pcm, _, err := r.speaks(r.cfg.Answer)
+		if err != nil {
+			return s, err
+		}
+		if _, stopped := r.cfg.Captions.interruptedSince(began); stopped {
+			s.Heard, _ = r.hear(pcm, l.lang)
+			s.Reason = "the user's words stopped the agent"
+			return s, nil
+		}
+		r.fresh, r.lastPCM = true, nil
 		s.OK = true
 	case "speaks", "says", "repeats", "captions":
 		if r.fresh || r.lastPCM == nil {

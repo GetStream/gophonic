@@ -14,7 +14,7 @@ import (
 // line is one step of a script.
 type line struct {
 	text string          // the line, for reports
-	kind string          // user, wait, note, chat, join, leave, say, silent, speaks, says, repeats, captions
+	kind string          // user, wait, note, chat, join, leave, say, silent, speaks, starts, stops, goes on, says, repeats, captions
 	arg  string          // the words, the claim, the name
 	lang speech.Language // user(pt), gopher(pt)
 	dur  time.Duration
@@ -80,6 +80,23 @@ func (l *line) assertion(rest string) (err error) {
 		if d, ok := strings.CutPrefix(after, "within "); ok {
 			l.dur, err = time.ParseDuration(strings.TrimSpace(d))
 		}
+	case "starts":
+		l.kind = "starts"
+		if d, ok := strings.CutPrefix(after, "within "); ok {
+			l.dur, err = time.ParseDuration(strings.TrimSpace(d))
+		}
+	case "stops":
+		d, ok := strings.CutPrefix(after, "within ")
+		if !ok {
+			return fmt.Errorf("%w: %q: stops within a duration", errSyntax, rest)
+		}
+		l.kind = "stops"
+		l.dur, err = time.ParseDuration(strings.TrimSpace(d))
+	case "goes":
+		if strings.TrimSpace(after) != "on" {
+			return fmt.Errorf("%w: %q", errSyntax, rest)
+		}
+		l.kind = "goes on"
 	case "says":
 		l.kind, l.arg = "says", strings.TrimSpace(after)
 	case "does":
