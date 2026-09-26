@@ -27,15 +27,19 @@ import (
 type fakeTranscriber struct {
 	hears bool
 	text  string // what it hears; "hello gopher" if empty
+	after int    // samples it needs to make out any word, as a slow speaker's
 }
 
-func (f fakeTranscriber) Transcribe(_ context.Context, _ []float32, opts speech.Options, t *speech.Transcript) error {
+func (f fakeTranscriber) Transcribe(_ context.Context, pcm []float32, opts speech.Options, t *speech.Transcript) error {
 	if opts.Turn && !f.hears {
 		return speech.ErrUnsupported
 	}
 	said := f.text
 	if said == "" {
 		said = "hello gopher"
+	}
+	if len(pcm) < f.after {
+		said = ""
 	}
 	t.Text = append(t.Text[:0], said...)
 	t.Turn = speech.Prediction{}
@@ -246,6 +250,61 @@ func answersAndStops(t *testing.T, asr fakeTranscriber, turns speech.TurnDetecto
 	if reply := "Hi there, friend."; !strings.HasPrefix(reply, heard) || len(heard) == len(reply) ||
 		session.truncated > len(heard) || session.truncated <= len(heard)-4 {
 		t.Fatalf("heard %q, truncated to %d bytes", heard, session.truncated)
+	}
+}
+
+// Speech over the agent whose words take a while to make out is judged
+// again as they arrive: the agent stops once they are heard, not only when
+// the talk has gone on for overlapLong.
+func TestCascadeJudgesTalkOverAsWordsArrive(t *testing.T) {
+	rec := &stages{}
+	c, err := New(Config{Transcriber: fakeTranscriber{hears: true, after: inRate}, Session: &fakeSession{}, Voice: slowVoice(),
+		Interruptions: stopAll{}, Observer: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	clip := speechClip(t)
+	if !run(t, c, clip, speaking, 5*time.Second) {
+		t.Fatal("the agent never spoke")
+	}
+	run(t, c, nil, never, resumeWindow+200*time.Millisecond)
+	began := time.Now()
+	if !run(t, c, clip, notSpeaking, 2*time.Second) {
+		t.Fatal("the agent kept speaking over the user")
+	}
+	if took := time.Since(began); took >= overlapLong {
+		t.Fatalf("the agent stopped %v into the talk over it, as if no words had been made out", took)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.interrupted) != 1 || rec.interrupted[0] < overlapPeek+overlapEvery || rec.interrupted[0] >= overlapLong {
+		t.Fatalf("interrupted after %v of talk; want a judgment after words were made out, before %v", rec.interrupted, overlapLong)
+	}
+}
+
+// stopAll is an interruption judge that stops the agent for any words.
+type stopAll struct{}
+
+func (stopAll) Labels() []string { return []string{"go on", "stop"} }
+func (stopAll) ClassifyInto(_ context.Context, _ string, probs []float32) error {
+	probs[0], probs[1] = 0, 1
+	return nil
+}
+func (stopAll) Close() error { return nil }
+
+// stages records when speech over the agent stopped it.
+type stages struct {
+	Base
+	mu          sync.Mutex
+	interrupted []time.Duration
+}
+
+func (s *stages) Stage(st Stage, elapsed time.Duration) {
+	if st == Interrupted {
+		s.mu.Lock()
+		s.interrupted = append(s.interrupted, elapsed)
+		s.mu.Unlock()
 	}
 }
 

@@ -56,9 +56,11 @@ const (
 	// Dropped: a reply was superseded, or its repetition of the message
 	// was cut.
 	Dropped
-	// Interrupted: speech over the agent stopped it.
+	// Interrupted: speech over the agent stopped it, after the time given
+	// of it.
 	Interrupted
-	// Continued: speech over the agent, an acknowledgement, let it go on.
+	// Continued: speech over the agent, an acknowledgement or noise, let it
+	// go on; the time is how long it lasted.
 	Continued
 	// Overruled: a silence chosen when no one asked for quiet was
 	// overruled, and the model answers after all.

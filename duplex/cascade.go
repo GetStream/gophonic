@@ -87,12 +87,16 @@ const (
 	// turn: the answer stops and is forgotten, and the whole utterance is
 	// heard again.
 	resumeWindow = 800 * time.Millisecond
-	// Speech over the agent: after a short pause it is transcribed and
-	// judged (an acknowledgement lets the agent go on; anything addressed
-	// to it stops it), and talking over it this long stops it outright.
-	overlapEnd  = 160 * time.Millisecond
-	overlapPeek = 560 * time.Millisecond // talk over the agent this long is judged while it goes on
-	overlapLong = 1500 * time.Millisecond
+	// Speech over the agent is judged as its words arrive: once it has gone
+	// on for overlapPeek, again after each overlapEvery more of it, and
+	// when it pauses for overlapEnd. Words addressed to the agent stop it;
+	// an acknowledgement lets it go on, and so, until the next judgment, do
+	// words not yet made out: a slow speaker's first half second can hold
+	// half a word. Talking over the agent for overlapLong stops it outright.
+	overlapEnd   = 160 * time.Millisecond
+	overlapPeek  = 560 * time.Millisecond
+	overlapEvery = 240 * time.Millisecond
+	overlapLong  = 1500 * time.Millisecond
 	// firstAudio bounds how long the model waits, once it has written the
 	// first words, for the voice to sound them: the listener waits for that
 	// frame, not for the words after it, and until it is out the voice has
@@ -660,6 +664,7 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 		talked   time.Duration
 		silence  time.Duration
 		overlap  time.Duration // continuous speech so far
+		judged   time.Duration // talk over the agent when it was last judged
 		paused   time.Time     // when the speaker last paused
 		heardAt  time.Time     // when the agent's voice became audible
 		pending  uint32        // the answer prepared at the pause, held until the turn ends
@@ -669,7 +674,7 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 	reset := func() {
 		c.utt.reset()
 		c.hearing.Store(false)
-		talked, silence, pending, answered = 0, 0, 0, false
+		talked, silence, judged, pending, answered = 0, 0, 0, 0, false
 		if c.momentDue.Load() {
 			select {
 			case c.noted <- struct{}{}:
@@ -753,26 +758,30 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 			}
 			utterance := c.utt.pcm
 			if audible && !stopped && !answered {
-				// Speech over the agent is judged once it pauses, or stops
-				// the agent if it goes on; turns wait until the agent is
-				// silent.
+				// Speech over the agent is judged as its words arrive and
+				// when it pauses, or stops the agent if it goes on; turns
+				// wait until the agent is silent.
 				switch {
 				case talked >= overlapLong:
 					c.interrupt()
 					c.obs.Stage(Interrupted, talked)
 					stopped = true
-				case speaking && talked == overlapPeek:
-					// Long enough to be more than an acknowledgement:
-					// judge what has been said so far.
+				case speaking && talked >= overlapPeek && talked >= judged+overlapEvery:
+					// Long enough to be more than an acknowledgement, or
+					// longer by some words: judge what has been said so far.
+					judged = talked
 					if c.interrupts(utterance) {
 						c.interrupt()
+						c.obs.Stage(Interrupted, talked)
 						stopped = true
 					}
 				case talked > 0 && silence == overlapEnd:
 					if c.interrupts(utterance) {
 						c.interrupt()
+						c.obs.Stage(Interrupted, talked)
 						stopped = true
 					} else {
+						c.obs.Stage(Continued, talked)
 						reset()
 					}
 				}
@@ -1046,8 +1055,9 @@ var interruptLabels = []string{
 }
 
 // interrupts reports whether speech heard over the agent means it should
-// stop: acknowledgements and noise do not; stop words do; anything else is
-// judged in the context of what the agent is saying.
+// stop: acknowledgements, noise, and words not yet made out do not; stop
+// words do; anything else is judged in the context of what the agent is
+// saying.
 func (c *Cascade) interrupts(audio []float32) bool {
 	var t, partial speech.Transcript
 	opts := c.cfg.Listen
@@ -1061,14 +1071,7 @@ func (c *Cascade) interrupts(audio []float32) bool {
 		c.fail(err)
 		return true
 	}
-	heard := normalize(string(t.Text))
-	stop := c.judge(heard, string(t.Text))
-	if stop {
-		c.obs.Stage(Interrupted, 0)
-	} else {
-		c.obs.Stage(Continued, 0)
-	}
-	return stop
+	return c.judge(normalize(string(t.Text)), string(t.Text))
 }
 
 // judge decides whether heard, normalized from text, stops the agent.
