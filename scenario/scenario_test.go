@@ -6,6 +6,7 @@ package scenario
 import (
 	"context"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -195,5 +196,21 @@ gopher: says that it is a song
 	}
 	if agent.notes[0] != "please be quiet" || agent.notes[1] != "speak up" {
 		t.Errorf("notes %q", agent.notes)
+	}
+}
+
+func TestWordError(t *testing.T) {
+	for _, c := range []struct {
+		said, heard string
+		want        float64
+	}{
+		{"Gopher, stop talking until I say hi.", "Gopher stop talking until I say hi", 0},
+		{"Gopher, qual é a capital de Portugal?", "Governo é a capital de Portugal.", 2.0 / 7},
+		{"Hi!", "", 1},
+		{"", "anything", 0},
+	} {
+		if got := wordError(c.said, c.heard); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("wordError(%q, %q) = %v, want %v", c.said, c.heard, got, c.want)
+		}
 	}
 }

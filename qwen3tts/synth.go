@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -31,6 +30,7 @@ const (
 	maxFrames     = 4096 // about 5.5 minutes of speech per utterance
 	defaultVoice  = "ryan"
 	placeholderID = 0 // the talker's and code predictor's ids are all rows
+	seed          = 0x5eed
 )
 
 const (
@@ -68,6 +68,7 @@ type Synthesizer struct {
 	seen             []bool // first-codebook codes generated this utterance
 	seenIDs          []int
 	sample           sampler
+	draws            uint64 // the GPU's draws so far
 	// Greedy decodes deterministically, as the reference tests do.
 	Greedy bool
 
@@ -134,7 +135,6 @@ type Synthesizer struct {
 	head, held                 int       // the ring's first unread sample, and samples held
 	marks                      []int32   // per frame queued, the bytes of written it has voiced
 	read                       int       // samples read
-	voiced                     atomic.Int64
 	closed                     bool
 	begun, wrote, queued, room chan struct{} // wake-ups, each held once
 	quit, stopped              chan struct{}
@@ -154,6 +154,10 @@ func NewSynthesizer(m *Model) (*Synthesizer, error) {
 		audio: make([]float32, audioFrames*FrameSamples), marks: make([]int32, 0, maxFrames),
 		begun: make(chan struct{}, 1), wrote: make(chan struct{}, 1), queued: make(chan struct{}, 1), room: make(chan struct{}, 1),
 		quit: make(chan struct{}), stopped: make(chan struct{})}
+	// A lane draws from one random stream across its utterances: the same
+	// text varies from one to the next, as a speaker's voice does, and a
+	// lane's utterances are reproducible.
+	s.sample.seed(seed)
 	if m.aligned {
 		s.align = qwen3lm.Probe{Layer: m.align[0], Head: m.align[1], Probs: make([]float32, alignStep+1)}
 	}
@@ -218,7 +222,6 @@ func (s *Synthesizer) Begin(ctx context.Context, opts speech.SpeakOptions) error
 	s.ctx, s.speaker, s.language, s.style = ctx, speaker, language, opts.Style
 	s.written, s.ended, s.taken, s.over, s.err = s.written[:0], false, 0, false, nil
 	s.head, s.held, s.marks, s.read = 0, 0, s.marks[:0], 0
-	s.voiced.Store(0)
 	s.mu.Unlock()
 	// The worker may be waiting on the utterance this one drops.
 	wake(s.begun)
@@ -291,7 +294,6 @@ func (s *Synthesizer) Read(pcm []float32) (int, error) {
 			k := copy(pcm[:n], s.audio[s.head:])
 			copy(pcm[k:n], s.audio)
 			s.head, s.held, s.read = (s.head+n)%len(s.audio), s.held-n, s.read+n
-			s.voiced.Store(int64(s.marks[(s.read-1)/FrameSamples]))
 			s.mu.Unlock()
 			wake(s.room)
 			return n, nil
@@ -300,7 +302,6 @@ func (s *Synthesizer) Read(pcm []float32) (int, error) {
 			err := s.err
 			if err == nil {
 				err = io.EOF
-				s.voiced.Store(int64(len(s.written)))
 			}
 			s.mu.Unlock()
 			return 0, err
@@ -314,11 +315,24 @@ func (s *Synthesizer) Read(pcm []float32) (int, error) {
 	}
 }
 
-// Voiced reports the bytes of the utterance's text the samples read so far
-// have spoken: the text up to the token the talker's alignment head
-// attended to in the last frame read. A checkpoint without a known head
-// reports the text spoken only once the last sample is read.
-func (s *Synthesizer) Voiced() int { return int(s.voiced.Load()) }
+// Voiced reports the bytes of the utterance's text its first samples
+// samples speak: the text up to the token the talker's alignment head
+// attended to in the frame that holds the last of them. A checkpoint
+// without a known head reports the text spoken only at the end.
+func (s *Synthesizer) Voiced(samples int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	decoded := s.read + s.held
+	switch {
+	case samples <= 0:
+		return 0
+	case s.over && s.err == nil && samples >= decoded:
+		return len(s.written)
+	case len(s.marks) == 0:
+		return 0
+	}
+	return int(s.marks[(min(samples, decoded)-1)/FrameSamples])
+}
 
 // Close releases the lane, once its worker is done with the frame it
 // generates.
@@ -579,7 +593,6 @@ func (s *Synthesizer) reset() {
 	s.seenIDs = s.seenIDs[:0]
 	s.text, s.textRows, s.textEnd, s.pending = s.text[:0], s.textRows[:0], s.textEnd[:0], s.pending[:0]
 	s.tokenized, s.textAt, s.textDone, s.eosFed, s.at = 0, 0, false, false, 0
-	s.sample.seed(0x5eed)
 }
 
 // pull takes the text written since the last pull and tokenizes what ends
@@ -805,6 +818,15 @@ func (s *Synthesizer) predict() error {
 	}
 	copy(s.cpRows[ch:2*ch], m.cpRows[0][s.frame[0]*ch:(s.frame[0]+1)*ch])
 	s.ids = placeholders(s.ids, 2)
+	if m.cpDecode != nil {
+		// The fifteen codes in one GPU submission.
+		d := qwen3lm.Sampling{TopK: topK, Temperature: temperature, Seed: seed, Draw: s.draws}
+		if s.Greedy {
+			d.TopK = 1
+		}
+		s.draws += groups - 1
+		return m.cpEval.DecodeInto(m.cpDecode, s.ckv, 0, s.ids, qwen3lm.Embeds{Token: placeholderID, Rows: s.cpRows}, d, s.frame[1:], nil, s.cws)
+	}
 	if err := m.cpEval.HiddenLastExtendEmbedInto(s.ckv, 0, s.ids, qwen3lm.Embeds{Token: placeholderID, Rows: s.cpRows}, s.cpHidden, s.cws); err != nil {
 		return err
 	}

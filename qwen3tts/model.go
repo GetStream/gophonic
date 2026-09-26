@@ -142,10 +142,13 @@ type Model struct {
 	// codebook g's codes. proj projects the talker state.
 	cpRows [groups - 1][]float32
 	proj   dense
-	// head is the talker's codec head, and heads the code predictor's
-	// fifteen: on the CPU, where their states arrive, exact in FP32.
-	head  *whispergemm.PackedVector
-	heads [groups - 1]*whispergemm.PackedVector
+	// head is the talker's codec head, on the CPU in FP32. The code
+	// predictor's fifteen heads and its input tables run on the GPU with it
+	// when it does (cpDecode: a frame's fifteen codes in one submission),
+	// and on the CPU in FP32 otherwise (heads).
+	head     *whispergemm.PackedVector
+	heads    [groups - 1]*whispergemm.PackedVector
+	cpDecode *qwen3lm.Decoder
 	// Text rows of the TTS control tokens.
 	bosRow, eosRow, padRow []float32
 
@@ -260,12 +263,16 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 	if m.head, err = whispergemm.NewPackedVector(head, h, c.Vocab, h); err != nil {
 		return err
 	}
+	gpu := m.cp.GPU()
+	var gpuHeads [][]float32
 	for g := range m.heads {
 		w, err := st.Float32(fmt.Sprintf("talker.code_predictor.lm_head.%d.weight", g), codes, ch)
 		if err != nil {
 			return err
 		}
-		if m.heads[g], err = whispergemm.NewPackedVector(w, ch, codes, ch); err != nil {
+		if gpu {
+			gpuHeads = append(gpuHeads, w)
+		} else if m.heads[g], err = whispergemm.NewPackedVector(w, ch, codes, ch); err != nil {
 			return err
 		}
 	}
@@ -289,6 +296,16 @@ func (m *Model) loadTables(st *safetensors.Checkpoint) error {
 		m.cpRows[g] = make([]float32, codes*ch)
 		if err := m.proj.apply(exec, m.cpRows[g], table, codes); err != nil {
 			return err
+		}
+	}
+	if gpu {
+		// Codebook g's rows are the input after its code, for g = 1..14;
+		// the GPU keeps them, and the CPU only the first codebook's.
+		if m.cpDecode, err = m.cpEval.NewDecoder(gpuHeads, m.cpRows[1:], codes); err != nil {
+			return err
+		}
+		for g := 1; g < len(m.cpRows); g++ {
+			m.cpRows[g] = nil
 		}
 	}
 	// The TTS control tokens' text rows.
@@ -344,6 +361,7 @@ func (m *Model) Languages() []string {
 // Release frees the model's GPU memory and mappings; the model is unusable
 // afterwards.
 func (m *Model) Release() {
+	m.cpDecode.Close()
 	if m.talker != nil {
 		m.talker.Release()
 	}

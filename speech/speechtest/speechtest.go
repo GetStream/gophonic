@@ -32,7 +32,6 @@ type Tone struct {
 	read    int  // samples read
 	closed  bool
 	wrote   chan struct{}
-	voiced  int
 }
 
 var _ speech.Synthesizer = (*Tone)(nil)
@@ -60,7 +59,7 @@ func (t *Tone) Begin(ctx context.Context, _ speech.SpeakOptions) error {
 		return speech.ErrClosed
 	}
 	t.id++
-	t.ctx, t.written, t.ended, t.read, t.voiced = ctx, 0, false, 0, 0
+	t.ctx, t.written, t.ended, t.read = ctx, 0, false, 0
 	return nil
 }
 
@@ -132,12 +131,10 @@ func (t *Tone) Read(pcm []float32) (int, error) {
 				pcm[i] = t.level
 			}
 			t.read += n
-			t.voiced = (t.read + t.perByte - 1) / t.perByte
 			t.mu.Unlock()
 			return n, nil
 		}
 		if t.ended {
-			t.voiced = t.written
 			t.mu.Unlock()
 			return 0, io.EOF
 		}
@@ -149,11 +146,11 @@ func (t *Tone) Read(pcm []float32) (int, error) {
 	}
 }
 
-// Voiced reports the bytes whose tone has begun to be read.
-func (t *Tone) Voiced() int {
+// Voiced reports the bytes whose tone has begun by the samples-th sample.
+func (t *Tone) Voiced(samples int) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.voiced
+	return min(t.written, (max(samples, 0)+t.perByte-1)/t.perByte)
 }
 
 // Close ends the lane.
@@ -201,7 +198,7 @@ func TestSynthesizer(t *testing.T, s speech.Synthesizer, opts speech.SpeakOption
 		for {
 			n, err := s.Read(pcm)
 			samples += n
-			v := s.Voiced()
+			v := s.Voiced(samples)
 			if v < last || v > len(text) {
 				t.Fatalf("Voiced %d after %d, of %d bytes", v, last, len(text))
 			}
@@ -216,8 +213,11 @@ func TestSynthesizer(t *testing.T, s speech.Synthesizer, opts speech.SpeakOption
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if last != len(text) || samples == 0 {
+		if last = s.Voiced(samples); last != len(text) || samples == 0 {
 			t.Fatalf("%d samples, Voiced %d at the end of %d bytes", samples, last, len(text))
+		}
+		if v0, vn := s.Voiced(0), s.Voiced(samples+1<<20); v0 != 0 || vn != len(text) {
+			t.Fatalf("Voiced(0) = %d, Voiced past the end = %d, of %d bytes", v0, vn, len(text))
 		}
 		if _, err := s.Write([]byte("more")); err == nil {
 			t.Fatal("Write after End succeeded")

@@ -247,7 +247,15 @@ func TestPredictorMatchesReference(t *testing.T) {
 			t.Logf("projection cosine %.7f max %.3g; hidden cosine %.7f max %.3g", cosine(rows, wantProj), maxDiff(rows, wantProj),
 				cosine(s.cpHidden, wantHidden), maxDiff(s.cpHidden, wantHidden))
 		}
-		m.heads[0].Mul(s.cpLogits, s.cpHidden)
+		if m.cpDecode != nil {
+			// The GPU's head, from the same evaluation.
+			var first [1]int
+			if err := m.cpEval.DecodeInto(m.cpDecode, s.ckv, 0, ids, qwen3lmEmbeds(rows), qwen3lm.Sampling{}, first[:], s.cpLogits, s.cws); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			m.heads[0].Mul(s.cpLogits, s.cpHidden)
+		}
 		w := want[f*codes : (f+1)*codes]
 		a, _ := top2(s.cpLogits)
 		b, _ := top2(w)

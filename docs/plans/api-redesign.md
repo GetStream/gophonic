@@ -40,9 +40,13 @@ alignment head (layer 3, head 0 of 448, found by ranking every head against
 Whisper's word timings; 0.27 words from the word being spoken, where the
 median head is 6 away), read each frame through `qwen3lm.Probe`, a
 one-token extension's view of one head, on the CPU and in a `probe1` Metal
-kernel. The cascade's pump reads the voice, captions show whole words up to
-`Voiced` at the sample playing, and an interruption keeps the reply's bytes
-that were heard. Steps 6–12 remain as planned.
+kernel. `Voiced(samples)` answers for any sample of the utterance, so the
+cascade asks it for the sample playing: captions show whole words up to
+it, and an interruption keeps the reply's bytes that were heard. The code
+predictor's fifteen steps per frame run as one GPU submission through
+`qwen3lm.Decoder` (FP16 heads with the final norm folded in, a radix-select
+top-k sampler, input rows gathered on the GPU): 10.3 ms per frame, from
+14.4. Steps 6–12 remain as planned.
 
 ## 0. The decisions in one page
 

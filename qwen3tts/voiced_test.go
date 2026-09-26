@@ -77,20 +77,20 @@ func TestVoicedFollowsWords(t *testing.T) {
 			s.End()
 		}()
 		var pcm []float32
-		var voiced []int // after each frame read
 		frame := make([]float32, FrameSamples)
 		for {
 			n, err := s.Read(frame)
 			pcm = append(pcm, frame[:n]...)
-			if n > 0 && len(pcm)%FrameSamples == 0 {
-				voiced = append(voiced, s.Voiced())
-			}
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
+		}
+		voiced := make([]int, len(pcm)/FrameSamples) // at each frame's middle
+		for f := range voiced {
+			voiced[f] = s.Voiced(f*FrameSamples + FrameSamples/2)
 		}
 		mono := make([]float32, len(pcm))
 		n, err := resampler.Resample16kInto(pcm, SampleRate, 1, mono)

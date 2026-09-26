@@ -263,8 +263,7 @@ type Cascade struct {
 	// The voice. The responder writes said to it as it grows (voiceAt bytes
 	// so far; voicing once it began an utterance), and spans maps each
 	// length of said to the length of reply it was spoken from. The pump
-	// reads the utterance's audio into play, marking after each read how
-	// much of said the voice has spoken.
+	// reads the utterance's audio into play.
 	voicing   bool
 	voiceAt   int
 	spans     []span
@@ -273,19 +272,12 @@ type Cascade struct {
 	voiceEv   chan struct{} // the voice's first audio is out, or it ended
 	speakDone chan error
 	sounded   atomic.Bool
-	marksMu   sync.Mutex
-	marks     []voiceMark
-	markAt    int // the responder's place in marks
 	captioned int // bytes of said captioned as voiced
 	userShown bool
 }
 
 // span is a length of said and the length of the reply it came from.
 type span struct{ said, reply int }
-
-// voiceMark is the samples of an utterance read after a read, and the
-// bytes of its text the voice had spoken by then.
-type voiceMark struct{ read, voiced int }
 
 // job is one moment: an utterance to transcribe and answer, text to say,
 // or a moment with nothing new but the notes. A held job plays only once
@@ -1315,10 +1307,7 @@ func (c *Cascade) run(j job) {
 	c.rw.begin(j, text)
 	c.captioned, c.userShown = 0, false
 	c.sounded.Store(false)
-	c.voicing, c.voiceAt, c.spans, c.markAt = false, 0, c.spans[:0], 0
-	c.marksMu.Lock()
-	c.marks = c.marks[:0]
-	c.marksMu.Unlock()
+	c.voicing, c.voiceAt, c.spans = false, 0, c.spans[:0]
 	var err error
 	if j.say != "" {
 		c.reply = append(c.reply, j.say...)
@@ -1561,9 +1550,8 @@ func (c *Cascade) remindSilence() error {
 }
 
 // pump plays each utterance the responder begins: it reads the voice into
-// play as the audio is decoded, marks after each read how much of said
-// has been spoken, and reports when the utterance ends. Audio read after
-// an interruption never plays.
+// play as the audio is decoded, and reports when the utterance ends. Audio
+// read after an interruption never plays.
 func (c *Cascade) pump() {
 	defer c.wg.Done()
 	pcm := make([]float32, c.outSize)
@@ -1584,9 +1572,6 @@ func (c *Cascade) pump() {
 					c.obs.Stage(FirstAudio, time.Since(j.at))
 				}
 				read += n
-				c.marksMu.Lock()
-				c.marks = append(c.marks, voiceMark{read, c.cfg.Voice.Voiced()})
-				c.marksMu.Unlock()
 				c.play.writeAt(gen, pcm[:n])
 				if !c.sounded.Load() {
 					c.sounded.Store(true)
@@ -1607,20 +1592,12 @@ func (c *Cascade) pump() {
 }
 
 // voicedAt reports how many bytes of said the voice has spoken by the
-// played-th sample of the reply: as it had after the read that held it.
+// played-th sample of the reply.
 func (c *Cascade) voicedAt(played int64) int {
-	if played <= 0 {
+	if !c.voicing {
 		return 0
 	}
-	c.marksMu.Lock()
-	defer c.marksMu.Unlock()
-	for c.markAt < len(c.marks)-1 && int64(c.marks[c.markAt].read) < played {
-		c.markAt++
-	}
-	if c.markAt == len(c.marks) {
-		return 0
-	}
-	return c.marks[c.markAt].voiced
+	return c.cfg.Voice.Voiced(int(played))
 }
 
 // replyOf returns the length of the reply that the first n bytes of said

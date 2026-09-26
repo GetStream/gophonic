@@ -245,20 +245,21 @@ go func() { // a Synthesizer is an io.Writer: the model writes at its own pace
 	tts.End()
 }()
 frame := make([]float32, tts.SampleRate()/50)
-for {
+for played := 0; ; {
 	n, err := tts.Read(frame)
 	if err == io.EOF {
 		break
 	}
 	play(frame[:n])
-	spoken(tts.Voiced()) // bytes of the reply the audio so far has spoken
+	played += n
+	spoken(tts.Voiced(played)) // bytes of the reply spoken so far
 }
 ```
 
-`Voiced` reports how many bytes of the text the samples read so far have
-spoken: it never decreases and reaches all of the text at `io.EOF`. Captions
-follow the voice with it, and an interrupted agent keeps only what was
-heard. `Begin` drops an utterance in progress, and cancelling its context
+`Voiced(n)` reports how many bytes of the text the utterance's first `n`
+samples speak: it never decreases as `n` grows and is all of the text once
+the utterance ends. Captions follow the voice with it, an interrupted agent
+keeps only what was heard, and subtitles time each word by it. `Begin` drops an utterance in progress, and cancelling its context
 cuts it: `Read` then returns the context's error. `speech.Synthesize` speaks
 a whole text in one call. A warm utterance allocates nothing, on any of the
 lane's goroutines.
@@ -273,7 +274,11 @@ and `Voiced` are exact, for testing code that drives one.
 
 Qwen3-TTS-12Hz-1.7B-CustomVoice's lane decodes each 80 ms frame on the CPU
 while the GPU generates the next, and caches the voice prompt (speaker,
-language, and `SpeakOptions.Style`) across utterances. Its `Voiced` is the
+language, and `SpeakOptions.Style`) across utterances. A frame is the
+talker's step and fifteen of the code predictor's, one per codebook; the
+predictor's run whole on the GPU, heads, sampling, and all, in one
+submission, so a frame takes 10.3 ms on an M4 Max, where a round trip per
+codebook took 14.4. Its `Voiced` is the
 talker's own position in the text: one attention head of the talker (layer
 3, head 0) weighs most the text token being spoken, as Whisper's alignment
 heads follow the audio, and each frame is read with it for the cost of one

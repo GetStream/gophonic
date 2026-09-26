@@ -338,27 +338,46 @@ func (r *runner) loop() {
 	}
 }
 
+// clearly bounds the words of a user's line the harness's own ears may
+// mishear; a line misheard more is said again, up to sayings times.
+const (
+	clearly = 0.2
+	sayings = 4
+)
+
 // speak synthesizes text in the user's voice and queues it for the agent,
-// then waits until it has been heard.
+// then waits until it has been heard. The user speaks clearly: a synthesis
+// that the harness's ears mishear is said again, and the clearest is
+// spoken, so that a scenario tests the agent rather than one draw of the
+// voice.
 func (r *runner) speak(text string, lang string) error {
 	opts := r.cfg.Speak
 	if lang != "" {
 		opts.Language = lang
 	}
-	pcm, err := speech.Synthesize(r.ctx, r.cfg.Voice, opts, text, nil)
-	if err != nil {
-		return err
-	}
-	n, err := speech.Samples16k(len(pcm), r.cfg.Voice.SampleRate(), 1)
-	if err != nil {
-		return err
-	}
-	mono := make([]float32, n)
-	if n, err = r.resampler.Resample16kInto(pcm, r.cfg.Voice.SampleRate(), 1, mono); err != nil {
-		return err
+	var line []float32
+	for try, missed := 0, 2.0; try < sayings && missed > clearly; try++ {
+		pcm, err := speech.Synthesize(r.ctx, r.cfg.Voice, opts, text, nil)
+		if err != nil {
+			return err
+		}
+		mono, err := r.mono16k(pcm, r.cfg.Voice.SampleRate())
+		if err != nil {
+			return err
+		}
+		heard, err := r.hear16k(mono, lang)
+		if err != nil {
+			return err
+		}
+		if e := wordError(text, heard); e < missed {
+			line, missed = mono, e
+		}
+		if missed > clearly && r.cfg.Log != nil {
+			r.cfg.Log("the user's %q sounded like %q: said again", text, heard)
+		}
 	}
 	r.mu.Lock()
-	r.queue = append(r.queue, mono[:n]...)
+	r.queue = append(r.queue, line...)
 	r.spoke, r.firstSound = r.spoke[:0], time.Time{}
 	r.lastUser = text
 	r.mu.Unlock()
@@ -448,21 +467,33 @@ func (r *runner) speaks(d time.Duration) (pcm []float32, after time.Duration, er
 
 // hear transcribes the agent's audio.
 func (r *runner) hear(pcm []float32, lang string) (string, error) {
-	n, err := speech.Samples16k(len(pcm), r.outRate, 1)
+	mono, err := r.mono16k(pcm, r.outRate)
 	if err != nil {
 		return "", err
 	}
-	mono := make([]float32, n)
-	if n, err = r.resampler.Resample16kInto(pcm, r.outRate, 1, mono); err != nil {
-		return "", err
+	return r.hear16k(mono, lang)
+}
+
+// mono16k resamples mono pcm at rate to 16 kHz.
+func (r *runner) mono16k(pcm []float32, rate int) ([]float32, error) {
+	n, err := speech.Samples16k(len(pcm), rate, 1)
+	if err != nil {
+		return nil, err
 	}
+	mono := make([]float32, n)
+	n, err = r.resampler.Resample16kInto(pcm, rate, 1, mono)
+	return mono[:n], err
+}
+
+// hear16k transcribes 16 kHz speech with the harness's ears.
+func (r *runner) hear16k(mono []float32, lang string) (string, error) {
 	opts := r.cfg.Listen
 	opts.Partial, opts.Turn = nil, false
 	if lang != "" {
 		opts.Language, opts.Languages = lang, nil
 	}
 	var t speech.Transcript
-	if err := r.cfg.Ears.Transcribe(r.ctx, mono[:n], opts, &t); err != nil {
+	if err := r.cfg.Ears.Transcribe(r.ctx, mono, opts, &t); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(t.Text)), nil
@@ -621,6 +652,31 @@ func (r *runner) note(text string, s *Step) bool {
 		return false
 	}
 	return true
+}
+
+// wordError is the share of said's words that heard misses: their edit
+// distance, compared normalized, over said's count.
+func wordError(said, heard string) float64 {
+	a, b := strings.Fields(normalize(said)), strings.Fields(normalize(heard))
+	if len(a) == 0 {
+		return 0
+	}
+	prev, cur := make([]int, len(b)+1), make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			sub := prev[j-1]
+			if a[i-1] != b[j-1] {
+				sub++
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, sub)
+		}
+		prev, cur = cur, prev
+	}
+	return float64(prev[len(b)]) / float64(len(a))
 }
 
 // normalize lowercases text and drops punctuation.

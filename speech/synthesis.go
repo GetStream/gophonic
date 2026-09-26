@@ -36,12 +36,14 @@ type Synthesizer interface {
 	// many, waiting until some are decoded. After the last sample it
 	// returns io.EOF, and ctx's error once the utterance is cut.
 	Read(pcm []float32) (int, error)
-	// Voiced reports how many bytes of the utterance's text the samples
-	// read so far have spoken, as the synthesizer follows the text: it
-	// never decreases, and after io.EOF it is all of the text. Captions
-	// show the text up to it, and an interrupted speaker keeps what was
-	// heard. It may be called from any goroutine.
-	Voiced() int
+	// Voiced reports how many bytes of the utterance's text its first
+	// samples samples speak, as the synthesizer follows the text: captions
+	// show the text up to Voiced of the samples played, an interrupted
+	// speaker keeps what was heard, and subtitles time each word by it. It
+	// never decreases as samples grow, answers for samples not yet decoded
+	// as for the last one decoded, and is all of the text once the
+	// utterance has ended. It may be called from any goroutine.
+	Voiced(samples int) int
 	// Close releases the lane. It is safe to call more than once.
 	Close() error
 }
