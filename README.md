@@ -195,7 +195,8 @@ It works while you talk, so that almost nothing is left when you stop:
 - **It acts with tools.** A tool is a Go function whose arguments struct is
   its schema (`chat.Func`); the model calls it in Qwen3's own format, the
   call's fixed parts are drafted and checked in one pass, and its result
-  becomes part of the answer, on the same voice.
+  becomes part of the answer, on the same voice. Package `mcp` offers any
+  Model Context Protocol server's tools the same way.
 - **It speaks your languages.** `Languages` limits the recognizer to the
   languages of the call, their names and their scripts: a noise in an
   English and Portuguese call cannot come out as Chinese.

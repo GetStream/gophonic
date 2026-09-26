@@ -256,6 +256,7 @@ affects quantization or recurrence.
 | Smart Turn weights, graph, scratch, workers | `smartturn/` |
 | TinyMelNet weights, graph, quantization, GRU, workers | `tinymel/` |
 | Qwen3 text tasks and cache | `qwen3/` |
+| Chat sessions, tools, and MCP servers' tools | `chat/`, `mcp/` |
 | Qwen3 transformer, loader, tokenizer, GPU, GPTQ | `internal/qwen3lm/` |
 | Safetensors reader, file mappings, prepared-weight cache | `internal/safetensors/`, `internal/mmap/`, `internal/wcache/` |
 | CLM ranking heads | `clm/` |

@@ -10,16 +10,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/GetStream/gophonic/chat"
+	"github.com/GetStream/gophonic/mcp"
 	"github.com/thesyncim/vibejson"
 )
 
 // Gopher's tools: what the model can do besides talking. Each is a Go
 // function whose arguments struct tells the model how to call it; add one
-// to give Gopher a new ability.
+// to give Gopher a new ability, or name an MCP server with -mcp.
 func tools() []chat.Tool {
 	return []chat.Tool{
 		chat.Func("now", "The current date and time: here, in "+localZone()+", or in another time zone.", now),
@@ -140,4 +142,42 @@ func getJSON[T any](ctx context.Context, u string, v *T) error {
 		return fmt.Errorf("%s: %s", u, resp.Status)
 	}
 	return vibejson.Unmarshal(data, v)
+}
+
+// connect starts each MCP server, a command line split at spaces, and adds
+// its tools to tools. A tool whose name is taken is an error, not a shadow.
+func connect(ctx context.Context, commands []string, tools []chat.Tool) ([]chat.Tool, []*mcp.Client, error) {
+	var servers []*mcp.Client
+	fail := func(err error) ([]chat.Tool, []*mcp.Client, error) {
+		for _, s := range servers {
+			s.Close()
+		}
+		return nil, nil, err
+	}
+	names := map[string]bool{}
+	for _, t := range tools {
+		names[t.Spec().Name] = true
+	}
+	for _, command := range commands {
+		args := strings.Fields(command)
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stderr = os.Stderr
+		server, err := mcp.Start(ctx, cmd)
+		if err != nil {
+			return fail(err)
+		}
+		servers = append(servers, server)
+		more, err := server.Tools(ctx)
+		if err != nil {
+			return fail(fmt.Errorf("%s: %w", command, err))
+		}
+		for _, t := range more {
+			if name := t.Spec().Name; names[name] {
+				return fail(fmt.Errorf("%s: another tool is named %s", command, name))
+			}
+			names[t.Spec().Name] = true
+		}
+		tools = append(tools, more...)
+	}
+	return tools, servers, nil
 }

@@ -1,11 +1,11 @@
 # API redesign: every public surface
 
-Status: design and eleven steps, 2026-09-26, branch `feat/asr-turn`.
+Status: design and all twelve steps, 2026-09-26, branch `feat/asr-turn`.
 Nothing is released, so every change below is breaking and meant to be.
 The migration plan at the end orders the work as PR-sized steps that each
 keep the tests green.
 
-Implemented in the tree (steps 1–11 of section 12, with what the MoE branch
+Implemented in the tree (all twelve steps of section 12, with what the MoE branch
 needed carried over): `chat.Session.Reply` into an `io.Writer`,
 `chat.Tool`/`Func`/`Specs`/`Answer`, `chat.Options.Presence`, the role
 `chat.ToolResult`; `speech.Duplex.Step(in, out)` and `Note`,
@@ -67,7 +67,7 @@ Step 8 as well:
 - Generation and questions keep a workspace each, a departure from section 7. A reply holds its lock for the whole reply, and the duplex asks its judges while replies are written.
 - `OpenChat`, `NewChat`, `Chat.Questions`, and the engine aliases (`Weights`, `Evaluator`, `Workspace`, `PrefixKV`, `Embeds`, `LoadWeights`, `NewEvaluator`, `QuantizeGPTQ`) are gone. Only the tokenizer stays public.
 
-Step 9 moved the turn detectors' frontend to `speech.TurnFeatures`, so a third-party detector imports only `speech`. Step 10 added the server's `POST /v1/chat/completions` (streamed as server-sent events, with tools) and `POST /v1/audio/speech` (WAV, or PCM streamed). It also added `chat.Session.AddCalls`, which replays an assistant's calls in the model's own format, as a stateless server must. Batched transcription (`speech.BatchTranscriber`) waits for a batched Qwen3-ASR decoder, a change to the engine rather than the API. Step 11 unexported Whisper's graph (its encoder and decoder scratch, tokenizer, greedy policy, dimensions, and their errors) in place, rather than moving it to an internal package. The package keeps its model, transcriber, and feature entry points: 181 exported identifiers became 35. Step 12 remains as planned.
+Step 9 moved the turn detectors' frontend to `speech.TurnFeatures`, so a third-party detector imports only `speech`. Step 10 added the server's `POST /v1/chat/completions` (streamed as server-sent events, with tools) and `POST /v1/audio/speech` (WAV, or PCM streamed). It also added `chat.Session.AddCalls`, which replays an assistant's calls in the model's own format, as a stateless server must. Batched transcription (`speech.BatchTranscriber`) waits for a batched Qwen3-ASR decoder, a change to the engine rather than the API. Step 11 unexported Whisper's graph (its encoder and decoder scratch, tokenizer, greedy policy, dimensions, and their errors) in place, rather than moving it to an internal package. The package keeps its model, transcriber, and feature entry points: 181 exported identifiers became 35. Step 12 added package `mcp`: `Start` and `Connect` give a client whose `Tools` are a Model Context Protocol server's tools as `[]chat.Tool`. It speaks JSON-RPC over stdio with `vibejson`, pages through `tools/list`, multiplexes concurrent calls, and cancels calls whose context ends. It was tested against a fake server and the Playwright MCP server, and Qwen3-8B answers through it in `chat.Answer`.
 
 ## 0. The decisions in one page
 

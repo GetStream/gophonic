@@ -64,6 +64,14 @@ func main() {
 	voice := flag.String("voice", "aiden", "voice: aiden, ryan, serena, vivian, eric, dylan, uncle_fu, ono_anna, sohee")
 	pronto := flag.String("pronto", "https://pronto-staging.getstream.io", "Pronto app whose call to join")
 	verbose = flag.Bool("v", false, "log the input level every second")
+	var servers []string
+	flag.Func("mcp", "an MCP server whose tools Gopher may use: its command line, split at spaces; may be repeated", func(command string) error {
+		if len(strings.Fields(command)) == 0 {
+			return fmt.Errorf("an empty command")
+		}
+		servers = append(servers, command)
+		return nil
+	})
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -115,6 +123,13 @@ func main() {
 		log.Fatal(err)
 	}
 	cfg := config(*voice, spoken, allowed)
+	tools, clients, err := connect(ctx, servers, cfg.Tools)
+	check(err)
+	for _, c := range clients {
+		defer c.Close()
+		log.Printf("MCP server %s %s", c.Server.Name, c.Server.Version)
+	}
+	cfg.Tools = tools
 	// Captions follow the voice: closed captions sentence by sentence with
 	// the app's secret; otherwise the call's chat, where each answer is one
 	// message that grows as it is spoken.

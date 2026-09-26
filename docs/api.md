@@ -424,6 +424,27 @@ err = chat.Answer(ctx, s, tools, chat.Options{}, os.Stdout, 4)
 A call's fixed parts, `{"name": "now", "arguments":`, are drafted and checked
 in one pass, sampling each position as decoding one token at a time would.
 
+### mcp
+
+Package `mcp` offers a Model Context Protocol server's tools as
+`[]chat.Tool`, so a model calls them as it calls a `chat.Func`: in
+`chat.Answer`, in a duplex agent, or through the server's chat endpoint.
+`Start` runs a server and speaks JSON-RPC over its standard input and
+output (MCP's stdio transport, revision 2025-06-18); `Connect` speaks it
+over any reader and writer. `Tools` lists every page of the server's tools
+with their JSON Schemas. A call returns the text of the result, and a
+result the server marks as an error comes back as an error for the model
+to read. Calls run concurrently on one connection. A call whose context
+ends is cancelled at the server, and `Close` ends the server.
+
+```go
+server, err := mcp.Start(ctx, exec.Command("npx", "-y", "@modelcontextprotocol/server-filesystem", dir))
+defer server.Close()
+tools, err := server.Tools(ctx)
+s, err := gen.NewSession("You are a helpful assistant.", chat.Specs(tools)...)
+err = chat.Answer(ctx, s, tools, chat.Options{}, os.Stdout, 4)
+```
+
 ## The turn detectors' frontend
 
 A detector trained on the same features can reuse the frontend, which

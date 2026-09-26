@@ -27,6 +27,9 @@ the languages spoken in the call: what Gopher hears is transcribed in one of
 them, never another, and it answers in the one it is spoken to. `-voice`
 picks one of Qwen3-TTS's voices (ryan, aiden, serena, vivian, eric, dylan,
 uncle_fu, ono_anna, sohee); `-call default:ID` joins an existing call.
+`-mcp` gives Gopher an MCP server's tools besides its own, and may be
+repeated: `-mcp "npx @playwright/mcp@latest --headless"` offers it a web
+browser.
 
 ## How it works
 
