@@ -1,0 +1,20 @@
+ASR/native source: 23c3112, unchanged in 22b8ba3; main 63fd4c4 integrated.
+CGO_ENABLED=0 GOEXPERIMENT=simd; -benchtime=3x -count=3, alternating paired controls.
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/qwen3asr
+cpu: Apple M4 Max
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       3	3053636514 ns/op	         2.705 batch-calls/s	        15.44 batch-cpu-ms/call	      1479 batch-ms/wave	        26.66 independent-cpu-ms/call	      1575 independent-ms/wave	         1.065 speedup	     298 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       3	3075363042 ns/op	         2.745 batch-calls/s	        14.10 batch-cpu-ms/call	      1457 batch-ms/wave	        22.78 independent-cpu-ms/call	      1618 independent-ms/wave	         1.111 speedup	     298 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       3	3162655764 ns/op	         2.829 batch-calls/s	        13.62 batch-cpu-ms/call	      1414 batch-ms/wave	        22.04 independent-cpu-ms/call	      1749 independent-ms/wave	         1.237 speedup	      37 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       3	5907523028 ns/op	         3.156 batch-calls/s	        12.68 batch-cpu-ms/call	      2535 batch-ms/wave	        23.45 independent-cpu-ms/call	      3372 independent-ms/wave	         1.330 speedup	     261 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       3	6024716611 ns/op	         2.958 batch-calls/s	        18.09 batch-cpu-ms/call	      2705 batch-ms/wave	        32.52 independent-cpu-ms/call	      3320 independent-ms/wave	         1.227 speedup	     672 B/op	       6 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=8-16         	       3	6146102653 ns/op	         3.247 batch-calls/s	        18.06 batch-cpu-ms/call	      2464 batch-ms/wave	        29.47 independent-cpu-ms/call	      3682 independent-ms/wave	         1.495 speedup	     821 B/op	       7 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       3	2486694014 ns/op	         3.336 batch-calls/s	        12.02 batch-cpu-ms/call	      1199 batch-ms/wave	        18.55 independent-cpu-ms/call	      1288 independent-ms/wave	         1.074 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       3	2698803625 ns/op	         3.058 batch-calls/s	        11.90 batch-cpu-ms/call	      1308 batch-ms/wave	        17.22 independent-cpu-ms/call	      1391 independent-ms/wave	         1.063 speedup	     224 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       3	2492904486 ns/op	         3.405 batch-calls/s	        10.88 batch-cpu-ms/call	      1175 batch-ms/wave	        16.68 independent-cpu-ms/call	      1318 independent-ms/wave	         1.122 speedup	      37 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       3	4145490389 ns/op	         4.122 batch-calls/s	        10.65 batch-cpu-ms/call	      1941 batch-ms/wave	        18.42 independent-cpu-ms/call	      2205 independent-ms/wave	         1.136 speedup	     261 B/op	       2 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       3	4262901569 ns/op	         4.022 batch-calls/s	        10.03 batch-cpu-ms/call	      1989 batch-ms/wave	        17.19 independent-cpu-ms/call	      2274 independent-ms/wave	         1.143 speedup	      37 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=8-16       	       3	4325640083 ns/op	         3.939 batch-calls/s	        10.27 batch-cpu-ms/call	      2031 batch-ms/wave	        16.86 independent-cpu-ms/call	      2295 independent-ms/wave	         1.130 speedup	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	308.931s

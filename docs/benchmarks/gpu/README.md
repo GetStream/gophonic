@@ -146,6 +146,36 @@ language constraints. One-step decoder heads now allocate no unused input
 tables or sum-of-squares buffers; an exact first-step comparison against the
 multi-step path verifies unchanged scores and token selection.
 
+## Post-merge complete-call qualification
+
+The [final paired run](asr-postmerge-paired.txt) uses ASR/native source
+`23c3112` after merging main `63fd4c4` (unchanged in `22b8ba3`), three counts
+of three alternating pairs each. Each wave completes one transcription per
+lane. Both variants keep private state, validate identical transcripts, and
+include frontend, encoder, prefill, and decode work in their named metrics.
+
+| Workload | Lanes | Throughput ratio, all three counts | Process CPU reduction/call |
+| --- | --- | --- | --- |
+| English | 4 | 1.065×, 1.111×, 1.237× | 38.1–42.1% |
+| English | 8 | 1.330×, 1.227×, 1.495× | 38.7–45.9% |
+| English/Chinese mixed | 4 | 1.074×, 1.063×, 1.122× | 30.9–35.2% |
+| English/Chinese mixed | 8 | 1.136×, 1.143×, 1.130× | 39.1–42.2% |
+
+The process CPU counter is user plus system time for this process; it excludes
+some driver/system work and is not a physical-core affinity measurement.
+Desktop-load variation remains visible. The paired benchmark reported 0–7
+Go allocations per pair (both variants together), so this is not a claim
+that all scheduling metadata is allocation-free. The separate warm scalar
+allocation tests passed with zero allocations.
+
+The [complete official-model ASR suite](asr-full-merged-tests.txt) passed in
+214 seconds, including CPU/GPU numerical references, growing-audio
+continuation, partial transcripts, language constraints, turn prediction,
+private batches, cancellation/reuse, and warm allocation checks. Optional
+corpus-export and memory-report tests are explicitly skipped in that log.
+The native decoder checks and CGO-free CI cover the additional lifecycle,
+head, and kernel cases. Physical NVIDIA/AMD qualification is still outstanding.
+
 ## Token selection and resource lifetime
 
 The final native greedy batch selects token IDs on the GPU immediately
