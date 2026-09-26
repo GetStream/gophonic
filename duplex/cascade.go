@@ -728,10 +728,12 @@ func (c *Cascade) listen(vad *gopus.VAD) {
 			}
 			if answered && c.busy.Load() && (!audible || fresh) && overlap >= resume {
 				// Speech before the answer is heard, or as it begins: the
-				// speaker was not finished after all.
+				// speaker was not finished after all. Until the voice is
+				// silent, the words are the speaker's turn, not talk over
+				// the agent.
 				c.resumed.Store(true)
 				c.interrupt()
-				answered = false
+				answered, stopped = false, true
 			}
 			if len(c.utt.pcm) == 0 && !speaking {
 				early = append(early, frame...)

@@ -136,9 +136,18 @@ func quickVoice() *speechtest.Tone { return speechtest.NewTone(25 * time.Millise
 // recorder keeps the final words heard and said, in order.
 type recorder struct {
 	Base
-	mu     sync.Mutex
-	final  []string
-	voiced []int // Said's voiced counts, in order
+	mu          sync.Mutex
+	final       []string
+	voiced      []int // Said's voiced counts, in order
+	interrupted int   // Interrupted stages
+}
+
+func (r *recorder) Stage(s Stage, _ time.Duration) {
+	if s == Interrupted {
+		r.mu.Lock()
+		r.interrupted++
+		r.mu.Unlock()
+	}
 }
 
 func (r *recorder) Heard(_ string, text []byte, final bool) {
@@ -345,6 +354,12 @@ func letsTheSpeakerGoOn(t *testing.T, asr fakeTranscriber, turns speech.TurnDete
 	}
 	if said := rec.said(); len(said) != 1 || said[0] != "hello gopher" {
 		t.Fatalf("captions %q; want the utterance once", said)
+	}
+	// The speaker going on is their turn, not talk over the agent.
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.interrupted != 0 {
+		t.Fatalf("%d interruptions reported for a speaker going on", rec.interrupted)
 	}
 }
 

@@ -1,0 +1,15 @@
+# Talked over, the agent goes on through an acknowledgement, and stops for
+# words meant for it, soon, then answers them. It stops once the words are
+# judged: at 560 ms of them for a quick question, then the judgment, which
+# takes about 0.5 s while the model writes the reply.
+user: Tell me about the history of Lisbon in five sentences.
+gopher: starts within 10s
+wait: 2s
+user: Oh, interesting.
+gopher: goes on
+user: Now tell me about the history of Porto in five sentences.
+gopher: starts within 10s
+wait: 2s
+user: How old is Porto, actually?
+gopher: stops within 2s
+gopher: says how old Porto is, or when it was founded
