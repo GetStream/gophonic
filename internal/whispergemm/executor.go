@@ -265,11 +265,14 @@ func (e *Executor) execute(parts int) {
 	e.runShard(0)
 	// Balanced shards normally finish together. Poll briefly before yielding
 	// to runnable workers; yielding is required when GOMAXPROCS is below the
-	// worker budget. Avoiding a semaphore wait keeps this hot barrier free of
+	// worker budget. Several private executors can oversubscribe the process
+	// even when each one fits, so longer waits always yield. Avoiding a
+	// semaphore wait keeps this hot barrier free of
 	// runtime waiter allocations even when the caller migrates between Ps.
 	yield := runtime.GOMAXPROCS(0) < parts
+	waitStart := time.Now()
 	for spins := 0; e.pending.Load() != 0; spins++ {
-		if yield && spins&63 == 63 {
+		if spins&63 == 63 && (yield || time.Since(waitStart) >= 50*time.Microsecond) {
 			runtime.Gosched()
 		}
 	}

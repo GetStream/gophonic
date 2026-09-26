@@ -146,12 +146,19 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 	session := &fakeSession{}
 	var mu sync.Mutex
 	var said []string
+	assistantFinal := make(chan struct{}, 1)
 	c, err := New(Config{Transcriber: fakeTranscriber{}, TurnDetector: fakeTurns{}, Session: session, Synthesizer: fakeSynth{},
 		OnText: func(role chat.Role, text string, final bool) {
 			if final {
 				mu.Lock()
 				said = append(said, text)
 				mu.Unlock()
+				if role == chat.Assistant {
+					select {
+					case assistantFinal <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}})
 	if err != nil {
@@ -170,8 +177,13 @@ func TestCascadeAnswersAndStopsWhenInterrupted(t *testing.T) {
 	if !stopped {
 		t.Fatal("the agent kept speaking over the user")
 	}
-	// Let the responder record the interruption.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the responder's completion, rather than assuming it was
+	// scheduled within a fixed sleep on a loaded CI runner.
+	select {
+	case <-assistantFinal:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the responder did not finalize the interrupted reply")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	session.mu.Lock()
@@ -242,5 +254,46 @@ func TestCascadeStepAllocatesNothing(t *testing.T) {
 	in, out := make([]float32, inFrame), make([]float32, c.outSize)
 	if allocs := testing.AllocsPerRun(100, func() { c.Step(context.Background(), in, out) }); allocs != 0 {
 		t.Fatalf("Step allocates %v times", allocs)
+	}
+}
+
+// Cancellation and draining can happen during the timer branch (including
+// from OnText), before the loop tests the queue again. An empty queue must
+// not turn that interruption into a normally completed reply.
+func TestPlaybackDrainPreservesCancellation(t *testing.T) {
+	for _, name := range []string{"heard", "interrupted"} {
+		interrupted := name == "interrupted"
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := &Cascade{play: newRing[float32](1), cancel: cancel}
+			c.play.write([]float32{0.5})
+			ticks := 0
+			got := c.waitPlayback(ctx, func() {
+				ticks++
+				if interrupted {
+					c.interrupt()
+				} else {
+					var heard [1]float32
+					c.play.read(heard[:])
+				}
+			})
+			if ticks != 1 {
+				t.Fatalf("playback callbacks=%d, want 1", ticks)
+			}
+			if got != interrupted {
+				t.Fatalf("interrupted=%v, want %v", got, interrupted)
+			}
+		})
+	}
+}
+
+func TestPlaybackCanceledAfterQueueCleared(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Cascade{play: newRing[float32](1), cancel: cancel}
+	c.play.write([]float32{0.5})
+	c.interrupt()
+	if !c.waitPlayback(ctx, func() { t.Fatal("caption callback after cancellation") }) {
+		t.Fatal("canceled empty playback reported normal completion")
 	}
 }

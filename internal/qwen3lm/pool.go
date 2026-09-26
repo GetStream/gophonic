@@ -28,7 +28,7 @@ type workerPool struct {
 	mu      sync.Mutex // serializes run and close
 	workers []poolWorker
 	yield   atomic.Bool  // spinning must yield: more participants than GOMAXPROCS
-	active  atomic.Int32 // holds from forward passes; workers never park while positive
+	active  atomic.Int32 // forward-pass holds avoid channel waiter allocation
 	stop    atomic.Bool
 	stopped sync.WaitGroup
 
@@ -48,10 +48,13 @@ type poolWorker struct {
 	_          [40]byte
 }
 
-const poolSpin = time.Millisecond
-
-// holdWorkers is how many participants a forward-pass hold keeps spinning.
-const holdWorkers = 8
+const (
+	poolSpin = time.Millisecond
+	// Beyond a short barrier wait, let other lanes and their workers run.
+	poolYield = 50 * time.Microsecond
+	// Extra participants used only by co-executed projections may park.
+	holdWorkers = 8
+)
 
 func newWorkerPool(workers int) *workerPool {
 	p := &workerPool{workers: make([]poolWorker, max(0, workers-1))}
@@ -83,12 +86,13 @@ func (p *workerPool) loop(w *poolWorker, index int) {
 				return
 			}
 			if spins&1023 == 1023 {
-				// Inside a forward pass the next dispatch is always near, so
-				// only an idle pool (no hold) parks after poolSpin.
-				// Workers beyond the ordinary participant count only take
-				// part in co-executed projections, so they may park anyway.
-				if (p.active.Load() > 0 && index < holdWorkers) || time.Since(spinStart) < poolSpin {
-					if p.yield.Load() {
+				// A caller may be descheduled behind other lanes even when
+				// this pool alone fits GOMAXPROCS. Bound spinning locally;
+				// private pools must never reserve a P while waiting for work.
+				elapsed := time.Since(spinStart)
+				held := p.active.Load() > 0 && index < holdWorkers
+				if held || elapsed < poolSpin {
+					if p.yield.Load() || (held && elapsed >= poolYield) {
 						runtime.Gosched()
 					}
 					continue
@@ -167,16 +171,17 @@ func (p *workerPool) runN(op rangeOp, items, grain, n int) {
 		}
 	}
 	p.claim(0)
+	waitStart := time.Now()
 	for spins := 0; p.pending.Load() != 0; spins++ {
-		if yield && spins&255 == 255 {
+		if spins&255 == 255 && (yield || time.Since(waitStart) >= poolYield) {
 			runtime.Gosched()
 		}
 	}
 	p.op = nil
 }
 
-// hold keeps workers spinning until the matching release, so the many short
-// dispatches of one forward pass never pay a parked worker's wake-up.
+// hold avoids parking between operations of a forward pass. Held workers
+// still yield after the short spin budget: a hold is not a CPU reservation.
 func (p *workerPool) hold() {
 	if p != nil {
 		p.active.Add(1)
@@ -211,8 +216,9 @@ func (p *workerPool) runEach(op rangeOp, n int) {
 		}
 	}
 	op.ApplyRows(0, 0, 1)
+	waitStart := time.Now()
 	for spins := 0; p.pending.Load() != 0; spins++ {
-		if yield && spins&255 == 255 {
+		if spins&255 == 255 && (yield || time.Since(waitStart) >= poolYield) {
 			runtime.Gosched()
 		}
 	}

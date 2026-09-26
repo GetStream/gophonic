@@ -106,7 +106,14 @@ prepared, on an M4 Max. A model with a text classifier of its own takes neither
 | `-workers` | 1 | Requests running inference at once; as many more may queue, and the rest get 503. |
 | `-keep-alive` | `15m` | Close a model after this long without requests; negative keeps models open. |
 | `-max-audio-seconds` | 120 | Longest audio a request may send. |
-| `-threads` | 0 | CPU workers per lane; 0 picks each model's default. |
+| `-threads` | 0 | CPU workers per lane; 0 divides `GOMAXPROCS` across request slots (minimum 1, maximum 64). A single slot keeps the model default. |
+
+With `GOMAXPROCS=16`, `-workers 8` defaults to two CPU workers per lane.
+Each lane keeps its own mutable scratch and KV cache. The budget counts the
+caller as one worker and is selected at startup; explicit `-threads` overrides
+it. When there are more request slots than CPU slots, Go schedules the
+single-worker lanes. Tune concurrency against your latency target and memory
+limit; more concurrent calls do not always increase throughput.
 
 ## Operation
 
