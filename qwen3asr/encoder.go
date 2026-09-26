@@ -338,9 +338,11 @@ func newEncoderWorkspace(e *encoder, workers int) (*encoderWorkspace, error) {
 	for i := range w.attn {
 		a := &w.attn[i]
 		if a.keysT, err = whispergemm.NewPackedB(e.headDim, window); err != nil {
+			w.close()
 			return nil, err
 		}
 		if a.values, err = whispergemm.NewPackedB(window, e.headDim); err != nil {
+			w.close()
 			return nil, err
 		}
 		a.scores = make([]float32, window*window)

@@ -1,0 +1,35 @@
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.23s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.02s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.25s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.08s)
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (5.30s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (1.11s)
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/qwen3asr
+cpu: Apple M4 Max
+BenchmarkGPUPairedTranscribe
+BenchmarkGPUPairedTranscribe/jfk/lanes=1
+BenchmarkGPUPairedTranscribe/jfk/lanes=1-16         	       4	 472494864 ns/op	         4.239 batch-calls/s	       235.9 batch-ms/wave	       236.6 independent-ms/wave	         1.003 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=1-16         	       4	 478097594 ns/op	         4.179 batch-calls/s	       239.3 batch-ms/wave	       238.8 independent-ms/wave	         0.9982 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=1-16         	       4	 476033823 ns/op	         4.214 batch-calls/s	       237.3 batch-ms/wave	       238.7 independent-ms/wave	         1.006 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=4
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       4	1426083417 ns/op	         6.713 batch-calls/s	       595.9 batch-ms/wave	       830.2 independent-ms/wave	         1.393 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       4	1521233083 ns/op	         6.294 batch-calls/s	       635.5 batch-ms/wave	       885.7 independent-ms/wave	         1.394 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/jfk/lanes=4-16         	       4	1609500375 ns/op	         5.781 batch-calls/s	       691.9 batch-ms/wave	       917.6 independent-ms/wave	         1.326 speedup	      56 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=1
+BenchmarkGPUPairedTranscribe/mixed/lanes=1-16       	       4	 852768750 ns/op	         2.358 batch-calls/s	       424.1 batch-ms/wave	       428.6 independent-ms/wave	         1.011 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=1-16       	       4	 818811406 ns/op	         2.439 batch-calls/s	       410.0 batch-ms/wave	       408.8 independent-ms/wave	         0.9971 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=1-16       	       4	 478381260 ns/op	         4.279 batch-calls/s	       233.7 batch-ms/wave	       244.7 independent-ms/wave	         1.047 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       4	1068940677 ns/op	         8.458 batch-calls/s	       472.9 batch-ms/wave	       596.0 independent-ms/wave	         1.260 speedup	      28 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       4	1113393542 ns/op	         8.109 batch-calls/s	       493.3 batch-ms/wave	       620.1 independent-ms/wave	         1.257 speedup	       0 B/op	       0 allocs/op
+BenchmarkGPUPairedTranscribe/mixed/lanes=4-16       	       4	1864519386 ns/op	         4.485 batch-calls/s	       891.9 batch-ms/wave	       972.6 independent-ms/wave	         1.091 speedup	      56 B/op	       0 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	108.157s

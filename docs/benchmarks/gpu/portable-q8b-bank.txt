@@ -1,0 +1,53 @@
+Portable Q8B projection-bank qualification
+=========================================
+
+Environment: Apple M4 Max, macOS 26.3.1, Go 1.27.1, CGO_ENABLED=0,
+GOEXPERIMENT=simd, gogpu/wgpu v0.34.5. These are GPU development
+measurements, not end-to-end model timings.
+
+The stream contains 28 distinct, deterministic, nonzero Q8B matrices of
+shape 2048x2048 and one shared nonzero 2048-element input. The independent
+case records 28 dispatches with separate output buffers in one pass. The bank
+case concatenates those same rows into one 57344x2048 matrix, uses one
+dispatch and one output buffer, and reads the final 2048 outputs. No matrix
+depends on another; this is the same independent-projection dependency graph
+as the native stream benchmark. It is a proxy for same-input projection
+families such as QKV or Gate+Up, not for sequential decoder layers.
+
+The bank prototype completed in 535545 and 529115 ns/op with 394 allocs/op
+(14170 and 14179 B/op). The independent WG128/RPS2 case in the same session
+completed in 943406 and 749871 ns/op with 2120 and 2122 allocs/op
+(97743 and 102107 B/op). The independent stream without host readback
+completed in 643637 and 644530 ns/op with 2056 allocs/op (90729 and
+90730 B/op). The previous three-count geometry sweep recorded the following
+raw Q8B samples:
+
+```text
+BenchmarkLinearProjectionStream/Q8B/wg128-r2  792019  661250  772336 ns/op
+BenchmarkLinearProjectionStream/Q8B/wg128-r4  790938  792597  804560 ns/op
+BenchmarkLinearProjectionStream/Q8B/wg256-r2 1003112  799472  926942 ns/op
+BenchmarkLinearProjectionStream/Q8B/wg256-r4  812730  831737  842891 ns/op
+```
+
+For comparison, the matched native Metal run was 463439, 706099, and 428888
+ns/op, with zero Go allocations. The one-dispatch bank narrows the portable
+gap and lowers submission allocations substantially, but the local samples
+still do not show it beating the native kernel. Different matrices and
+activations, prefill, full ASR throughput, and other GPU vendors remain to be
+qualified.
+
+Commands used:
+
+```sh
+CODEX_AGENT_ID=luna-gpu CGO_ENABLED=0 GOEXPERIMENT=simd GOPHONIC_GPU_TESTS=1 GOPHONIC_GPU_BENCH=1 \
+/Users/thesyncim/.codex/bin/project-env go test ./internal/gpuportable \
+  -run '^$' -bench '^BenchmarkLinearProjectionBankStream$' -benchtime=1s -count=2
+
+CODEX_AGENT_ID=luna-gpu CGO_ENABLED=0 GOEXPERIMENT=simd GOPHONIC_GPU_TESTS=1 GOPHONIC_GPU_BENCH=1 \
+/Users/thesyncim/.codex/bin/project-env go test ./internal/gpuportable \
+  -run '^$' -bench '^BenchmarkLinearProjectionStreamNoReadback$' -benchtime=1s -count=2
+
+CODEX_AGENT_ID=luna-gpu CGO_ENABLED=0 GOEXPERIMENT=simd GOPHONIC_GPU_TESTS=1 GOPHONIC_GPU_BENCH=1 \
+/Users/thesyncim/.codex/bin/project-env go test ./internal/gpuportable \
+  -run '^$' -bench '^BenchmarkLinearProjectionStream$/Q8B/wg128-r2$' -benchtime=1s -count=2
+```

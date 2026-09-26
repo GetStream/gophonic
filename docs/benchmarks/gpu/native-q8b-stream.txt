@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/GetStream/gophonic/internal/qwen3lm
+cpu: Apple M4 Max
+BenchmarkGPUQ8BProjectionStream-16    	    2650	    463439 ns/op	269248.83 MB/s	        28.00 projections/op	       0 B/op	       0 allocs/op
+BenchmarkGPUQ8BProjectionStream-16    	    2236	    706099 ns/op	176718.13 MB/s	        28.00 projections/op	       0 B/op	       0 allocs/op
+BenchmarkGPUQ8BProjectionStream-16    	    2582	    428888 ns/op	290939.80 MB/s	        28.00 projections/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GetStream/gophonic/internal/qwen3lm	5.274s

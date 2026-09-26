@@ -8,6 +8,47 @@ permissions:
   contents: read
 
 jobs:
+  gpu-portable-vulkan:
+    name: Portable GPU / lavapipe / CGO=0
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOEXPERIMENT: simd
+      GOPHONIC_GPU_TESTS: "1"
+      GOPHONIC_GPU_ALLOW_CPU_VULKAN: "1"
+      GOPHONIC_GPU_REQUIRE_VULKAN: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install lavapipe Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers
+      - name: Select lavapipe ICD
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          files = subprocess.check_output(["dpkg", "-L", "mesa-vulkan-drivers"], text=True).splitlines()
+          icds = [p for p in files if Path(p).name.startswith("lvp_icd") and p.endswith(".json") and Path(p).is_file()]
+          if not icds:
+              raise SystemExit("mesa-vulkan-drivers installed no readable lavapipe ICD")
+          icd = icds[0]
+          if not os.access(icd, os.R_OK):
+              raise SystemExit(f"lavapipe ICD is not readable: {icd}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"VK_ICD_FILENAMES={icd}\n")
+              env.write(f"VK_DRIVER_FILES={icd}\n")
+          print(f"Using lavapipe ICD: {icd}")
+          PY
+      - name: Test real Vulkan compute
+        run: go test ./internal/gpuportable -count=1 -v
+
   go:
     name: Go ${{ matrix.os }} / SIMD=${{ matrix.simd }}
     runs-on: ${{ matrix.os }}
@@ -17,6 +58,7 @@ jobs:
         os: [ubuntu-latest, macos-15]
         simd: ["", simd]
     env:
+      CGO_ENABLED: "0"
       GOEXPERIMENT: ${{ matrix.simd }}
     steps:
       - uses: actions/checkout@v7

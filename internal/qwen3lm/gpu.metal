@@ -29,7 +29,19 @@ using namespace metal;
 #define QKVW (QD + 2 * KVD) // one row of the fused QKV projection
 #define GROUP (NH / NKV)    // query heads per key/value head
 
-constant constexpr uint SG = 8; // simdgroups per GEMV threadgroup
+#ifndef GEMV_SIMDGROUPS
+#define GEMV_SIMDGROUPS 8
+#endif
+#ifndef GEMV_ROWS_Q8
+#define GEMV_ROWS_Q8 2
+#endif
+#ifndef GEMV_ROWS_Q8B
+#define GEMV_ROWS_Q8B 2
+#endif
+#ifndef GEMV_ROWS_HEAD
+#define GEMV_ROWS_HEAD 2
+#endif
+constant constexpr uint SG = GEMV_SIMDGROUPS; // simdgroups per GEMV threadgroup
 
 struct GemvArgs {
 	uint K, N;
@@ -49,16 +61,18 @@ enum { Q4 = 4, Q8 = 8, Q8B = 9 };
 constexpr bool eightBit(int q) { return q != Q4; }
 
 // rowsPerSimdgroup is the number of weight rows each simdgroup streams.
-constexpr uint rowsPerSimdgroup(int q) { return eightBit(q) ? 2 : 4; }
+constexpr uint rowsPerSimdgroup(int q) {
+	return q == Q8B ? GEMV_ROWS_Q8B : (q == Q8 ? GEMV_ROWS_Q8 : 4);
+}
 
 // gemv computes y = W·x for quantized rows W[N][K]. With 8-bit codes each
 // lane takes 16 values per step; with 4-bit codes, one 32-value block.
-template <int PRO, int EPI, int BITS>
+template <int PRO, int EPI, int BITS, bool HEAD>
 inline void gemv(device const uchar *W, device const void *scale, device const float *x,
 		device float *y, device const float *partsIn, device float *partsOut,
 		constant GemvArgs &a, threadgroup float *tgPart, uint tg, uint sg, uint lane) {
 	constexpr uint step = eightBit(BITS) ? 16 : 32;
-	constexpr uint RPS = rowsPerSimdgroup(BITS);
+	constexpr uint RPS = HEAD ? GEMV_ROWS_HEAD : rowsPerSimdgroup(BITS);
 	float inv = 1;
 	if (PRO == PRO_NORM) {
 		float s = 0;
@@ -147,7 +161,7 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 	}
 }
 
-#define GEMV_KERNEL(name, PRO, EPI, BITS)                                                        \
+#define GEMV_KERNEL(name, PRO, EPI, BITS, HEAD)                                                  \
 	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]],   \
 			device const float *x [[buffer(2)]], device float *y [[buffer(3)]],                    \
 			device const float *partsIn [[buffer(4)]], constant GemvArgs &a [[buffer(5)]],         \
@@ -155,19 +169,172 @@ inline void gemv(device const uchar *W, device const void *scale, device const f
 			uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],  \
 			uint lane [[thread_index_in_simdgroup]]) {                                             \
 		threadgroup float tgPart[SG];                                                            \
-		gemv<PRO, EPI, BITS>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane);        \
+		gemv<PRO, EPI, BITS, HEAD>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane);  \
 	}
 
 #define GEMV_KERNELS(suffix, BITS)                                      \
-	GEMV_KERNEL(gemv_qkv##suffix, PRO_NORM, EPI_STORE, BITS)            \
-	GEMV_KERNEL(gemv_o##suffix, PRO_PLAIN, EPI_ADD, BITS)               \
-	GEMV_KERNEL(gemv_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS)        \
-	GEMV_KERNEL(gemv_down##suffix, PRO_PLAIN, EPI_ADD, BITS)
+	GEMV_KERNEL(gemv_qkv##suffix, PRO_NORM, EPI_STORE, BITS, false)     \
+	GEMV_KERNEL(gemv_o##suffix, PRO_PLAIN, EPI_ADD, BITS, false)        \
+	GEMV_KERNEL(gemv_gateup##suffix, PRO_NORM, EPI_SWIGLU, BITS, false) \
+	GEMV_KERNEL(gemv_down##suffix, PRO_PLAIN, EPI_ADD, BITS, false)
 
 GEMV_KERNELS(, Q8)
 GEMV_KERNELS(_q8, Q8B)
 GEMV_KERNELS(_q4, Q4)
-GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B)
+GEMV_KERNEL(gemv_head, PRO_PLAIN, EPI_STORE, Q8B, true)
+
+#ifdef QWEN3_DECODE_BATCH
+struct GreedyArgs {
+	uint vocab;
+	uint stride;
+};
+
+// A stable first-maximum reduction over one padded logits row. NaNs after
+// index zero are ignored because scalar argmax's strict `>` comparison does
+// the same; a NaN at index zero keeps index zero as the scalar result.
+kernel void greedy_argmax_rows(device const float *x [[buffer(0)]], device uint *tokens [[buffer(1)]],
+		constant GreedyArgs &a [[buffer(2)]], uint row [[threadgroup_position_in_grid]],
+		uint lane [[thread_index_in_threadgroup]]) {
+	constexpr uint threads = 256;
+	constexpr uint none = 0xFFFFFFFFu;
+	constexpr uint sign = 0x80000000u;
+	threadgroup uint keys[threads];
+	threadgroup uint indices[threads];
+	ulong base = (ulong)row * a.stride;
+	uint bestKey = 0;
+	uint bestIndex = none;
+	for (uint i = lane; i < a.vocab; i += threads) {
+		float value = x[base + i];
+		uint bits = as_type<uint>(value);
+		uint magnitude = bits & ~sign;
+		if (magnitude <= 0x7F800000u) { // ignore NaNs; preserve signed-zero ties
+			uint key = magnitude == 0 ? sign : ((bits & sign) != 0 ? ~bits : bits ^ sign);
+			if (bestIndex == none || key > bestKey || (key == bestKey && i < bestIndex)) {
+				bestKey = key;
+				bestIndex = i;
+			}
+		}
+	}
+	keys[lane] = bestKey;
+	indices[lane] = bestIndex;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	for (uint step = threads / 2; step != 0; step >>= 1) {
+		if (lane < step) {
+			uint key = keys[lane + step];
+			uint index = indices[lane + step];
+			if (index != none && (indices[lane] == none || key > keys[lane] ||
+					(key == keys[lane] && index < indices[lane]))) {
+				keys[lane] = key;
+				indices[lane] = index;
+			}
+		}
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+	}
+	if (lane == 0) {
+		uint firstMagnitude = as_type<uint>(x[base]) & ~sign;
+		tokens[row] = firstMagnitude > 0x7F800000u ? 0 : indices[0];
+	}
+}
+
+// gemvQ8BVector reads each packed Q8B row and scale once for V independent
+// FP32 input vectors. Each vector keeps the same code/scale bytes and the
+// same per-row K iteration and accumulation order as gemv.
+template <uint V, int PRO, int EPI, bool HEAD>
+inline void gemvQ8BVector(device const uchar *W, device const void *scale,
+		device const float *x, device float *y, device const float *partsIn,
+		device float *partsOut, constant GemvArgs &a, threadgroup float *tgPart,
+		uint3 tg, uint sg, uint lane) {
+	constexpr uint step = 16;
+	constexpr uint RPS = HEAD ? GEMV_ROWS_HEAD : rowsPerSimdgroup(Q8B);
+	uint base = tg.y * V;
+	float inv[V];
+	for (uint v = 0; v < V; v++) {
+		float f = 1;
+		if (PRO == PRO_NORM) {
+			float s = 0;
+			for (uint i = lane; i < a.parts; i += 32)
+				s += partsIn[(ulong)(base + v) * a.parts + i];
+			f = rsqrt(simd_sum(s) / a.K + a.eps);
+		}
+		inv[v] = f;
+	}
+	uint row0 = (tg.x * SG + sg) * RPS;
+	float acc[V][RPS] = {};
+	device const uchar *wr = W + (ulong)row0 * a.K;
+	device const half *sr = (device const half *)scale + (ulong)row0 * (a.K / 32);
+	for (uint i = lane * step; i < a.K; i += 32 * step) {
+		for (uint r = 0; r < RPS; r++) {
+			uint4 w = *(device const uint4 *)(wr + (ulong)r * a.K + i);
+			float d = float(sr[(ulong)r * (a.K / 32) + i / 32]);
+			for (uint v = 0; v < V; v++) {
+				device const float4 *xv = (device const float4 *)(x + (ulong)(base + v) * a.K + i);
+				float4 x0 = xv[0], x1 = xv[1], x2 = xv[2], x3 = xv[3];
+				float t = dot(float4(as_type<char4>(w.x)), x0) + dot(float4(as_type<char4>(w.y)), x1) +
+					dot(float4(as_type<char4>(w.z)), x2) + dot(float4(as_type<char4>(w.w)), x3);
+				acc[v][r] = fma(d, t, acc[v][r]);
+			}
+		}
+	}
+	for (uint v = 0; v < V; v++) {
+		for (uint r = 0; r < RPS; r++)
+			acc[v][r] = simd_sum(acc[v][r]) * inv[v];
+		if (EPI == EPI_SWIGLU) {
+			if (lane == 0)
+				for (uint r = 0; r < RPS; r += 2) {
+					float g = acc[v][r];
+					y[(ulong)(base + v) * (a.N / 2) + (row0 + r) / 2] = g / (1 + exp(-g)) * acc[v][r + 1];
+				}
+		} else if (EPI == EPI_STORE) {
+			if (lane == 0)
+				for (uint r = 0; r < RPS; r++)
+					y[(ulong)(base + v) * a.N + row0 + r] = acc[v][r];
+		} else if (lane == 0) {
+			float ss = 0;
+			for (uint r = 0; r < RPS; r++) {
+				ulong at = (ulong)(base + v) * a.N + row0 + r;
+				float value = y[at] + acc[v][r];
+				y[at] = value;
+				ss += value * value;
+			}
+			tgPart[v * SG + sg] = ss;
+		}
+	}
+	if (EPI == EPI_ADD) {
+		threadgroup_barrier(mem_flags::mem_threadgroup);
+		if (sg == 0 && lane == 0) {
+			uint groups = a.N / (SG * RPS);
+			for (uint v = 0; v < V; v++) {
+				float total = 0;
+				for (uint i = 0; i < SG; i++)
+					total += tgPart[v * SG + i];
+				partsOut[(ulong)(base + v) * groups + tg.x] = total;
+			}
+		}
+	}
+}
+
+#define VEC_GEMV_KERNEL(name, V, PRO, EPI, HEAD) \
+	kernel void name(device const uchar *W [[buffer(0)]], device const void *scale [[buffer(1)]], \
+		device const float *x [[buffer(2)]], device float *y [[buffer(3)]], \
+		device const float *partsIn [[buffer(4)]], constant GemvArgs &a [[buffer(5)]], \
+		device float *partsOut [[buffer(6)]], uint3 tg [[threadgroup_position_in_grid]], \
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) { \
+		threadgroup float tgPart[(V) * SG]; \
+		gemvQ8BVector<V, PRO, EPI, HEAD>(W, scale, x, y, partsIn, partsOut, a, tgPart, tg, sg, lane); \
+	}
+
+#define VEC_GEMV_SET(V) \
+	VEC_GEMV_KERNEL(gemv_vec_qkv_m##V, V, PRO_NORM, EPI_STORE, false) \
+	VEC_GEMV_KERNEL(gemv_vec_o_m##V, V, PRO_PLAIN, EPI_ADD, false) \
+	VEC_GEMV_KERNEL(gemv_vec_gateup_m##V, V, PRO_NORM, EPI_SWIGLU, false) \
+	VEC_GEMV_KERNEL(gemv_vec_down_m##V, V, PRO_PLAIN, EPI_ADD, false) \
+	VEC_GEMV_KERNEL(gemv_vec_head_m##V, V, PRO_PLAIN, EPI_STORE, true)
+
+VEC_GEMV_SET(1)
+VEC_GEMV_SET(2)
+VEC_GEMV_SET(4)
+VEC_GEMV_SET(8)
+#endif // QWEN3_DECODE_BATCH
 
 // rotate replaces each ROT-value block of x with H·diag(signs)·x (signs
 // carry the normalization); threadgroup b of ROT/4 threads handles block b,

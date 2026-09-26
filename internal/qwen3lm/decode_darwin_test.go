@@ -56,6 +56,7 @@ func TestDecodeMatchesReference(t *testing.T) {
 		if err := e.DecodeInto(d, kv, 2, ids[2:], Embeds{}, Sampling{}, tokens, logits, ws); err != nil {
 			t.Fatal(err)
 		}
+		wantFirst := slices.Clone(logits[:s.Vocab])
 		seq := append([]int(nil), ids...)
 		for i, tok := range tokens {
 			got := logits[i*s.Vocab : (i+1)*s.Vocab]
@@ -79,6 +80,30 @@ func TestDecodeMatchesReference(t *testing.T) {
 		if cos, _ := lmtest.VectorParity(logits[:s.Vocab], ck.ReferenceLogits(ck.ReferenceHidden(seq))); cos < 0.999 {
 			t.Fatalf("%s: a continued run's logits have cosine %.6f", format, cos)
 		}
+		// A one-step decoder must match the first step exactly without
+		// allocating a vocabulary-sized table that it never reads.
+		one, err := e.NewDecoder([][]float32{head}, nil, s.Vocab)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if one.gpu.tables != nil || one.gpu.sumsq != nil {
+			t.Fatal("one-step decoder allocated unused input tables")
+		}
+		if err := e.HiddenLastExtendInto(kv, 0, ids[:2], hidden, ws); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.DecodeInto(one, kv, 2, ids[2:], Embeds{}, Sampling{}, next, logits[:s.Vocab], ws); err != nil {
+			t.Fatal(err)
+		}
+		for i, want := range wantFirst {
+			if math.Float32bits(logits[i]) != math.Float32bits(want) {
+				t.Fatalf("%s: table-free first-step logit %d changed", format, i)
+			}
+		}
+		if next[0] != argmax(wantFirst) {
+			t.Fatalf("%s: table-free token changed", format)
+		}
+		one.Close()
 		d.Close()
 		kv.Close()
 		ws.Close()

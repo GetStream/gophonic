@@ -65,9 +65,13 @@ const maxDecodeSteps = 64
 
 // Close releases the decoder's GPU memory.
 func (d *Decoder) Close() error {
-	if d != nil && d.gpu != nil {
-		d.gpu.release()
-		d.gpu = nil
+	if d != nil {
+		if d.gpu != nil {
+			d.gpu.release()
+		}
+		// A closed decoder should not pin its evaluator and the model's
+		// weights while the caller keeps the handle around.
+		*d = Decoder{}
 	}
 	return nil
 }

@@ -1,0 +1,45 @@
+Native Q8B FP32 multi-vector GEMV qualification
+================================================
+
+Device: Apple M4 Max
+Checkpoint: local Qwen3-ASR 1.7B, Q8B decoder and Q8B language-model head
+Scope: one submitted Metal command buffer over all 28 decoder layers and the
+language-model head; nonzero activations; unchanged packed weights and scales.
+The real-weight preflight compared QKV, SwiGLU, residual, and head outputs
+between serial GEMV and the multi-vector kernel before each timed sub-benchmark.
+This is a decoder-projection microbenchmark, not end-to-end ASR latency.
+The `MB/s` counter is logical packed-weight bytes per lane divided by elapsed
+time, not measured DRAM bandwidth. It counts reused weights once per input
+lane, so it can exceed physical memory bandwidth when the vector kernel reuses
+each weight row across several activations.
+
+Command:
+
+    CODEX_AGENT_ID=luna_gpu_perf GOEXPERIMENT=simd CGO_ENABLED=0 GOPHONIC_MODELS=/Users/thesyncim/GolandProjects/gophonic/models /Users/thesyncim/.codex/bin/project-env go test ./internal/qwen3lm -run '^$' -bench '^BenchmarkGPUQ8BVectorGEMV$' -benchtime=250ms -count=3
+
+Raw output:
+
+    goos: darwin
+    goarch: arm64
+    pkg: github.com/GetStream/gophonic/internal/qwen3lm
+    cpu: Apple M4 Max
+    BenchmarkGPUQ8BVectorGEMV/M=2/serial-GEMV-16          	      33	   8409422 ns/op	434745.53 MB/s	      4205 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=2/serial-GEMV-16          	      33	   8585981 ns/op	425805.57 MB/s	      4293 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=2/serial-GEMV-16          	      33	   8533601 ns/op	428419.20 MB/s	      4267 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=2/vector-GEMV-16          	      55	   5090464 ns/op	718197.45 MB/s	      2545 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=2/vector-GEMV-16          	      60	   5024424 ns/op	727637.40 MB/s	      2512 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=2/vector-GEMV-16          	      60	   5017150 ns/op	728692.29 MB/s	      2509 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/serial-GEMV-16          	      18	  16194919 ns/op	451494.51 MB/s	      4049 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/serial-GEMV-16          	      18	  16232845 ns/op	450439.66 MB/s	      4058 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/serial-GEMV-16          	      18	  16280940 ns/op	449109.03 MB/s	      4070 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/vector-GEMV-16          	      45	   6640276 ns/op	1101146.57 MB/s	      1660 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/vector-GEMV-16          	      42	   6639555 ns/op	1101266.20 MB/s	      1660 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=4/vector-GEMV-16          	      44	   6636602 ns/op	1101756.10 MB/s	      1659 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/serial-GEMV-16          	       8	  32241886 ns/op	453566.34 MB/s	      4030 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/serial-GEMV-16          	       8	  32525995 ns/op	449604.52 MB/s	      4066 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/serial-GEMV-16          	       8	  33106656 ns/op	441718.85 MB/s	      4138 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/vector-GEMV-16          	      15	  18505744 ns/op	790232.14 MB/s	      2313 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/vector-GEMV-16          	      15	  18489992 ns/op	790905.39 MB/s	      2311 µs/lane	       0 B/op	       0 allocs/op
+    BenchmarkGPUQ8BVectorGEMV/M=8/vector-GEMV-16          	      15	  18263939 ns/op	800694.43 MB/s	      2283 µs/lane	       0 B/op	       0 allocs/op
+    PASS
+    ok  	github.com/GetStream/gophonic/internal/qwen3lm	6.430s

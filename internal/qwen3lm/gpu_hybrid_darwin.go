@@ -31,6 +31,18 @@ type hybridPipelines struct {
 	hqkRope, hattendM, hattend1         *metal.Pipeline
 }
 
+func (p *hybridPipelines) release() {
+	if p == nil {
+		return
+	}
+	for _, pipeline := range []*metal.Pipeline{p.dnPrep, p.dnConvState, p.dnScan, p.dnNorm, p.hqkRope, p.hattendM, p.hattend1} {
+		if pipeline != nil {
+			pipeline.Release()
+		}
+	}
+	*p = hybridPipelines{}
+}
+
 func (c *modelConfig) dnQKV() int { return 2*c.dnKeyHeads*c.dnKeyDim + c.dnValueHeads*c.dnValueDim }
 
 // dnIn is a DeltaNet layer's input projection width: q, k, v, z, b, and a.

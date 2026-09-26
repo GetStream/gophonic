@@ -37,6 +37,7 @@ const (
 	// gpuCacheVersion names the layout of prepared weights in the cache;
 	// change it with anything that changes their bytes.
 	gpuCacheVersion = "qwen3lm-gpu-1"
+	gpuHeadRows     = 16 // GEMV_ROWS_HEAD (8 simdgroups × 2 rows)
 )
 
 // gpuLayer holds one layer's projections in one shared buffer: int8 rows
@@ -66,6 +67,10 @@ type gpuModel struct {
 	probe                        *metal.Pipeline // one head's attention, for a Probe
 	decodeHead, decodeSample     *metal.Pipeline // a Decoder's steps
 	decodeGather                 *metal.Pipeline
+	decodeVecOnce                sync.Once
+	decodeVecErr                 error
+	decodeVec                    [4][5]*metal.Pipeline // widths 1, 2, 4, 8; qkv, o, gateup, down, head
+	greedyArgmax                 *metal.Pipeline
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
@@ -94,10 +99,10 @@ type gpuModel struct {
 	headCache *wcache.File // holds the head's, once it is loaded
 }
 
-// gpuRows is the number of weight rows per GEMV threadgroup: 8 simdgroups
-// times rowsPerSimdgroup in gpu.metal.
+// gpuRows is the number of projection rows per GEMV threadgroup: 8
+// simdgroups times rowsPerSimdgroup in gpu.metal.
 func gpuRows(bits int) int {
-	if bits != 4 {
+	if bits == 8 || bits == 9 {
 		return 16
 	}
 	return 32
@@ -124,8 +129,20 @@ func gpuGeometry(c *modelConfig) error {
 
 // gpuSourceFor returns gpu.metal specialized for the model's geometry.
 func gpuSourceFor(c *modelConfig) string {
-	return fmt.Sprintf("#define QD %d\n#define KVD %d\n#define NH %d\n#define NKV %d\n#define ROT %d\n",
-		c.heads*c.headDim, c.kvDim, c.heads, c.kvHeads, newRotation(c.intermediate).block) + gpuSource
+	return gpuSourceMode(c, false)
+}
+
+func gpuDecodeBatchSourceFor(c *modelConfig) string {
+	return gpuSourceMode(c, true)
+}
+
+func gpuSourceMode(c *modelConfig, decodeBatch bool) string {
+	header := fmt.Sprintf("#define QD %d\n#define KVD %d\n#define NH %d\n#define NKV %d\n#define ROT %d\n",
+		c.heads*c.headDim, c.kvDim, c.heads, c.kvHeads, newRotation(c.intermediate).block)
+	if decodeBatch {
+		header += "#define QWEN3_DECODE_BATCH\n"
+	}
+	return header + gpuSource
 }
 
 // gpuSupports reports whether a Metal GPU is present and the model has a
@@ -162,6 +179,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	if err != nil {
 		return err
 	}
+	defer lib.Release()
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
@@ -708,6 +726,26 @@ type moeArgs struct {
 	shared   uint32
 }
 
+// gpuDecodeBatchWorkspace owns scratch for one synchronous set of independent
+// single-token decodes. K/V storage remains in each lane's gpuPrefix.
+type gpuDecodeBatchWorkspace struct {
+	g                               *gpuModel
+	capacity, vectorWidth           int
+	laneGroups                      int
+	h, qkv, ctx, act, logits        *metal.Buffer
+	tokenIDs                        *metal.Buffer
+	embedParts, attnParts, mlpParts *metal.Buffer
+	finalHidden                     []float32
+	enc                             metal.Encoder
+	qkv0Args, qkvArgs               gemvArgs
+	oArgs, guArgs, dArgs, headArgs  gemvArgs
+	argmaxArgs                      greedyArgmaxArgs
+	attn                            attnArgs
+	perRow                          uint32
+	concurrent                      bool
+	argmaxGPU                       bool
+}
+
 // gpuTokenByToken forces the single-token kernels and gpuScalarAttention
 // the per-key attention loop; tests compare the paths.
 var gpuTokenByToken, gpuScalarAttention bool
@@ -731,14 +769,19 @@ type mmArgs struct {
 // mmMinGroups is the threadgroup count below which projections split K.
 const mmMinGroups = 256
 
-// mmScratchFloats bounds split-K scratch: splits only happen while the grid
-// is below mmMinGroups tiles of at most 32×64, and splits are at most 8.
-const mmScratchFloats = 8 * mmMinGroups * 32 * mmColumns
+// mmScratchFloats bounds split-K scratch. The final power-of-two split has
+// fewer than 2*mmMinGroups tiles; each tile covers at most 32×mmColumns
+// outputs. A one-split GEMM never writes scratch.
+const mmScratchFloats = 2 * mmMinGroups * 32 * mmColumns
 
 type gemvArgs struct {
 	k, n  uint32
 	eps   float32
 	parts uint32
+}
+
+type greedyArgmaxArgs struct {
+	vocab, stride uint32
 }
 
 // probeArgs is ProbeArgs in gpu.metal.
@@ -805,6 +848,27 @@ func (g *gpuModel) newPrefix(capacity int) (*gpuPrefix, error) {
 	return p, nil
 }
 
+// ensureKV allocates the workspace's temporary cache only for passes that
+// own their current K/V rows. Prefix continuation writes directly into the
+// lane's PrefixKV and does not need these full-context buffers.
+func (w *gpuWorkspace) ensureKV() error {
+	if w.kc != nil && w.vc != nil {
+		return nil
+	}
+	n := 4 * w.g.cfg.attnLayers() * gpuPositions * w.g.cfg.kvDim
+	kc, err := w.g.dev.Buffer(n)
+	if err != nil {
+		return err
+	}
+	vc, err := w.g.dev.Buffer(n)
+	if err != nil {
+		kc.Release()
+		return err
+	}
+	w.kc, w.vc = kc, vc
+	return nil
+}
+
 // copyFrom copies the first n values of each layer's keys and values.
 func (p *gpuPrefix) copyFrom(src *gpuPrefix, layers, n int) {
 	dk, dv := floats(p.kc.Bytes()), floats(p.vc.Bytes())
@@ -833,6 +897,12 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 	qdim := c.heads * c.headDim
 	rows := gpuRows(g.bits)
 	w := &gpuWorkspace{g: g, rows: gpuPositions}
+	ok := false
+	defer func() {
+		if !ok {
+			w.release()
+		}
+	}()
 	var err error
 	// Each row's experts write their own activations; their down kernel
 	// publishes a partial sum per 16 rows of the residual.
@@ -856,8 +926,6 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.qkv, 4 * gpuPositions * qkvWidth},
 		{&w.ctx, 4 * gpuPositions * max(qdim, c.dnValueHeads*c.dnValueDim)},
 		{&w.act, 4 * gpuPositions * perRow},
-		{&w.kc, 4 * c.attnLayers() * gpuPositions * c.kvDim},
-		{&w.vc, 4 * c.attnLayers() * gpuPositions * c.kvDim},
 		{&w.embedParts, 4 * gpuPositions},
 		{&w.info, 8 * gpuPositions},
 		{&w.scratch, 4 * mmScratchFloats},
@@ -904,7 +972,312 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 			return nil, err
 		}
 	}
+	ok = true
 	return w, nil
+}
+
+func (g *gpuModel) ensureDecodeVec() error {
+	g.decodeVecOnce.Do(func() {
+		discard := func() {
+			for i := range g.decodeVec {
+				for j, pipeline := range g.decodeVec[i] {
+					pipeline.Release()
+					g.decodeVec[i][j] = nil
+				}
+			}
+			g.greedyArgmax.Release()
+			g.greedyArgmax = nil
+		}
+		lib, err := g.dev.Compile(gpuDecodeBatchSourceFor(g.cfg))
+		if err != nil {
+			g.decodeVecErr = err
+			return
+		}
+		defer lib.Release()
+		projections := [...]string{"qkv", "o", "gateup", "down", "head"}
+		widths := [...]int{1, 2, 4, 8}
+		for wi, width := range widths {
+			for pi, projection := range projections {
+				name := fmt.Sprintf("gemv_vec_%s_m%d", projection, width)
+				if g.decodeVec[wi][pi], err = g.dev.Pipeline(lib, name); err != nil {
+					g.decodeVecErr = err
+					discard()
+					return
+				}
+			}
+		}
+		if g.greedyArgmax, err = g.dev.Pipeline(lib, "greedy_argmax_rows"); err != nil {
+			g.decodeVecErr = err
+			discard()
+			return
+		}
+	})
+	return g.decodeVecErr
+}
+
+func decodeVectorWidth(lanes int) int {
+	// Capacity is limited to eight, so this short table is clearer than a
+	// bit trick at the call site.
+	switch {
+	case lanes <= 1:
+		return 1
+	case lanes <= 2:
+		return 2
+	case lanes <= 4:
+		return 4
+	default:
+		return 8
+	}
+}
+
+func decodeVectorIndex(width int) int {
+	switch width {
+	case 1:
+		return 0
+	case 2:
+		return 1
+	case 4:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (m *Weights) newDecodeBatchWorkspace(capacity int) (*gpuDecodeBatchWorkspace, error) {
+	g := m.gpu
+	if g == nil || g.bits != 9 {
+		return nil, errors.New("qwen3: batched token decode requires Q8B Metal weights")
+	}
+	if m.cfg.hybrid || m.cfg.experts != 0 {
+		return nil, errors.New("qwen3: batched token decode supports dense attention models only")
+	}
+	m.headMu.Lock()
+	headName := m.headName
+	m.headMu.Unlock()
+	if headName == "" {
+		return nil, errors.New("qwen3: batched token decode requires a loaded language-model head; call LoadHead first")
+	}
+	if err := m.LoadHead(headName); err != nil {
+		return nil, fmt.Errorf("qwen3: load batched decoder head: %w", err)
+	}
+	if !g.hasHead() {
+		return nil, errors.New("qwen3: batched token decode requires a loaded language-model head")
+	}
+	if err := g.ensureDecodeVec(); err != nil {
+		return nil, fmt.Errorf("qwen3: compile batched decode kernels: %w", err)
+	}
+	c, width := &m.cfg, decodeVectorWidth(capacity)
+	qdim := c.heads * c.headDim
+	qkvWidth := qdim + 2*c.kvDim
+	parts := c.hidden / gpuRows(9)
+	w := &gpuDecodeBatchWorkspace{g: g, capacity: capacity, vectorWidth: width,
+		argmaxGPU: true,
+		qkv0Args:  gemvArgs{k: uint32(c.hidden), n: uint32(qkvWidth), eps: float32(c.eps), parts: 1},
+		qkvArgs:   gemvArgs{k: uint32(c.hidden), n: uint32(qkvWidth), eps: float32(c.eps), parts: uint32(parts)},
+		oArgs:     gemvArgs{k: uint32(qdim), n: uint32(c.hidden), eps: float32(c.eps)},
+		guArgs:    gemvArgs{k: uint32(c.hidden), n: uint32(2 * c.intermediate), eps: float32(c.eps), parts: uint32(parts)},
+		dArgs:     gemvArgs{k: uint32(c.intermediate), n: uint32(c.hidden), eps: float32(c.eps)},
+		headArgs:  gemvArgs{k: uint32(c.hidden), n: uint32(g.lmRows), eps: float32(c.eps)},
+		attn:      attnArgs{ropeSin: uint32(g.positions * c.headDim / 2), eps: float32(c.eps), scale: float32(c.attnScale)},
+		perRow:    uint32(c.intermediate / g.inter.block),
+	}
+	for _, buffer := range []struct {
+		dst **metal.Buffer
+		n   int
+	}{
+		{&w.h, 8 * width * c.hidden}, // input/residual rows plus final hidden staging
+		{&w.qkv, 4 * width * qkvWidth},
+		{&w.ctx, 4 * width * qdim},
+		{&w.act, 4 * width * c.intermediate},
+		{&w.logits, 4 * width * g.lmRows},
+		{&w.embedParts, 4 * width},
+		{&w.attnParts, 4 * width * parts},
+		{&w.mlpParts, 4 * width * parts},
+		{&w.tokenIDs, 4 * width},
+	} {
+		var err error
+		if *buffer.dst, err = g.dev.Buffer(buffer.n); err != nil {
+			w.release()
+			return nil, err
+		}
+	}
+	w.finalHidden = floats(w.h.Bytes())[width*c.hidden : 2*width*c.hidden]
+	w.concurrent = true
+	w.argmaxArgs = greedyArgmaxArgs{vocab: uint32(c.vocab), stride: uint32(g.lmRows)}
+	return w, nil
+}
+
+func (w *gpuDecodeBatchWorkspace) release() {
+	if w == nil {
+		return
+	}
+	for _, buffer := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.logits, w.tokenIDs, w.embedParts, w.attnParts, w.mlpParts} {
+		buffer.Release()
+	}
+	w.h, w.qkv, w.ctx, w.act, w.logits, w.tokenIDs, w.embedParts, w.attnParts, w.mlpParts = nil, nil, nil, nil, nil, nil, nil, nil, nil
+	w.finalHidden = nil
+}
+
+func (w *gpuDecodeBatchWorkspace) gemv(projection int, buf *metal.Buffer, wOff, sOff int,
+	x, y, partsIn, partsOut *metal.Buffer, args *gemvArgs, head bool) {
+	e := &w.enc
+	e.SetPipeline(w.g.decodeVec[decodeVectorIndex(w.vectorWidth)][projection])
+	e.SetBuffer(buf, wOff, 0)
+	e.SetBuffer(buf, sOff, 1)
+	e.SetBuffer(x, 0, 2)
+	e.SetBuffer(y, 0, 3)
+	e.SetBuffer(partsIn, 0, 4)
+	e.SetBytes(unsafe.Pointer(args), 16, 5)
+	e.SetBuffer(partsOut, 0, 6)
+	rows := gpuRows(9)
+	if head {
+		rows = gpuHeadRows
+	}
+	e.Dispatch(metal.Size{X: int(args.n) / rows, Y: w.laneGroups, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+}
+
+func (w *gpuDecodeBatchWorkspace) decode(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32) error {
+	return w.decodeMode(m, kvs, tokens, hidden, logits, w.concurrent)
+}
+
+func (w *gpuDecodeBatchWorkspace) decodeGreedy(m *Weights, kvs []*PrefixKV, tokens []int, hidden [][]float32, nextTokens []int) error {
+	return w.decodeGreedyMode(m, kvs, tokens, hidden, nextTokens, w.concurrent, 4, w.argmaxGPU)
+}
+
+func (w *gpuDecodeBatchWorkspace) decodeGreedyMode(m *Weights, kvs []*PrefixKV, tokens []int, hidden [][]float32, nextTokens []int, concurrent bool, maxVectorWidth int, useGPUArgmax bool) error {
+	return w.decodeModeTileOutputs(m, kvs, tokens, hidden, nil, nextTokens, concurrent, maxVectorWidth, useGPUArgmax)
+}
+
+func (w *gpuDecodeBatchWorkspace) decodeMode(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, concurrent bool) error {
+	return w.decodeModeTile(m, kvs, tokens, hidden, logits, concurrent, 4)
+}
+
+// decodeModeTile permits a full-width M=8 control in tests and benchmarks;
+// production uses M=4 tiles for eight active lanes to limit register pressure.
+func (w *gpuDecodeBatchWorkspace) decodeModeTile(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, concurrent bool, maxVectorWidth int) error {
+	return w.decodeModeTileOutputs(m, kvs, tokens, hidden, logits, nil, concurrent, maxVectorWidth, false)
+}
+
+func (w *gpuDecodeBatchWorkspace) decodeModeTileOutputs(m *Weights, kvs []*PrefixKV, tokens []int, hidden, logits [][]float32, nextTokens []int, concurrent bool, maxVectorWidth int, useGPUArgmax bool) error {
+	g, c := w.g, &m.cfg
+	active, qdim := len(kvs), c.heads*c.headDim
+	width := decodeVectorWidth(active)
+	if width > maxVectorWidth {
+		width = maxVectorWidth
+	}
+	w.vectorWidth = width
+	w.laneGroups = (active + width - 1) / width
+	scratchWidth := decodeVectorWidth(w.capacity)
+	allH := floats(w.h.Bytes())
+	h := allH[:scratchWidth*c.hidden]
+	clear(h)
+	embedParts := floats(w.embedParts.Bytes())[:scratchWidth]
+	clear(embedParts)
+	for lane, token := range tokens {
+		row := h[lane*c.hidden : (lane+1)*c.hidden]
+		m.embedRow(token, row)
+		g.hidden.apply(row)
+		embedParts[lane] = sumSquares(row)
+	}
+	if scratchWidth > active {
+		clear(floats(w.ctx.Bytes())[active*qdim : scratchWidth*qdim])
+	}
+
+	dev := g.dev
+	dev.Begin(&w.enc, concurrent)
+	barrier := func() {
+		if concurrent {
+			w.enc.Barrier()
+		}
+	}
+	for layer := range g.layers {
+		gl := &g.layers[layer]
+		if layer == 0 {
+			w.gemv(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.embedParts, w.attnParts, &w.qkv0Args, false)
+		} else {
+			w.gemv(0, gl.buf, gl.qkv, gl.qkvScale, w.h, w.qkv, w.attnParts, w.attnParts, &w.qkvArgs, false)
+		}
+		barrier() // QKV outputs feed every lane's independent attention dispatch.
+		layerStride := 4 * c.kvDim
+		for lane, kv := range kvs {
+			a := w.attn
+			a.pos = uint32(len(kv.tokens))
+			e := &w.enc
+			e.SetPipeline(g.attend)
+			e.SetBuffer(w.qkv, lane*4*(qdim+2*c.kvDim), 0)
+			e.SetBuffer(kv.gpu.kc, layer*layerStride*kv.capacity, 1)
+			e.SetBuffer(kv.gpu.vc, layer*layerStride*kv.capacity, 2)
+			e.SetBuffer(g.norms, 4*2*layer*c.headDim, 3)
+			e.SetBuffer(g.norms, 4*(2*layer+1)*c.headDim, 4)
+			e.SetBuffer(g.rope, 0, 5)
+			e.SetBuffer(w.ctx, lane*4*qdim, 6)
+			e.SetBytes(unsafe.Pointer(&a), int(unsafe.Sizeof(a)), 7)
+			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
+		}
+		barrier() // Lane attention writes ctx before the shared O projection.
+		w.gemv(1, gl.buf, gl.o, gl.oScale, w.ctx, w.h, w.mlpParts, w.mlpParts, &w.oArgs, false)
+		barrier()
+		w.gemv(2, gl.buf, gl.gu, gl.guScale, w.h, w.act, w.mlpParts, w.mlpParts, &w.guArgs, false)
+		barrier()
+		if !g.noInter {
+			w.enc.SetPipeline(g.rotate)
+			w.enc.SetBuffer(w.act, 0, 0)
+			w.enc.SetBuffer(g.signs, 0, 1)
+			w.enc.SetBytes(unsafe.Pointer(&w.perRow), 4, 2)
+			w.enc.Dispatch(metal.Size{X: active * int(w.perRow), Y: 1, Z: 1}, metal.Size{X: g.inter.block / 4, Y: 1, Z: 1})
+			barrier()
+		}
+		w.gemv(3, gl.buf, gl.d, gl.dScale, w.act, w.h, w.attnParts, w.attnParts, &w.dArgs, false)
+		barrier() // The next layer reads the residual and RMSNorm partials.
+	}
+	if err := w.enc.Wait(); err != nil {
+		return err
+	}
+
+	for lane := range active {
+		row := h[lane*c.hidden : (lane+1)*c.hidden]
+		g.hidden.unapply(row)
+		rmsNorm32(row, row, m.finalNorm, c.eps)
+		for _, value := range row {
+			if !finite32(value) {
+				return errors.New("qwen3: non-finite batched hidden state")
+			}
+		}
+		copy(w.finalHidden[lane*c.hidden:(lane+1)*c.hidden], row)
+		g.hidden.apply(row)
+	}
+
+	dev.Begin(&w.enc, false)
+	w.gemv(4, g.lm, 0, g.lmScale, w.h, w.logits, w.attnParts, w.mlpParts, &w.headArgs, true)
+	if nextTokens != nil && useGPUArgmax {
+		w.enc.SetPipeline(g.greedyArgmax)
+		w.enc.SetBuffer(w.logits, 0, 0)
+		w.enc.SetBuffer(w.tokenIDs, 0, 1)
+		w.enc.SetBytes(unsafe.Pointer(&w.argmaxArgs), int(unsafe.Sizeof(w.argmaxArgs)), 2)
+		w.enc.Dispatch(metal.Size{X: active, Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+	}
+	if err := w.enc.Wait(); err != nil {
+		return err
+	}
+	logitRows := floats(w.logits.Bytes())
+	var tokenRows []uint32
+	if nextTokens != nil && useGPUArgmax {
+		tokenRows = unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(w.tokenIDs.Bytes()))), decodeVectorWidth(w.capacity))
+	}
+	for lane := range active {
+		copy(hidden[lane], w.finalHidden[lane*c.hidden:(lane+1)*c.hidden])
+		if logits != nil {
+			copy(logits[lane], logitRows[lane*g.lmRows:lane*g.lmRows+c.vocab])
+		}
+		if nextTokens != nil {
+			if useGPUArgmax {
+				nextTokens[lane] = int(tokenRows[lane])
+			} else {
+				nextTokens[lane] = greedyArgmax(logitRows[lane*g.lmRows : lane*g.lmRows+c.vocab])
+			}
+		}
+	}
+	return nil
 }
 
 // encodeMoE encodes a layer's mixture of experts for rows rows of the
@@ -1023,7 +1396,11 @@ func (w *gpuWorkspace) gemv(p *metal.Pipeline, buf *metal.Buffer, wOff, sOff int
 	e.SetBuffer(in, inOff, 4)
 	e.SetBytes(unsafe.Pointer(args), 16, 5)
 	e.SetBuffer(out, 0, 6)
-	e.Dispatch(metal.Size{X: int(args.n) / gpuRows(w.g.bits), Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
+	rows := gpuRows(w.g.bits)
+	if p == w.g.gemvHead {
+		rows = gpuHeadRows
+	}
+	e.Dispatch(metal.Size{X: int(args.n) / rows, Y: 1, Z: 1}, metal.Size{X: gpuThreads, Y: 1, Z: 1})
 }
 
 // batch evaluates independent sequences and writes each one's last-token
@@ -1067,18 +1444,26 @@ func (w *gpuWorkspace) batch(m *Weights, seqs [][]int, dst [][]float32, pre *gpu
 // batchPacked is batch with sequences packed into shared passes.
 func (w *gpuWorkspace) batchPacked(m *Weights, seqs [][]int, dst [][]float32, pre *gpuPrefix, past int, shared bool, embeds Embeds) error {
 	c := &m.cfg
-	own := 4 * gpuPositions * c.kvDim
-	w.curK, w.curV, w.curStride = w.kc, w.vc, own
-	w.preK, w.preV, w.preStride = w.kc, w.vc, own
 	w.attn.base, w.attn.prefixLen = 0, 0
-	if pre != nil {
+	if pre != nil && !shared {
+		// Continue in the lane-owned cache. The prefix input has length zero;
+		// binding it to the same valid buffer keeps both attention passes safe
+		// without allocating the workspace's otherwise-unused full cache.
 		stride := 4 * pre.capacity * c.kvDim
-		if shared {
-			w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+		w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
+		w.preK, w.preV, w.preStride = pre.kc, pre.vc, stride
+		w.attn.base = uint32(past)
+	} else {
+		if err := w.ensureKV(); err != nil {
+			return err
+		}
+		own := 4 * gpuPositions * c.kvDim
+		w.curK, w.curV, w.curStride = w.kc, w.vc, own
+		w.preK, w.preV, w.preStride = w.kc, w.vc, own
+		if pre != nil {
+			w.preK, w.preV = pre.kc, pre.vc
+			w.preStride = 4 * pre.capacity * c.kvDim
 			w.attn.prefixLen = uint32(past)
-		} else {
-			w.curK, w.curV, w.curStride = pre.kc, pre.vc, stride
-			w.attn.base = uint32(past)
 		}
 	}
 	w.past, w.shared, w.embeds, w.spliced = past, shared, embeds, 0
@@ -1451,24 +1836,33 @@ type decodeArgs struct {
 func (g *gpuModel) newDecoder(heads, tables [][]float32, rows int, finalNorm []float32) (*gpuDecoder, error) {
 	h := g.cfg.hidden
 	d := &gpuDecoder{rows: rows, padded: (rows + 31) / 32 * 32}
-	for _, b := range []struct {
-		dst **metal.Buffer
-		n   int
-	}{
-		{&d.heads, 2 * len(heads) * d.padded * h},
-		{&d.tables, 2 * max(1, len(tables)) * rows * h},
-		{&d.sumsq, 4 * max(1, len(tables)) * rows},
-	} {
-		var err error
-		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
+	var err error
+	if d.heads, err = g.dev.Buffer(2 * len(heads) * d.padded * h); err != nil {
+		return nil, err
+	}
+	halves := func(b *metal.Buffer) []uint16 {
+		if b == nil {
+			return nil
+		}
+		return unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(b.Bytes()))), len(b.Bytes())/2)
+	}
+	// A single-step decoder never dispatches decodeGather. No input table
+	// or sum-of-squares buffer is needed, even for a large vocabulary.
+	if len(tables) != 0 {
+		if d.tables, err = g.dev.Buffer(2 * len(tables) * rows * h); err != nil {
+			d.release()
+			return nil, err
+		}
+		if d.sumsq, err = g.dev.Buffer(4 * len(tables) * rows); err != nil {
 			d.release()
 			return nil, err
 		}
 	}
-	halves := func(b *metal.Buffer) []uint16 {
-		return unsafe.Slice((*uint16)(unsafe.Pointer(unsafe.SliceData(b.Bytes()))), len(b.Bytes())/2)
+	hw, tw := halves(d.heads), halves(d.tables)
+	var sq []float32
+	if d.sumsq != nil {
+		sq = floats(d.sumsq.Bytes())
 	}
-	hw, tw, sq := halves(d.heads), halves(d.tables), floats(d.sumsq.Bytes())
 	// Rows are rotated as the residual is, a matrix to a goroutine.
 	var wg sync.WaitGroup
 	prepare := func(src []float32, dst []uint16, norm []float32, sums []float32) {
@@ -1645,6 +2039,37 @@ func (m *Weights) releaseGPU() {
 	for i := range g.layers {
 		g.layers[i].buf.Release()
 	}
+	for _, p := range []*metal.Pipeline{
+		g.qkv, g.o, g.gateup, g.down, g.attend, g.probe, g.decodeHead, g.decodeSample, g.decodeGather,
+		g.rotate, g.qkRope, g.attendM, g.attendFlash, g.gemvHead, g.finishHead,
+		g.moeRouter, g.moeRoute, g.moeGateUp, g.moeDown, g.moeTiles, g.moeCombine,
+	} {
+		p.Release()
+	}
+	for _, p := range g.decodeVec {
+		for _, pipeline := range p {
+			pipeline.Release()
+		}
+	}
+	g.greedyArgmax.Release()
+	for _, p := range g.mm {
+		for _, pipeline := range p {
+			pipeline.Release()
+		}
+	}
+	for _, p := range g.finish {
+		p.Release()
+	}
+	for _, p := range g.mmHead {
+		p.Release()
+	}
+	for _, p := range g.moeGateUpMM {
+		p.Release()
+	}
+	for _, p := range g.moeDownMM {
+		p.Release()
+	}
+	g.hy.release()
 	for _, b := range []*metal.Buffer{g.lm, g.norms, g.signs, g.rope, g.dnParams} {
 		b.Release()
 	}

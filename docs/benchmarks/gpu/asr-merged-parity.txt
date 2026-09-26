@@ -1,0 +1,7 @@
+Public ASR parity after integrating main 63fd4c4; CGO_ENABLED=0 GOEXPERIMENT=simd, official Qwen3-ASR-1.7B.
+=== RUN   TestGPUBatchTranscribeMatchesIndependent
+--- PASS: TestGPUBatchTranscribeMatchesIndependent (22.54s)
+=== RUN   TestGPUBatchTranscribeErrorsAndReuse
+--- PASS: TestGPUBatchTranscribeErrorsAndReuse (2.56s)
+PASS
+ok  	github.com/GetStream/gophonic/qwen3asr	25.492s
