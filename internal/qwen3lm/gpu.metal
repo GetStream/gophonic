@@ -468,6 +468,109 @@ kernel void attend1(device const float *qkv [[buffer(0)]], device float *kc [[bu
 	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
 }
 
+// attend1c is attend1 split across the keys (flash-decoding), for long
+// contexts: threadgroup (g, c) takes KV head g's keys c·AC up to the next
+// chunk, and writes each of its GROUP query heads' partial state, the
+// running maximum and sum and the unnormalized context, for attend1m to
+// merge. Only the chunk holding the new token appends its key and value
+// and reads them; no other chunk touches that row.
+constant constexpr uint AC = 128; // keys per chunk
+kernel void attend1c(device const float *qkv [[buffer(0)]], device float *kc [[buffer(1)]],
+		device float *vc [[buffer(2)]], device const float *qn [[buffer(3)]],
+		device const float *kn [[buffer(4)]], device const float *rope [[buffer(5)]],
+		device float *part [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
+		uint2 gc [[threadgroup_position_in_grid]], uint2 grid [[threadgroups_per_grid]],
+		uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float4 partAcc[GROUP * AS][32];
+	threadgroup float2 partML[GROUP * AS];
+	uint g = gc.x, c = gc.y, chunks = grid.y;
+	uint n = a.pos + 1, lo = c * AC, hi = min(lo + AC, n);
+	if (c == chunks - 1) {
+		if (sg == 0) {
+			device const float *k = qkv + QD + g * 128;
+			device const float *v = qkv + QD + KVD + g * 128;
+			float4 kv = normRopeAt(float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]), kn, rope, a, lane);
+			device float *kd = kc + a.pos * KVD + g * 128;
+			device float *vd = vc + a.pos * KVD + g * 128;
+			kd[lane] = kv.x, kd[lane + 32] = kv.y, kd[lane + 64] = kv.z, kd[lane + 96] = kv.w;
+			vd[lane] = v[lane], vd[lane + 32] = v[lane + 32], vd[lane + 64] = v[lane + 64], vd[lane + 96] = v[lane + 96];
+		}
+		threadgroup_barrier(mem_flags::mem_device);
+	}
+	uint hq = sg % GROUP, split = sg / GROUP, head = g * GROUP + hq;
+	device const float *q = qkv + head * 128;
+	float4 qv = normRopeAt(float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]), qn, rope, a, lane) * a.scale;
+	float m = -INFINITY, l = 0;
+	float4 acc = 0;
+	for (uint j0 = lo + split * AK; j0 < hi; j0 += AK * AS) {
+		float s[AK];
+		float bm = -INFINITY;
+		for (uint u = 0; u < AK; u++) {
+			uint j = min(j0 + u, hi - 1);
+			device const float *k = kc + j * KVD + g * 128;
+			s[u] = dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]));
+		}
+		for (uint u = 0; u < AK; u++) {
+			s[u] = j0 + u < hi ? simd_sum(s[u]) : -INFINITY;
+			bm = max(bm, s[u]);
+		}
+		float mn = max(m, bm), cs = exp(m - mn);
+		acc *= cs;
+		l *= cs;
+		for (uint u = 0; u < AK; u++) {
+			uint j = min(j0 + u, hi - 1);
+			device const float *v = vc + j * KVD + g * 128;
+			float p = exp(s[u] - mn);
+			acc += p * float4(v[lane], v[lane + 32], v[lane + 64], v[lane + 96]);
+			l += p;
+		}
+		m = mn;
+	}
+	partAcc[sg][lane] = acc;
+	if (lane == 0)
+		partML[sg] = float2(m, l);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (split != 0)
+		return;
+	float mx = -INFINITY;
+	for (uint i = 0; i < AS; i++)
+		mx = max(mx, partML[i * GROUP + hq].x);
+	acc = 0;
+	l = 0;
+	for (uint i = 0; i < AS; i++) {
+		float2 ml = partML[i * GROUP + hq];
+		float cs = ml.x == -INFINITY ? 0 : exp(ml.x - mx);
+		acc += partAcc[i * GROUP + hq][lane] * cs;
+		l += ml.y * cs;
+	}
+	// Layout: [head][chunk] of (max, sum, 128 values).
+	device float *o = part + (head * chunks + c) * 130;
+	if (lane == 0)
+		o[0] = mx, o[1] = l;
+	o[2 + lane] = acc.x, o[2 + lane + 32] = acc.y, o[2 + lane + 64] = acc.z, o[2 + lane + 96] = acc.w;
+}
+
+// attend1m merges attend1c's chunks: threadgroup h is query head h.
+kernel void attend1m(device const float *part [[buffer(0)]], device float *ctx [[buffer(1)]],
+		constant uint &chunks [[buffer(2)]], uint h [[threadgroup_position_in_grid]],
+		uint lane [[thread_index_in_simdgroup]]) {
+	device const float *p = part + h * chunks * 130;
+	float mx = -INFINITY;
+	for (uint c = 0; c < chunks; c++)
+		mx = max(mx, p[c * 130]);
+	float4 acc = 0;
+	float l = 0;
+	for (uint c = 0; c < chunks; c++) {
+		device const float *q = p + c * 130;
+		float cs = q[0] == -INFINITY ? 0 : exp(q[0] - mx);
+		acc += cs * float4(q[2 + lane], q[2 + lane + 32], q[2 + lane + 64], q[2 + lane + 96]);
+		l += cs * q[1];
+	}
+	acc /= l;
+	device float *o = ctx + h * 128;
+	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
+}
+
 struct ProbeArgs {
 	uint head; // the query head read
 	uint from; // the first key position read

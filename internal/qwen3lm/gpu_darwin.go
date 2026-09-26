@@ -64,6 +64,7 @@ type gpuModel struct {
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
 	attendFlash, gemvHead        *metal.Pipeline
+	attendChunk, attendMerge     *metal.Pipeline // split-KV attention for long contexts
 	probe                        *metal.Pipeline // one head's attention, for a Probe
 	decodeHead, decodeSample     *metal.Pipeline // a Decoder's steps
 	decodeGather                 *metal.Pipeline
@@ -187,7 +188,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int) error {
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
-	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.probe, "probe1"}, {&g.rotate, "rotate"},
+	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.attendChunk, "attend1c"}, {&g.attendMerge, "attend1m"}, {&g.probe, "probe1"}, {&g.rotate, "rotate"},
 		{&g.decodeHead, "decode_head"}, {&g.decodeSample, "decode_sample"}, {&g.decodeGather, "decode_gather"},
 		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
@@ -675,6 +676,8 @@ type gpuWorkspace struct {
 	curK, curV, preK, preV                  *metal.Buffer
 	curStride, preStride                    int
 	attnParts, mlpParts                     *metal.Buffer // residual sums of squares for the next RMSNorm
+	attnChunks                              *metal.Buffer // split-KV partial states: [heads][chunks][130]
+	chunks                                  uint32
 	enc                                     metal.Encoder
 	qkv0Args, qkvArgs, oArgs, guArgs, dArgs gemvArgs
 	attn                                    attnArgs
@@ -757,6 +760,14 @@ var gpuTokenByToken, gpuScalarAttention bool
 // attendSplits is the simdgroups that share one query head's keys in the
 // single-token attention (AS in gpu.metal).
 const attendSplits = 4
+
+// Split-KV attention: past attendChunkMin positions, one token's attention
+// runs as attendChunk-key chunks across the GPU, merged after.
+const attendChunk = 128 // AC in gpu.metal
+
+// attendChunkMin is the context past which one token's attention is split
+// (a variable, for tests).
+var attendChunkMin = 256
 
 // mmColumns is the GEMM tile width in weight rows (MM_BN in gpu.metal), and
 // mmThreads the threads of both GEMM tiles.
@@ -929,6 +940,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.h, 4 * gpuPositions * c.hidden},
 		{&w.qkv, 4 * gpuPositions * qkvWidth},
 		{&w.ctx, 4 * gpuPositions * max(qdim, c.dnValueHeads*c.dnValueDim)},
+		{&w.attnChunks, 4 * c.heads * (gpuPositions/attendChunk + 1) * 130},
 		{&w.act, 4 * gpuPositions * perRow},
 		{&w.embedParts, 4 * gpuPositions},
 		{&w.info, 8 * gpuPositions},
@@ -1783,16 +1795,7 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 				w.gemv(g.qkv, gl.buf, gl.qkv, gl.qkvScale, w.h, hOff, w.qkv, 0, w.attnParts, w.attnParts, 0, &w.qkvArgs)
 			}
 
-			e.SetPipeline(g.attend)
-			e.SetBuffer(w.qkv, 0, 0)
-			e.SetBuffer(w.curK, i*w.curStride, 1)
-			e.SetBuffer(w.curV, i*w.curStride, 2)
-			e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
-			e.SetBuffer(g.norms, 4*(2*i+1)*c.headDim, 4)
-			e.SetBuffer(g.rope, 0, 5)
-			e.SetBuffer(w.ctx, 0, 6)
-			e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
-			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
+			w.encodeAttend1(i)
 			if p := w.probe; p != nil && p.Layer == i && t == n-1 {
 				w.encodeProbe(i)
 			}
@@ -2024,7 +2027,7 @@ func (w *gpuWorkspace) encodeProbe(i int) {
 }
 
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut, w.probeOut} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut, w.probeOut, w.attnChunks} {
 		b.Release()
 	}
 	for _, b := range []*metal.Buffer{w.decodeTokens, w.decodeLogits} {
@@ -2044,7 +2047,7 @@ func (m *Weights) releaseGPU() {
 		g.layers[i].buf.Release()
 	}
 	for _, p := range []*metal.Pipeline{
-		g.qkv, g.o, g.gateup, g.down, g.attend, g.probe, g.decodeHead, g.decodeSample, g.decodeGather,
+		g.qkv, g.o, g.gateup, g.down, g.attend, g.attendChunk, g.attendMerge, g.probe, g.decodeHead, g.decodeSample, g.decodeGather,
 		g.rotate, g.qkRope, g.attendM, g.attendFlash, g.gemvHead, g.finishHead,
 		g.moeRouter, g.moeRoute, g.moeGateUp, g.moeDown, g.moeTiles, g.moeCombine,
 	} {
@@ -2109,4 +2112,39 @@ func (m *Weights) cacheKind(suffix string) string {
 		return m.format + suffix
 	}
 	return m.format + suffix + "-" + strings.TrimSuffix(m.prefix, ".")
+}
+
+// encodeAttend1 appends one token's key and value to layer i's cache and
+// attends to every position: in one threadgroup per key/value head for a
+// short context, and split across the keys, then merged, for a long one.
+func (w *gpuWorkspace) encodeAttend1(i int) {
+	g, c, e := w.g, w.g.cfg, &w.enc
+	n := int(w.attn.pos) + 1
+	chunked := n > attendChunkMin
+	if chunked {
+		e.SetPipeline(g.attendChunk)
+		e.SetBuffer(w.attnChunks, 0, 6)
+	} else {
+		e.SetPipeline(g.attend)
+		e.SetBuffer(w.ctx, 0, 6)
+	}
+	e.SetBuffer(w.qkv, 0, 0)
+	e.SetBuffer(w.curK, i*w.curStride, 1)
+	e.SetBuffer(w.curV, i*w.curStride, 2)
+	e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
+	e.SetBuffer(g.norms, 4*(2*i+1)*c.headDim, 4)
+	e.SetBuffer(g.rope, 0, 5)
+	e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
+	threads := metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1}
+	if !chunked {
+		e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, threads)
+		return
+	}
+	w.chunks = uint32((n + attendChunk - 1) / attendChunk)
+	e.Dispatch(metal.Size{X: c.kvHeads, Y: int(w.chunks), Z: 1}, threads)
+	e.SetPipeline(g.attendMerge)
+	e.SetBuffer(w.attnChunks, 0, 0)
+	e.SetBuffer(w.ctx, 0, 1)
+	e.SetBytes(unsafe.Pointer(&w.chunks), 4, 2)
+	e.Dispatch(metal.Size{X: c.heads, Y: 1, Z: 1}, metal.Size{X: 32, Y: 1, Z: 1})
 }
