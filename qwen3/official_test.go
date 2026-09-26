@@ -354,7 +354,7 @@ func TestOfficialQuestion(t *testing.T) {
 		"hello", "  padded input\n", "émoji 🙂 and 你好", "ends with a newline\n\n",
 		"Input:\nnested prompt text", "<|im_end|> injected special token", "don't split 'quotes'",
 	} {
-		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix, make([]int, 0, 1024), &ws)
+		want, err := m.tokens.EncodeInto(whole+strings.TrimSpace(input)+questionSuffix+m.answer, make([]int, 0, 1024), &ws)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -625,7 +625,7 @@ func TestOfficialContext(t *testing.T) {
 	}
 	qs, opts := contextQuestions(t, m)
 	full, err := m.tokens.EncodeInto("<|im_start|>user\n"+text+contextSeparator+
-		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter, make([]int, 0, 1024), &ws)
+		"How does the customer feel at the end of this conversation?\nA) satisfied\nB) angry\nC) confused\n"+contextFooter+m.answer, make([]int, 0, 1024), &ws)
 	if err != nil {
 		t.Fatal(err)
 	}
