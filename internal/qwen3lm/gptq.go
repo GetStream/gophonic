@@ -208,9 +208,6 @@ func QuantizeGPTQ(dir, format string, progress func(layer, layers int)) error {
 		return err
 	}
 	c := &cfg
-	if c.hidden%maxRotationBlock != 0 || c.intermediate%maxRotationBlock != 0 || c.heads*c.headDim%maxRotationBlock != 0 {
-		return errors.New("qwen3: GPTQ needs projection widths that are multiples of 4096")
-	}
 	tok, err := LoadTokenizer(dir)
 	if err != nil {
 		return err
