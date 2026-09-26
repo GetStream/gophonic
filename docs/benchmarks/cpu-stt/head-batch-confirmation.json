@@ -1,0 +1,8635 @@
+{
+  "baseline": "2086220ac9534e13450e8ead26afb84c3aadc91b; original serial LogitsRowsInto",
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "start_utc": "2026-09-25T20:42:33Z",
+  "end_utc": "2026-09-25T20:47:53Z",
+  "cases": [
+    {
+      "name": "head/3",
+      "hashes": [
+        "d36f301e4dda2d70c33a551ef29b205c19d44e64d9911cbcaefecb54206de1ba"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 10702708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 2603000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 2547333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 6660041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 6699667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 2584292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 2764000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 7417834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 6761042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 2658291,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 2767208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 6762250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 6753750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 2858833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 3263125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 6998167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 6771791,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 2592375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 2605708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 6804083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 7047458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 2687917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 2677209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 6783750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 7442875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 2738209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 2611833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 6854500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 8066833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 2653917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 2726125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 6700167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 6821292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 2692542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 2829416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 6980958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 6862917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 2781542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 2643459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 6774583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 6835125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 2923209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 2719792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 7072958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 6874584,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 2581583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 2754458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 6669250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 7077792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 2884334,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 2610750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 6694875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 6662167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 2562166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 2609875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 6975542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 6830583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 2580750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 2655416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 6776916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 6831625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 2704541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 2949167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 7813375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 6675333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 2778750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 2563875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 6750625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 6762083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 2771209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 2572792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 6758958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 6696458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 2605416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 2627417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 6750250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 6988000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 2667209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 2690833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 6872041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 6726917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 2547417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 2623041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 7014458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 6800500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 2656167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 2683541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 6584584,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 6908542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 2634875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 3379666,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 6790459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 6671833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 2574917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 2554292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 6686458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 6803916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 2799250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 2534375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 6647416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 6765417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 2616666,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 2606500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 6653125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 6888500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 2761875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 2706167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 6848709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 6614083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 2602583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 2598375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 7056417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 6768209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 2585042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 2640083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 6696666,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 6700708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 2578375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 2676000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 6754500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 6650667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 2754041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 2617084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 6676333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 6780208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 2640166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 2743000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 6639666,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 6.7757495,
+        "candidate_median_ms": 2.6546665000000003,
+        "paired_geomean_ratio": 0.3898883874128415,
+        "paired_bootstrap_95": [
+          0.3816304706094527,
+          0.3968817357469436
+        ],
+        "speedup": 2.5648365847355414
+      }
+    },
+    {
+      "name": "head/8",
+      "hashes": [
+        "b9f0e59cb4cb45fd86c234a71178bd52186823dc038b910b05a8248c52e63e48"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 17660042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 4054875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 3963458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 17754250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 18725792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 3983416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 3964750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 18014833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 18029000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 3958416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 3861500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 18197916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 18110167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 4025292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 3922791,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 18597667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 18420334,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 3933292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 3937125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 18072375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 17958375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 3803583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 3831000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 18435208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 18019667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 4426084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 4003958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 17850666,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 18043417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 3891750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 3948542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 18081916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 17857750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 3944458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 3833250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 18299750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 17937542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 4281834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 4108292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 18143500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 18190042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 3937083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 3819834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 18010708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 18081667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 4019375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 3867541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 18102625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 17917833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 4227833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 4324292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 17736959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 18128750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 3785709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 3947375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 17775750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 18061750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 3878000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 4001542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 18208334,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 17660750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 4067000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 4021625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 17880417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 18348125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 3970625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 4081625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 17916000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 18271792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 3908292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 3889750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 18220750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 17734291,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 3874458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 4060292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 17931791,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 18303959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 3910166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 3941208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 17789667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 18156084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 3802208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 3997584,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 19934583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 17736625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 3954625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 4162375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 17911125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 18656959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 3894583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 3891750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 17859834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 18437292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 4061916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 3875459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 18573166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 17994166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 3930708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 4184167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 17898375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 18035166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 3993542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 3944417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 17700250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 18551750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 3846042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 3944375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 17998000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 17675875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 3824167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 7003333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 18095000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 18373459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 3861042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 4082958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 17626292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 18723041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 3833375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 3872375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 18200292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 17954708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 3889167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 4021875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 17942292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 18328958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 3827208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 3917500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 17826667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 18.0392915,
+        "candidate_median_ms": 3.9443960000000002,
+        "paired_geomean_ratio": 0.22092329352518553,
+        "paired_bootstrap_95": [
+          0.21732584816417808,
+          0.2259559060113993
+        ],
+        "speedup": 4.526457957616854
+      }
+    },
+    {
+      "name": "head/16",
+      "hashes": [
+        "9e4fa27de33b8f2100f5a23ccd8fa403ef798591c8e0bebe9ea0444e011bb5b4"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 36249208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 6671084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 6461875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 36038042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 35768667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 6456875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 6485084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 36035625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 35692459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 6314208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 6450333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 35897834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 36287125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 6419167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 6377833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 37766750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 37082125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 6570500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 6431708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 36696167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 36094000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 6505625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 6412833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 40186166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 35668792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 6311833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 6401209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 35907000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 36059125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 6388042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 6588500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 36735459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 36130500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 6422084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 6333167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 36085875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 35891792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 6388084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 6437375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 36108167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 36104708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 6471542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 6373500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 35922375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 36222167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 6853750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 6309625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 35886333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 36139709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 6398209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 6422333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 35895542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 36191959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 6774375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 6318708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 35965625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 36836500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 6380000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 6533417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 36805958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 36411542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 6423542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 6478459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 35941084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 35887959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 6335834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 6760834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 35799958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 36367416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 6482542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 6481000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 36249792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 36054125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 7593459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 6679667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 37407708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 36314083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 6373209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 6422000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 36368417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 36571916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 6419583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 6484500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 35931083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 38040375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 6345334,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 6738250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 35938459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 35754542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 6380750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 6452333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 36387375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 36150083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 6321000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 6541792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 35825209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 36064625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 6271042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 6305125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 35945042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 36213542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 6540333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 6401500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 36464333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 36385958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 6418959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 6335708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 35830125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 36654334,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 6481166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 6394209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 35783708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 36290125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 6437792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 6394625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 35824500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 36468250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 6400625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 6441875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 36055792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 36594000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 6459375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 6457833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 36780625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 37458375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 6391500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 6598375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 36360000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 36.1351045,
+        "candidate_median_ms": 6.4229375,
+        "paired_geomean_ratio": 0.178078773622248,
+        "paired_bootstrap_95": [
+          0.17670287358548942,
+          0.1795830894164649
+        ],
+        "speedup": 5.6154924006904015
+      }
+    },
+    {
+      "name": "head/32",
+      "hashes": [
+        "edc85e6be12368b7f4aa1a22b26a546d47908a5268e027113b1c34d8f2b89b0c"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 72101250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 11719625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 11647542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 71662667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 72090167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 11792792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 11797166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 71825958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 71711959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 11584958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 11690000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 71548541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 72340958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 11731917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 11808583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 71724333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 71520417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 11629042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 11735291,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 72092292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 72570500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 11576875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 11656542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 73202500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 72363208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 11421417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 11761833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 71877208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 72243291,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 11545875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 11738875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 72230667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 71844333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 11569834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 11773875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 72535083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 73111417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 12019875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 11675750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 72167209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 72293667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 11652541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 11650625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 72236583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 72514291,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 11805709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 11718875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 71875500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 71825834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 11737541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 11751958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 73042416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 72416541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 11685667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 11564083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 72285875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 72389708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 11610917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 11664250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 73210792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 72580125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 11850917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 11548375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 71970250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 73256959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 11794916,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 11710500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 72398917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 74208333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 11617917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 11557583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 74161959,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 72963458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 11499541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 11654041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 73574083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 73206541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 11537875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 11817875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 72250541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 72177583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 11573167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 11804667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 73932250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 72710917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 11779041,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 11629792,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 72009125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 72488208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 11593708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 11840166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 72750083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 72331750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 11553833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 11663084,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 71773166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 71774542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 11713583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 11798709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 74132958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 74022875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 11891167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 11700750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 72955250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 72896292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 11759333,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 11701208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 73534292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 72710417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 11650750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 11754416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 71784791,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 72287625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 11947625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 11931500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 72266500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 71851625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 11764958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 11612875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 73952375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 71701917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 11912375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 11582583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 72092166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 72214834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 11863000,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 11692667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 72770167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 72.3127085,
+        "candidate_median_ms": 11.700979,
+        "paired_geomean_ratio": 0.16140799175918835,
+        "paired_bootstrap_95": [
+          0.16085821198447783,
+          0.1619515328723466
+        ],
+        "speedup": 6.195480094269086
+      }
+    },
+    {
+      "name": "stream/jfk",
+      "hashes": [
+        "60ada9bf41330dc860d1fcf084473b92c4a378b423389ea2594c546d7a479d57",
+        "74e58e28621e811f6806574b3b63506fd303e1ec096d66145e7941dac1bb3747",
+        "f54a1e76196390073ea16fa9ef8dbdd328f50c607bfcd15fde31279901925c70",
+        "7950fa40f826d0b9955dd4c87e53af9ae0d0caa4e3ec94e5afb145e25401768a"
+      ],
+      "logits_rows_calls": {
+        "11": 1,
+        "14": 1,
+        "21": 1
+      },
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 1205407292,
+          "steps_ns": [
+            226621542,
+            225055042,
+            334445583,
+            419285125
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 1137496748,
+          "steps_ns": [
+            224542791,
+            206203291,
+            311400875,
+            395349791
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 1162106124,
+          "steps_ns": [
+            229836166,
+            214622000,
+            322351416,
+            395296542
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 1630839916,
+          "steps_ns": [
+            232980583,
+            310996583,
+            547615750,
+            539247000
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 1313556666,
+          "steps_ns": [
+            270842583,
+            252693833,
+            353913917,
+            436106333
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 1175732792,
+          "steps_ns": [
+            273320459,
+            204300583,
+            313637500,
+            384474250
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 1100193500,
+          "steps_ns": [
+            226344375,
+            200764667,
+            301837750,
+            371246708
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 1231108167,
+          "steps_ns": [
+            257771625,
+            225465042,
+            327529750,
+            420341750
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 1323663541,
+          "steps_ns": [
+            295599083,
+            223647750,
+            362690541,
+            441726167
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 1288458959,
+          "steps_ns": [
+            233445750,
+            204618417,
+            366334125,
+            484060667
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 1330312959,
+          "steps_ns": [
+            275391834,
+            239666542,
+            370008375,
+            445246208
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 1298436166,
+          "steps_ns": [
+            273106083,
+            222108917,
+            384287916,
+            418933250
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 1202834708,
+          "steps_ns": [
+            226792958,
+            223848417,
+            334978625,
+            417214708
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 1111242750,
+          "steps_ns": [
+            227225167,
+            199486625,
+            305690333,
+            378840625
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 1125583708,
+          "steps_ns": [
+            229749166,
+            201667708,
+            308784792,
+            385382042
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 1539399083,
+          "steps_ns": [
+            248275667,
+            261914291,
+            448743500,
+            580465625
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 1547334375,
+          "steps_ns": [
+            356257250,
+            270337917,
+            409658583,
+            511080625
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 1364312042,
+          "steps_ns": [
+            287880417,
+            240713042,
+            380527208,
+            455191375
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 1303398708,
+          "steps_ns": [
+            276174708,
+            247998042,
+            383406416,
+            395819542
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 1205247624,
+          "steps_ns": [
+            227100000,
+            221412958,
+            338276208,
+            418458458
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 1183115084,
+          "steps_ns": [
+            219419167,
+            217211375,
+            329609000,
+            416875542
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 1102527208,
+          "steps_ns": [
+            225199375,
+            198482500,
+            305354166,
+            373491167
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 1111476793,
+          "steps_ns": [
+            225141792,
+            201965250,
+            306908709,
+            377461042
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 1192011041,
+          "steps_ns": [
+            224163291,
+            218421500,
+            330566000,
+            418860250
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 1203717417,
+          "steps_ns": [
+            225255042,
+            222578833,
+            336891458,
+            418992084
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 1121775250,
+          "steps_ns": [
+            225159666,
+            206556917,
+            304562667,
+            385496000
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 1137780042,
+          "steps_ns": [
+            231430833,
+            206511417,
+            307289083,
+            392548709
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 1210133707,
+          "steps_ns": [
+            228950333,
+            222062875,
+            339996208,
+            419124291
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 1380825959,
+          "steps_ns": [
+            257968084,
+            288852125,
+            405530917,
+            428474833
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 1187812416,
+          "steps_ns": [
+            252268500,
+            206007958,
+            322418708,
+            407117250
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 1181132333,
+          "steps_ns": [
+            239770833,
+            219050458,
+            325367375,
+            396943667
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 1199983542,
+          "steps_ns": [
+            225327834,
+            224645416,
+            331025292,
+            418985000
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 1201609874,
+          "steps_ns": [
+            218637583,
+            222628916,
+            333890458,
+            426452917
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 1132915291,
+          "steps_ns": [
+            219573000,
+            205417541,
+            326369000,
+            381555750
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 1142693292,
+          "steps_ns": [
+            231219000,
+            204191667,
+            317641000,
+            389641625
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 1228014041,
+          "steps_ns": [
+            228831916,
+            226743500,
+            347686208,
+            424752417
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 1215441917,
+          "steps_ns": [
+            228080167,
+            227228208,
+            336891584,
+            423241958
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 1129900709,
+          "steps_ns": [
+            224963959,
+            206744125,
+            307079792,
+            391112833
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 1121255083,
+          "steps_ns": [
+            227103208,
+            204987125,
+            306995625,
+            382169125
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 1220151833,
+          "steps_ns": [
+            224715000,
+            222032583,
+            356479500,
+            416924750
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 1199963376,
+          "steps_ns": [
+            224514417,
+            219933667,
+            333185792,
+            422329500
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 1120715959,
+          "steps_ns": [
+            227773917,
+            201711917,
+            304880291,
+            386349834
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 1107448500,
+          "steps_ns": [
+            224903917,
+            202052792,
+            302486125,
+            378005666
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 1190513709,
+          "steps_ns": [
+            220957000,
+            220333209,
+            331752125,
+            417471375
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 1258500834,
+          "steps_ns": [
+            227571750,
+            276438333,
+            337463709,
+            417027042
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 1128731542,
+          "steps_ns": [
+            227091250,
+            208000917,
+            312645833,
+            380993542
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 1117902000,
+          "steps_ns": [
+            219991458,
+            200091584,
+            319767125,
+            378051833
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 1192661250,
+          "steps_ns": [
+            224409458,
+            219740709,
+            331990416,
+            416520667
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 1205189417,
+          "steps_ns": [
+            228371292,
+            227443167,
+            333557125,
+            415817833
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 1111420835,
+          "steps_ns": [
+            225805792,
+            200072834,
+            307950917,
+            377591292
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 1152470166,
+          "steps_ns": [
+            228509208,
+            217823417,
+            328131000,
+            378006541
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 1203862542,
+          "steps_ns": [
+            225664167,
+            221572584,
+            333724916,
+            422900875
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 1195596250,
+          "steps_ns": [
+            227666000,
+            218547875,
+            333130250,
+            416252125
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 1098902542,
+          "steps_ns": [
+            220637500,
+            198289375,
+            305826625,
+            374149042
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 1109965584,
+          "steps_ns": [
+            225994875,
+            200393500,
+            302601292,
+            380975917
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 1195104418,
+          "steps_ns": [
+            220796584,
+            224792709,
+            331962500,
+            417552625
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 1191681416,
+          "steps_ns": [
+            224556875,
+            220510875,
+            332124833,
+            414488833
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 1112508125,
+          "steps_ns": [
+            221640292,
+            201506458,
+            311319375,
+            378042000
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 1221849166,
+          "steps_ns": [
+            224940791,
+            233366208,
+            321745583,
+            441796584
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 1218724499,
+          "steps_ns": [
+            222417083,
+            225873041,
+            331411625,
+            439022750
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 1194629042,
+          "steps_ns": [
+            229415583,
+            221924917,
+            329048417,
+            414240125
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 1128821709,
+          "steps_ns": [
+            230162167,
+            205778875,
+            309589667,
+            383291000
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 1117704377,
+          "steps_ns": [
+            223665417,
+            203585209,
+            306980292,
+            383473459
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 1192113041,
+          "steps_ns": [
+            222129791,
+            222660583,
+            328716792,
+            418605875
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 1243890250,
+          "steps_ns": [
+            231365084,
+            221064625,
+            364762208,
+            426698333
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 1127355457,
+          "steps_ns": [
+            225421833,
+            207572000,
+            310264708,
+            384096916
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 1132692875,
+          "steps_ns": [
+            234720625,
+            203976875,
+            308147833,
+            385847542
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 1211559126,
+          "steps_ns": [
+            225317375,
+            224182917,
+            336492709,
+            425566125
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 1205889834,
+          "steps_ns": [
+            222931583,
+            223400542,
+            336744584,
+            422813125
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 1126505916,
+          "steps_ns": [
+            227444958,
+            203857750,
+            314830083,
+            380373125
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 1138973168,
+          "steps_ns": [
+            228471584,
+            208226375,
+            319021334,
+            383253875
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 1346067998,
+          "steps_ns": [
+            233651916,
+            235516250,
+            408952666,
+            467947166
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 1404604334,
+          "steps_ns": [
+            253547708,
+            254015625,
+            370653167,
+            526387834
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 1239708501,
+          "steps_ns": [
+            256170917,
+            232325292,
+            337969875,
+            413242417
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 1179921251,
+          "steps_ns": [
+            231573292,
+            211934125,
+            329008292,
+            407405542
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 1235636335,
+          "steps_ns": [
+            235575917,
+            230752584,
+            336193500,
+            433114334
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 1230836083,
+          "steps_ns": [
+            229361875,
+            225664042,
+            349071583,
+            426738583
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 1137714125,
+          "steps_ns": [
+            222737250,
+            204260833,
+            321382167,
+            389333875
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 1149571666,
+          "steps_ns": [
+            226497958,
+            212845791,
+            317135417,
+            393092500
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 1323198500,
+          "steps_ns": [
+            228933917,
+            232637750,
+            370945708,
+            490681125
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 1326060916,
+          "steps_ns": [
+            258152375,
+            240220083,
+            357766041,
+            469922417
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 1267887874,
+          "steps_ns": [
+            231111750,
+            217806708,
+            395673958,
+            423295458
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 1227798583,
+          "steps_ns": [
+            245950500,
+            218349875,
+            338826375,
+            424671833
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 1400745001,
+          "steps_ns": [
+            235571208,
+            299547834,
+            396649959,
+            468976000
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 1281825875,
+          "steps_ns": [
+            233586792,
+            236472958,
+            360293292,
+            451472833
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 1260378167,
+          "steps_ns": [
+            244541875,
+            229981666,
+            345206709,
+            440647917
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 1408789042,
+          "steps_ns": [
+            242663041,
+            242558125,
+            425660917,
+            497906959
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 1350627126,
+          "steps_ns": [
+            258816292,
+            249151125,
+            372298792,
+            470360917
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 1364686626,
+          "steps_ns": [
+            243080750,
+            248106834,
+            375940625,
+            497558417
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 1248267416,
+          "steps_ns": [
+            251693291,
+            242741833,
+            337594292,
+            416238000
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 1197645749,
+          "steps_ns": [
+            243272000,
+            216146041,
+            324773625,
+            413454083
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 1310042707,
+          "steps_ns": [
+            236345125,
+            239290041,
+            368335750,
+            466071791
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 1382017916,
+          "steps_ns": [
+            249063125,
+            253511041,
+            392772959,
+            486670791
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 1245207418,
+          "steps_ns": [
+            245405625,
+            230895042,
+            338915167,
+            429991584
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 1215193583,
+          "steps_ns": [
+            244330708,
+            223523333,
+            336394167,
+            410945375
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 1373468959,
+          "steps_ns": [
+            238742500,
+            267659209,
+            389158208,
+            477909042
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 1299740917,
+          "steps_ns": [
+            242768542,
+            241808666,
+            358398084,
+            456765625
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 1196956542,
+          "steps_ns": [
+            234137208,
+            216900875,
+            332564667,
+            413353792
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 1200950249,
+          "steps_ns": [
+            232558750,
+            217012708,
+            330049916,
+            421328875
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 1374856500,
+          "steps_ns": [
+            245406084,
+            300484958,
+            368975375,
+            459990083
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 1321732708,
+          "steps_ns": [
+            247036291,
+            241342875,
+            362798833,
+            470554709
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 1225777583,
+          "steps_ns": [
+            241178125,
+            221918750,
+            336039208,
+            426641500
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 1237560959,
+          "steps_ns": [
+            247627917,
+            226685458,
+            341063125,
+            422184459
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 1389022625,
+          "steps_ns": [
+            243308167,
+            236687875,
+            414303750,
+            494722833
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 1357254583,
+          "steps_ns": [
+            256061250,
+            256095500,
+            370477250,
+            474620583
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 1259917917,
+          "steps_ns": [
+            249652084,
+            230372542,
+            352819250,
+            427074041
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 1261665583,
+          "steps_ns": [
+            251425458,
+            227130708,
+            354391500,
+            428717917
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 1357104749,
+          "steps_ns": [
+            244614875,
+            252839625,
+            376069333,
+            483580916
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 1370049459,
+          "steps_ns": [
+            258394542,
+            250609250,
+            376628542,
+            484417125
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 1322489125,
+          "steps_ns": [
+            255197541,
+            256978500,
+            362833584,
+            447479500
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 1278126918,
+          "steps_ns": [
+            258455542,
+            228942792,
+            351779542,
+            438949042
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 1404961459,
+          "steps_ns": [
+            259435209,
+            259713500,
+            387912000,
+            497900750
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 1376285000,
+          "steps_ns": [
+            259880417,
+            249656166,
+            386175209,
+            480573208
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 1292193291,
+          "steps_ns": [
+            256809583,
+            231418000,
+            354902500,
+            449063208
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 1349286375,
+          "steps_ns": [
+            255601916,
+            236350834,
+            358171375,
+            499162250
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 1765407709,
+          "steps_ns": [
+            321657292,
+            454081250,
+            460762500,
+            528906667
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 1400530543,
+          "steps_ns": [
+            256081583,
+            256888209,
+            386063792,
+            501496959
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 2994108165,
+          "steps_ns": [
+            316585208,
+            345179291,
+            445469583,
+            1886874083
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 4833815959,
+          "steps_ns": [
+            1554784250,
+            848091709,
+            894365458,
+            1536574542
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 3970947085,
+          "steps_ns": [
+            621476709,
+            506861209,
+            1583400375,
+            1259208792
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 5000470208,
+          "steps_ns": [
+            1194195666,
+            1114570625,
+            1898890625,
+            792813292
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 1937818583,
+          "steps_ns": [
+            400570625,
+            378858542,
+            537668166,
+            620721250
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 1414913333,
+          "steps_ns": [
+            307408125,
+            264148542,
+            373855875,
+            469500791
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 1470642167,
+          "steps_ns": [
+            263731750,
+            258537625,
+            395871209,
+            552501583
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 1425894292,
+          "steps_ns": [
+            255757542,
+            250928334,
+            387961500,
+            531246916
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 1328865333,
+          "steps_ns": [
+            271961333,
+            244781083,
+            363005125,
+            449117792
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 1276669791,
+          "steps_ns": [
+            252676375,
+            230898833,
+            355159333,
+            437935250
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 1466753084,
+          "steps_ns": [
+            244318084,
+            245120000,
+            397626917,
+            579688083
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 1299.0885415,
+        "candidate_median_ms": 1180.5267920000001,
+        "paired_geomean_ratio": 0.9222565255606002,
+        "paired_bootstrap_95": [
+          0.8832557635818096,
+          0.9610387853469943
+        ],
+        "speedup": 1.0842970174617554
+      }
+    },
+    {
+      "name": "stream/zh",
+      "hashes": [
+        "817477a7afe0826303a032d98184310715db1ff15b78eac2e0144c73d8d2d255",
+        "c4947ff8e793840042cee4ce99aad2aa94f36ec3359fb49bef7c20502844bd33",
+        "32cd39adea58a317f95639a595642d18ed2c2ab2626ba1f12134cdf639e21399",
+        "e8d80aab3bf6bd1cac2e50dcd33f4e89da037688d7640bd1881640aa28e037f5"
+      ],
+      "logits_rows_calls": {
+        "11": 1,
+        "7": 1,
+        "8": 1
+      },
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 617294917,
+          "steps_ns": [
+            140256458,
+            130760333,
+            171372834,
+            174905292
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 618448916,
+          "steps_ns": [
+            144765500,
+            129090125,
+            170987958,
+            173605333
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 677308916,
+          "steps_ns": [
+            156457208,
+            142216833,
+            190824709,
+            187810166
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 750412042,
+          "steps_ns": [
+            167062333,
+            170399167,
+            209444250,
+            203506292
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 728126625,
+          "steps_ns": [
+            161461417,
+            156247500,
+            206660500,
+            203757208
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 670421583,
+          "steps_ns": [
+            165409333,
+            143275875,
+            180387000,
+            181349375
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 661195542,
+          "steps_ns": [
+            163931416,
+            135859917,
+            188207417,
+            173196792
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 932487041,
+          "steps_ns": [
+            175452542,
+            158549125,
+            240435666,
+            358049708
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 2562254209,
+          "steps_ns": [
+            1737920000,
+            289010709,
+            287169125,
+            248154375
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 698630707,
+          "steps_ns": [
+            177433958,
+            143279708,
+            193305083,
+            184611958
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 766285459,
+          "steps_ns": [
+            216937000,
+            133496042,
+            195211000,
+            220641417
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 715744458,
+          "steps_ns": [
+            166002333,
+            159584542,
+            197449833,
+            192707750
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 671817542,
+          "steps_ns": [
+            153851916,
+            142637042,
+            184322625,
+            191005959
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 647082666,
+          "steps_ns": [
+            151930417,
+            131762916,
+            175990958,
+            187398375
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 1666806584,
+          "steps_ns": [
+            186168042,
+            175787791,
+            891014209,
+            413836542
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 1018428208,
+          "steps_ns": [
+            247446458,
+            216923125,
+            245761667,
+            308296958
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "serial",
+          "ns": 761497792,
+          "steps_ns": [
+            179592375,
+            170418542,
+            206936375,
+            204550500
+          ]
+        },
+        {
+          "pair": 8,
+          "variant": "batch",
+          "ns": 633926334,
+          "steps_ns": [
+            153592583,
+            134864292,
+            176917167,
+            168552292
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "batch",
+          "ns": 614720874,
+          "steps_ns": [
+            145682000,
+            128969333,
+            170687833,
+            169381708
+          ]
+        },
+        {
+          "pair": 9,
+          "variant": "serial",
+          "ns": 686021501,
+          "steps_ns": [
+            148264667,
+            150748125,
+            192531500,
+            194477209
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "serial",
+          "ns": 690585000,
+          "steps_ns": [
+            157771209,
+            147823292,
+            192522458,
+            192468041
+          ]
+        },
+        {
+          "pair": 10,
+          "variant": "batch",
+          "ns": 639687417,
+          "steps_ns": [
+            153952542,
+            131812084,
+            175670791,
+            178252000
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "batch",
+          "ns": 654591168,
+          "steps_ns": [
+            163173625,
+            139710042,
+            178194417,
+            173513084
+          ]
+        },
+        {
+          "pair": 11,
+          "variant": "serial",
+          "ns": 697804917,
+          "steps_ns": [
+            157147333,
+            147309834,
+            194224541,
+            199123209
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "serial",
+          "ns": 883281708,
+          "steps_ns": [
+            159087167,
+            181959333,
+            239808666,
+            302426542
+          ]
+        },
+        {
+          "pair": 12,
+          "variant": "batch",
+          "ns": 2470252001,
+          "steps_ns": [
+            1798518667,
+            217207125,
+            244790959,
+            209735250
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "batch",
+          "ns": 672314500,
+          "steps_ns": [
+            173144916,
+            144440000,
+            179463542,
+            175266042
+          ]
+        },
+        {
+          "pair": 13,
+          "variant": "serial",
+          "ns": 670257166,
+          "steps_ns": [
+            155853667,
+            143174083,
+            185695833,
+            185533583
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "serial",
+          "ns": 657369209,
+          "steps_ns": [
+            146256000,
+            140765500,
+            185966167,
+            184381542
+          ]
+        },
+        {
+          "pair": 14,
+          "variant": "batch",
+          "ns": 648542916,
+          "steps_ns": [
+            147112791,
+            144348958,
+            176594875,
+            180486292
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "batch",
+          "ns": 652810834,
+          "steps_ns": [
+            159396667,
+            135197250,
+            182540417,
+            175676500
+          ]
+        },
+        {
+          "pair": 15,
+          "variant": "serial",
+          "ns": 753437375,
+          "steps_ns": [
+            152431583,
+            144351417,
+            258229417,
+            198424958
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "serial",
+          "ns": 691950209,
+          "steps_ns": [
+            154904750,
+            149652709,
+            194785916,
+            192606834
+          ]
+        },
+        {
+          "pair": 16,
+          "variant": "batch",
+          "ns": 666422665,
+          "steps_ns": [
+            157609166,
+            137691833,
+            187683375,
+            183438291
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "batch",
+          "ns": 927624708,
+          "steps_ns": [
+            182558292,
+            174594500,
+            270048500,
+            300423416
+          ]
+        },
+        {
+          "pair": 17,
+          "variant": "serial",
+          "ns": 981414084,
+          "steps_ns": [
+            247355167,
+            215318208,
+            271961792,
+            246778917
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "serial",
+          "ns": 764006292,
+          "steps_ns": [
+            182848709,
+            164964125,
+            207069708,
+            209123750
+          ]
+        },
+        {
+          "pair": 18,
+          "variant": "batch",
+          "ns": 649370542,
+          "steps_ns": [
+            163605625,
+            136051459,
+            177323750,
+            172389708
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "batch",
+          "ns": 638424831,
+          "steps_ns": [
+            155407166,
+            135850458,
+            174170041,
+            172997166
+          ]
+        },
+        {
+          "pair": 19,
+          "variant": "serial",
+          "ns": 680580667,
+          "steps_ns": [
+            149788625,
+            146522042,
+            193939084,
+            190330916
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "serial",
+          "ns": 689948624,
+          "steps_ns": [
+            152093500,
+            152029708,
+            192876083,
+            192949333
+          ]
+        },
+        {
+          "pair": 20,
+          "variant": "batch",
+          "ns": 639005541,
+          "steps_ns": [
+            157651500,
+            131843666,
+            174729250,
+            174781125
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "batch",
+          "ns": 632115583,
+          "steps_ns": [
+            150984708,
+            132170500,
+            176351792,
+            172608583
+          ]
+        },
+        {
+          "pair": 21,
+          "variant": "serial",
+          "ns": 683416291,
+          "steps_ns": [
+            153280917,
+            148116833,
+            191267541,
+            190751000
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "serial",
+          "ns": 686349000,
+          "steps_ns": [
+            154766500,
+            146385667,
+            190696125,
+            194500708
+          ]
+        },
+        {
+          "pair": 22,
+          "variant": "batch",
+          "ns": 644191709,
+          "steps_ns": [
+            156064917,
+            134584250,
+            178017709,
+            175524833
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "batch",
+          "ns": 637359334,
+          "steps_ns": [
+            155386500,
+            137386334,
+            172245709,
+            172340791
+          ]
+        },
+        {
+          "pair": 23,
+          "variant": "serial",
+          "ns": 678450042,
+          "steps_ns": [
+            153639708,
+            142491250,
+            188360459,
+            193958625
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "serial",
+          "ns": 731656208,
+          "steps_ns": [
+            189851917,
+            151345666,
+            197095875,
+            193362750
+          ]
+        },
+        {
+          "pair": 24,
+          "variant": "batch",
+          "ns": 679910583,
+          "steps_ns": [
+            154521583,
+            141451500,
+            192563833,
+            191373667
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "batch",
+          "ns": 719255583,
+          "steps_ns": [
+            192520375,
+            153897333,
+            188448375,
+            184389500
+          ]
+        },
+        {
+          "pair": 25,
+          "variant": "serial",
+          "ns": 693928126,
+          "steps_ns": [
+            162132334,
+            149880625,
+            190961417,
+            190953750
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "serial",
+          "ns": 678797124,
+          "steps_ns": [
+            154025291,
+            142314166,
+            185985417,
+            196472250
+          ]
+        },
+        {
+          "pair": 26,
+          "variant": "batch",
+          "ns": 642869792,
+          "steps_ns": [
+            160380500,
+            135336292,
+            178478959,
+            168674041
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "batch",
+          "ns": 636152500,
+          "steps_ns": [
+            152107292,
+            135431750,
+            176387500,
+            172225958
+          ]
+        },
+        {
+          "pair": 27,
+          "variant": "serial",
+          "ns": 670418250,
+          "steps_ns": [
+            149702958,
+            144159500,
+            188407125,
+            188148667
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "serial",
+          "ns": 733563875,
+          "steps_ns": [
+            148165500,
+            147367958,
+            190789000,
+            247241417
+          ]
+        },
+        {
+          "pair": 28,
+          "variant": "batch",
+          "ns": 646785624,
+          "steps_ns": [
+            159086000,
+            134080583,
+            177245875,
+            176373166
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "batch",
+          "ns": 650626834,
+          "steps_ns": [
+            156784083,
+            136901250,
+            182389167,
+            174552334
+          ]
+        },
+        {
+          "pair": 29,
+          "variant": "serial",
+          "ns": 671976293,
+          "steps_ns": [
+            147576834,
+            142440209,
+            193134584,
+            188824666
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "serial",
+          "ns": 706288918,
+          "steps_ns": [
+            152675542,
+            146371292,
+            206573792,
+            200668292
+          ]
+        },
+        {
+          "pair": 30,
+          "variant": "batch",
+          "ns": 663586792,
+          "steps_ns": [
+            157850541,
+            135520625,
+            188151917,
+            182063709
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "batch",
+          "ns": 679231083,
+          "steps_ns": [
+            163960250,
+            144186667,
+            184613708,
+            186470458
+          ]
+        },
+        {
+          "pair": 31,
+          "variant": "serial",
+          "ns": 691961291,
+          "steps_ns": [
+            155850042,
+            152419291,
+            190911458,
+            192780500
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "serial",
+          "ns": 693687334,
+          "steps_ns": [
+            156928917,
+            146860917,
+            196855000,
+            193042500
+          ]
+        },
+        {
+          "pair": 32,
+          "variant": "batch",
+          "ns": 641967041,
+          "steps_ns": [
+            156736166,
+            134861959,
+            178287916,
+            172081000
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "batch",
+          "ns": 655175833,
+          "steps_ns": [
+            155722875,
+            143999916,
+            179618125,
+            175834917
+          ]
+        },
+        {
+          "pair": 33,
+          "variant": "serial",
+          "ns": 673516293,
+          "steps_ns": [
+            153828333,
+            141391584,
+            187940334,
+            190356042
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "serial",
+          "ns": 680491749,
+          "steps_ns": [
+            155505958,
+            145729417,
+            190578333,
+            188678041
+          ]
+        },
+        {
+          "pair": 34,
+          "variant": "batch",
+          "ns": 637823292,
+          "steps_ns": [
+            155699917,
+            135783042,
+            175860250,
+            170480083
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "batch",
+          "ns": 626552167,
+          "steps_ns": [
+            149168292,
+            130579209,
+            177647416,
+            169157250
+          ]
+        },
+        {
+          "pair": 35,
+          "variant": "serial",
+          "ns": 676873292,
+          "steps_ns": [
+            148815750,
+            141563500,
+            193064750,
+            193429292
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "serial",
+          "ns": 698074376,
+          "steps_ns": [
+            155276167,
+            149657125,
+            197686125,
+            195454959
+          ]
+        },
+        {
+          "pair": 36,
+          "variant": "batch",
+          "ns": 639805208,
+          "steps_ns": [
+            157355625,
+            132543958,
+            175546417,
+            174359208
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "batch",
+          "ns": 644419874,
+          "steps_ns": [
+            156543000,
+            136233416,
+            176459750,
+            175183708
+          ]
+        },
+        {
+          "pair": 37,
+          "variant": "serial",
+          "ns": 697231749,
+          "steps_ns": [
+            155987833,
+            145823959,
+            192044791,
+            203375166
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "serial",
+          "ns": 690917831,
+          "steps_ns": [
+            153798291,
+            147122416,
+            195327666,
+            194669458
+          ]
+        },
+        {
+          "pair": 38,
+          "variant": "batch",
+          "ns": 643236040,
+          "steps_ns": [
+            157933458,
+            134691041,
+            177145666,
+            173465875
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "batch",
+          "ns": 709983166,
+          "steps_ns": [
+            175635083,
+            154438875,
+            190606375,
+            189302833
+          ]
+        },
+        {
+          "pair": 39,
+          "variant": "serial",
+          "ns": 734462876,
+          "steps_ns": [
+            164128917,
+            154704042,
+            208241792,
+            207388125
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "serial",
+          "ns": 702221832,
+          "steps_ns": [
+            155377958,
+            153391833,
+            193258541,
+            200193500
+          ]
+        },
+        {
+          "pair": 40,
+          "variant": "batch",
+          "ns": 686699291,
+          "steps_ns": [
+            173314000,
+            145099041,
+            183419000,
+            184867250
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "batch",
+          "ns": 650970000,
+          "steps_ns": [
+            159674792,
+            135628125,
+            177831583,
+            177835500
+          ]
+        },
+        {
+          "pair": 41,
+          "variant": "serial",
+          "ns": 808724417,
+          "steps_ns": [
+            243182417,
+            155238459,
+            203814916,
+            206488625
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "serial",
+          "ns": 696826791,
+          "steps_ns": [
+            160399500,
+            150402042,
+            194826208,
+            191199041
+          ]
+        },
+        {
+          "pair": 42,
+          "variant": "batch",
+          "ns": 704547251,
+          "steps_ns": [
+            155509834,
+            138995750,
+            204103792,
+            205937875
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "batch",
+          "ns": 903128625,
+          "steps_ns": [
+            203037208,
+            198089083,
+            254765625,
+            247236709
+          ]
+        },
+        {
+          "pair": 43,
+          "variant": "serial",
+          "ns": 876482707,
+          "steps_ns": [
+            213648333,
+            197486041,
+            242448000,
+            222900333
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "serial",
+          "ns": 739297625,
+          "steps_ns": [
+            172726042,
+            156616792,
+            204369458,
+            205585333
+          ]
+        },
+        {
+          "pair": 44,
+          "variant": "batch",
+          "ns": 641688123,
+          "steps_ns": [
+            155655041,
+            134107958,
+            177130083,
+            174795041
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "batch",
+          "ns": 649483917,
+          "steps_ns": [
+            155412375,
+            137130542,
+            179364250,
+            177576750
+          ]
+        },
+        {
+          "pair": 45,
+          "variant": "serial",
+          "ns": 676068667,
+          "steps_ns": [
+            148969709,
+            145883083,
+            188290959,
+            192924916
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "serial",
+          "ns": 702025041,
+          "steps_ns": [
+            164722333,
+            147491375,
+            191525083,
+            198286250
+          ]
+        },
+        {
+          "pair": 46,
+          "variant": "batch",
+          "ns": 650158208,
+          "steps_ns": [
+            157842917,
+            136301958,
+            177601166,
+            178412167
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "batch",
+          "ns": 662180792,
+          "steps_ns": [
+            157862834,
+            135212375,
+            192624875,
+            176480708
+          ]
+        },
+        {
+          "pair": 47,
+          "variant": "serial",
+          "ns": 709869833,
+          "steps_ns": [
+            159171417,
+            152765750,
+            199413208,
+            198519458
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "serial",
+          "ns": 733038458,
+          "steps_ns": [
+            165599041,
+            154047584,
+            205141375,
+            208250458
+          ]
+        },
+        {
+          "pair": 48,
+          "variant": "batch",
+          "ns": 690968292,
+          "steps_ns": [
+            168709416,
+            143449833,
+            193322084,
+            185486959
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "batch",
+          "ns": 660142208,
+          "steps_ns": [
+            162977875,
+            145083125,
+            178517000,
+            173564208
+          ]
+        },
+        {
+          "pair": 49,
+          "variant": "serial",
+          "ns": 698477166,
+          "steps_ns": [
+            157464833,
+            148372333,
+            197942250,
+            194697750
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "serial",
+          "ns": 697715167,
+          "steps_ns": [
+            155413042,
+            147881542,
+            196079833,
+            198340750
+          ]
+        },
+        {
+          "pair": 50,
+          "variant": "batch",
+          "ns": 656466167,
+          "steps_ns": [
+            159303000,
+            141398125,
+            180938333,
+            174826709
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "batch",
+          "ns": 657503542,
+          "steps_ns": [
+            156671584,
+            136614375,
+            184605166,
+            179612417
+          ]
+        },
+        {
+          "pair": 51,
+          "variant": "serial",
+          "ns": 760675750,
+          "steps_ns": [
+            219065875,
+            149913042,
+            198898083,
+            192798750
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "serial",
+          "ns": 711675126,
+          "steps_ns": [
+            156704917,
+            160701833,
+            196263084,
+            198005292
+          ]
+        },
+        {
+          "pair": 52,
+          "variant": "batch",
+          "ns": 634893083,
+          "steps_ns": [
+            152656250,
+            132799125,
+            175795958,
+            173641750
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "batch",
+          "ns": 649682000,
+          "steps_ns": [
+            156424375,
+            136987625,
+            180947875,
+            175322125
+          ]
+        },
+        {
+          "pair": 53,
+          "variant": "serial",
+          "ns": 684539792,
+          "steps_ns": [
+            157335750,
+            144344375,
+            186229375,
+            196630292
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "serial",
+          "ns": 693913083,
+          "steps_ns": [
+            157204416,
+            143292167,
+            196655750,
+            196760750
+          ]
+        },
+        {
+          "pair": 54,
+          "variant": "batch",
+          "ns": 650911167,
+          "steps_ns": [
+            159306375,
+            137936208,
+            179799750,
+            173868834
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "batch",
+          "ns": 650791499,
+          "steps_ns": [
+            160266125,
+            139869416,
+            178238375,
+            172417583
+          ]
+        },
+        {
+          "pair": 55,
+          "variant": "serial",
+          "ns": 689776667,
+          "steps_ns": [
+            153556167,
+            145335125,
+            193676625,
+            197208750
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "serial",
+          "ns": 679937249,
+          "steps_ns": [
+            153976291,
+            145290750,
+            188325833,
+            192344375
+          ]
+        },
+        {
+          "pair": 56,
+          "variant": "batch",
+          "ns": 624405709,
+          "steps_ns": [
+            150536333,
+            132935834,
+            170913417,
+            170020125
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "batch",
+          "ns": 633818625,
+          "steps_ns": [
+            152846167,
+            134776125,
+            172914625,
+            173281708
+          ]
+        },
+        {
+          "pair": 57,
+          "variant": "serial",
+          "ns": 682838833,
+          "steps_ns": [
+            154346666,
+            145516875,
+            190757500,
+            192217792
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "serial",
+          "ns": 689055167,
+          "steps_ns": [
+            153682708,
+            147265250,
+            190872667,
+            197234542
+          ]
+        },
+        {
+          "pair": 58,
+          "variant": "batch",
+          "ns": 629439667,
+          "steps_ns": [
+            149119334,
+            132868791,
+            174093959,
+            173357583
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "batch",
+          "ns": 625696751,
+          "steps_ns": [
+            151828459,
+            132670292,
+            170808833,
+            170389167
+          ]
+        },
+        {
+          "pair": 59,
+          "variant": "serial",
+          "ns": 685531500,
+          "steps_ns": [
+            149802250,
+            145850750,
+            195576000,
+            194302500
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "serial",
+          "ns": 682293707,
+          "steps_ns": [
+            149917375,
+            147459916,
+            188797583,
+            196118833
+          ]
+        },
+        {
+          "pair": 60,
+          "variant": "batch",
+          "ns": 659996208,
+          "steps_ns": [
+            155616250,
+            140278833,
+            186896125,
+            177205000
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "batch",
+          "ns": 644744543,
+          "steps_ns": [
+            154501584,
+            138862500,
+            177949625,
+            173430834
+          ]
+        },
+        {
+          "pair": 61,
+          "variant": "serial",
+          "ns": 698667334,
+          "steps_ns": [
+            157816125,
+            150040459,
+            198762458,
+            192048292
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "serial",
+          "ns": 672194124,
+          "steps_ns": [
+            149597958,
+            142558416,
+            190092000,
+            189945750
+          ]
+        },
+        {
+          "pair": 62,
+          "variant": "batch",
+          "ns": 620014084,
+          "steps_ns": [
+            149595500,
+            131585792,
+            171637500,
+            167195292
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "batch",
+          "ns": 659502751,
+          "steps_ns": [
+            152751084,
+            141028584,
+            186671792,
+            179051291
+          ]
+        },
+        {
+          "pair": 63,
+          "variant": "serial",
+          "ns": 698259750,
+          "steps_ns": [
+            153480583,
+            151055875,
+            195043375,
+            198679917
+          ]
+        }
+      ],
+      "summary": {
+        "baseline_median_ms": 695.3774585,
+        "candidate_median_ms": 650.392521,
+        "paired_geomean_ratio": 0.938015454652761,
+        "paired_bootstrap_95": [
+          0.885932923474526,
+          0.992643280480829
+        ],
+        "speedup": 1.0660805160936124
+      }
+    }
+  ],
+  "metadata": {
+    "cpu": "Apple M4 Max",
+    "ram_gib": 64,
+    "goexperiment": "simd",
+    "cgo_enabled": "0",
+    "binary_sha256": "cff15e6357631a091d8934f2ea851516f9d5ff1c6b82ba8465613fbc6de6bbbe",
+    "pairs_per_case": 64,
+    "bootstrap": {
+      "statistic": "geometric mean of paired candidate/baseline latency ratios",
+      "resamples": 10000,
+      "seed": 0,
+      "interval": "sorted samples at indices 249 and 9749"
+    },
+    "timed_path": "public LogitsRowsInto; public Transcribe on four strictly growing PCM prefixes at one-quarter, one-half, three-quarters and all of each clip, with the previous transcript as Partial after the first call",
+    "warmup": "An initial full JFK transcription seeds the existing non-audio prompt prefix before captures. Head: three calls and AllocsPerRun(3) per variant. Stream: exact capture, two traces, AllocsPerRun(2) per variant; one additional candidate trace records dispatch counts.",
+    "model": "official Qwen3-ASR-1.7B, existing F16 format",
+    "notes": [
+      "All samples retained; alternating serial/batch and batch/serial pairs in one process and lane.",
+      "No coordinating-agent builds, profiles or validation tests overlap timing. Other desktop activity may remain.",
+      "Short fixtures are below the first 16-second aligned encoder-reuse boundary, so encoder-prefix candidate is inactive.",
+      "Exact fingerprints compare all vocabulary logits for head calls; for every stream step compare embeddings, final hidden/logits, verification hidden/logits, tokens, text and language. Full float checks occur before timing; each timed call checks text/language.",
+      "Baseline CPU LogitsRowsInto follows its original one-row loop at commit 2086220; only batched F16 SME head dispatch differs."
+    ],
+    "instrumentation_patch_sha256": "9de9ec4b054d8b7dba8d92c3fce62a9b083506e5c5a8a06161cdd22f31f788bf"
+  },
+  "allocation_method": "testing.AllocsPerRun temporarily sets GOMAXPROCS=1 and integer-averages allocations across runs. The stored zeros do not establish strict zero allocation at the reported multi-P timing setting; see cpu-streaming-exact.md allocation qualification and stream-production-benchmark.txt."
+}

@@ -1,1 +1,3 @@
 *.f32le binary
+# Unified diff context has a required leading space before Go indentation.
+docs/benchmarks/cpu-stt/*.patch -whitespace

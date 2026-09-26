@@ -1,0 +1,1158 @@
+{
+  "baseline": "2086220ac9534e13450e8ead26afb84c3aadc91b; original serial LogitsRowsInto",
+  "go": "go1.27.1-X:simd",
+  "gomaxprocs": 16,
+  "start_utc": "2026-09-25T20:40:49Z",
+  "end_utc": "2026-09-25T20:41:59Z",
+  "cases": [
+    {
+      "name": "head/3",
+      "hashes": [
+        "d36f301e4dda2d70c33a551ef29b205c19d44e64d9911cbcaefecb54206de1ba"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 6601167,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 2616875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 2700834,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 6709125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 6893042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 2987875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 2532292,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 6619667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 6671125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 2570625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 2547250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 6746459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 7518750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 2589166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 2657417,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 6699458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "head/8",
+      "hashes": [
+        "b9f0e59cb4cb45fd86c234a71178bd52186823dc038b910b05a8248c52e63e48"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 17774209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 3797958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 3895042,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 20377833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 18104459,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 4247958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 3878458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 17785958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 18458583,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 3936208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 3818708,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 19228208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 17799917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 3857750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 3918500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 18725542,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "head/16",
+      "hashes": [
+        "9e4fa27de33b8f2100f5a23ccd8fa403ef798591c8e0bebe9ea0444e011bb5b4"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 35919917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 6520125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 6364250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 36374208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 36307208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 6265833,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 6386709,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 35716416,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 35538250,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 6680458,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 6356541,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 36545667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 35896208,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 6215166,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 6388125,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 36088500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "head/32",
+      "hashes": [
+        "edc85e6be12368b7f4aa1a22b26a546d47908a5268e027113b1c34d8f2b89b0c"
+      ],
+      "logits_rows_calls": null,
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 72945750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 11766500,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 11516917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 74789375,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 73471667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 11838667,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 11443625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 72329750,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 71890917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 11680625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 11570917,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 73720209,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 75244875,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 11568958,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 11565625,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 73351083,
+          "steps_ns": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "stream/jfk",
+      "hashes": [
+        "60ada9bf41330dc860d1fcf084473b92c4a378b423389ea2594c546d7a479d57",
+        "74e58e28621e811f6806574b3b63506fd303e1ec096d66145e7941dac1bb3747",
+        "f54a1e76196390073ea16fa9ef8dbdd328f50c607bfcd15fde31279901925c70",
+        "7950fa40f826d0b9955dd4c87e53af9ae0d0caa4e3ec94e5afb145e25401768a"
+      ],
+      "logits_rows_calls": {
+        "11": 1,
+        "14": 1,
+        "21": 1
+      },
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 1486090000,
+          "steps_ns": [
+            281088000,
+            259689625,
+            460255417,
+            485056958
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 1200700791,
+          "steps_ns": [
+            268002250,
+            233629292,
+            322473291,
+            376595958
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 1104924458,
+          "steps_ns": [
+            222408750,
+            203419875,
+            307396083,
+            371699750
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 1177698543,
+          "steps_ns": [
+            221798667,
+            218303500,
+            324680459,
+            412915917
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 1184480958,
+          "steps_ns": [
+            222625208,
+            223347542,
+            330154833,
+            408353375
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 1105476291,
+          "steps_ns": [
+            223582583,
+            202242000,
+            307215375,
+            372436333
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 1094655709,
+          "steps_ns": [
+            222484083,
+            196667084,
+            303336125,
+            372168417
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 1181218040,
+          "steps_ns": [
+            221537791,
+            221558708,
+            324898250,
+            413223291
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 1185602083,
+          "steps_ns": [
+            221455541,
+            220194167,
+            331432583,
+            412519792
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 1111098916,
+          "steps_ns": [
+            225440125,
+            201938541,
+            302203667,
+            381516583
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 1315294541,
+          "steps_ns": [
+            226078333,
+            207316333,
+            409431917,
+            472467958
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 1419401167,
+          "steps_ns": [
+            279093917,
+            265861292,
+            386000708,
+            488445250
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 1292316500,
+          "steps_ns": [
+            270340042,
+            256767125,
+            349868708,
+            415340625
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 1087186708,
+          "steps_ns": [
+            220547625,
+            196606875,
+            300114250,
+            369917958
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 1104597833,
+          "steps_ns": [
+            229468583,
+            198811375,
+            298085875,
+            378232000
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 1184205833,
+          "steps_ns": [
+            227001667,
+            217424708,
+            324197625,
+            415581833
+          ]
+        }
+      ]
+    },
+    {
+      "name": "stream/zh",
+      "hashes": [
+        "817477a7afe0826303a032d98184310715db1ff15b78eac2e0144c73d8d2d255",
+        "c4947ff8e793840042cee4ce99aad2aa94f36ec3359fb49bef7c20502844bd33",
+        "32cd39adea58a317f95639a595642d18ed2c2ab2626ba1f12134cdf639e21399",
+        "e8d80aab3bf6bd1cac2e50dcd33f4e89da037688d7640bd1881640aa28e037f5"
+      ],
+      "logits_rows_calls": {
+        "11": 1,
+        "7": 1,
+        "8": 1
+      },
+      "allocs": [
+        0,
+        0
+      ],
+      "samples": [
+        {
+          "pair": 0,
+          "variant": "serial",
+          "ns": 610502626,
+          "steps_ns": [
+            136347542,
+            134996750,
+            168877667,
+            170280667
+          ]
+        },
+        {
+          "pair": 0,
+          "variant": "batch",
+          "ns": 567378708,
+          "steps_ns": [
+            144341000,
+            125024458,
+            148636292,
+            149376958
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "batch",
+          "ns": 566011333,
+          "steps_ns": [
+            138812042,
+            122443083,
+            156520000,
+            148236208
+          ]
+        },
+        {
+          "pair": 1,
+          "variant": "serial",
+          "ns": 598693958,
+          "steps_ns": [
+            133963250,
+            132922625,
+            164942250,
+            166865833
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "serial",
+          "ns": 612257417,
+          "steps_ns": [
+            136100000,
+            136421417,
+            171610833,
+            168125167
+          ]
+        },
+        {
+          "pair": 2,
+          "variant": "batch",
+          "ns": 558422917,
+          "steps_ns": [
+            140064250,
+            116533166,
+            153025167,
+            148800334
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "batch",
+          "ns": 573323293,
+          "steps_ns": [
+            135718834,
+            125293292,
+            163151625,
+            149159542
+          ]
+        },
+        {
+          "pair": 3,
+          "variant": "serial",
+          "ns": 612789042,
+          "steps_ns": [
+            140334375,
+            130161875,
+            170597625,
+            171695167
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "serial",
+          "ns": 617351500,
+          "steps_ns": [
+            136986125,
+            145938500,
+            165636875,
+            168790000
+          ]
+        },
+        {
+          "pair": 4,
+          "variant": "batch",
+          "ns": 624852958,
+          "steps_ns": [
+            156598375,
+            124073500,
+            172023708,
+            172157375
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "batch",
+          "ns": 590642791,
+          "steps_ns": [
+            143242791,
+            124641916,
+            164511417,
+            158246667
+          ]
+        },
+        {
+          "pair": 5,
+          "variant": "serial",
+          "ns": 646870209,
+          "steps_ns": [
+            143319167,
+            141082334,
+            181636167,
+            180832541
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "serial",
+          "ns": 693442668,
+          "steps_ns": [
+            146275292,
+            161045375,
+            187006917,
+            199115084
+          ]
+        },
+        {
+          "pair": 6,
+          "variant": "batch",
+          "ns": 802834416,
+          "steps_ns": [
+            210341833,
+            175097292,
+            222395833,
+            194999458
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "batch",
+          "ns": 712725458,
+          "steps_ns": [
+            178941166,
+            146886917,
+            198273750,
+            188623625
+          ]
+        },
+        {
+          "pair": 7,
+          "variant": "serial",
+          "ns": 810143667,
+          "steps_ns": [
+            178476667,
+            173727917,
+            230194583,
+            227744500
+          ]
+        }
+      ]
+    }
+  ],
+  "allocation_method": "testing.AllocsPerRun temporarily sets GOMAXPROCS=1 and integer-averages allocations across runs. The stored zeros do not establish strict zero allocation at the reported multi-P timing setting; see cpu-streaming-exact.md allocation qualification and stream-production-benchmark.txt."
+}

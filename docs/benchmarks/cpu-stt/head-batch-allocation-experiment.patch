@@ -1,0 +1,142 @@
+diff --git a/qwen3asr/head_allocation_experiment_test.go b/qwen3asr/head_allocation_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/head_allocation_experiment_test.go
+@@ -0,0 +1,137 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"os"
++	"runtime"
++	"slices"
++	"strings"
++	"testing"
++
++	"github.com/GetStream/gophonic/internal/qwen3lm"
++	"github.com/GetStream/gophonic/speech"
++)
++
++type headAllocRecord struct {
++	Objects int64    `json:"objects"`
++	Bytes   int64    `json:"bytes"`
++	Stack   []string `json:"stack"`
++}
++type headAllocTrial struct {
++	Variant string            `json:"variant"`
++	Mallocs uint64            `json:"total_mallocs"`
++	Bytes   uint64            `json:"total_bytes"`
++	Stacks  []headAllocRecord `json:"new_allocation_stacks"`
++}
++
++func headAllocSnapshot() map[[32]uintptr]runtime.MemProfileRecord {
++	n, _ := runtime.MemProfile(nil, true)
++	for {
++		records := make([]runtime.MemProfileRecord, n+64)
++		count, ok := runtime.MemProfile(records, true)
++		if !ok {
++			n = count
++			continue
++		}
++		result := make(map[[32]uintptr]runtime.MemProfileRecord, count)
++		for _, r := range records[:count] {
++			result[r.Stack0] = r
++		}
++		return result
++	}
++}
++func TestCPUHeadAllocationTrace(t *testing.T) {
++	path := os.Getenv("STT_HEAD_ALLOCS")
++	if path == "" {
++		t.Skip("set STT_HEAD_ALLOCS")
++	}
++	m := loadModel(t, FormatF16)
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	pcm := clipPCM(t, "jfk")
++	var prev, cur speech.Transcript
++	var expected [4][]byte
++	run := func(first bool) {
++		prev.Reset()
++		cur.Reset()
++		for step := range 4 {
++			opts := speech.Options{}
++			if step > 0 {
++				opts.Partial = &prev
++			}
++			if err := tr.Transcribe(context.Background(), pcm[:len(pcm)*(step+1)/4], opts, &cur); err != nil {
++				t.Fatal(err)
++			}
++			if first {
++				expected[step] = slices.Clone(cur.Text)
++			} else if !bytes.Equal(cur.Text, expected[step]) {
++				t.Fatal("text changed")
++			}
++			prev, cur = cur, prev
++		}
++	}
++	run(true)
++	run(false)
++	run(false)
++	old := runtime.MemProfileRate
++	runtime.MemProfileRate = 1
++	defer func() { runtime.MemProfileRate = old; qwen3lm.SetHeadBatchExperiment(false) }()
++	var trials []headAllocTrial
++	for _, variant := range []int{0, 1, 1, 0} {
++		qwen3lm.SetHeadBatchExperiment(variant == 0)
++		run(false)
++		runtime.GC()
++		runtime.GC()
++		before := headAllocSnapshot()
++		var a, b runtime.MemStats
++		runtime.ReadMemStats(&a)
++		run(false)
++		runtime.ReadMemStats(&b)
++		runtime.GC()
++		runtime.GC()
++		after := headAllocSnapshot()
++		trial := headAllocTrial{Variant: []string{"serial", "batch"}[variant], Mallocs: b.Mallocs - a.Mallocs, Bytes: b.TotalAlloc - a.TotalAlloc}
++		for key, r := range after {
++			prev := before[key]
++			if r.AllocObjects <= prev.AllocObjects {
++				continue
++			}
++			frames := runtime.CallersFrames(r.Stack())
++			var names []string
++			own := false
++			for {
++				frame, more := frames.Next()
++				names = append(names, frame.Function)
++				if strings.Contains(frame.Function, "headAllocSnapshot") {
++					own = true
++				}
++				if !more {
++					break
++				}
++			}
++			if own {
++				continue
++			}
++			trial.Stacks = append(trial.Stacks, headAllocRecord{Objects: r.AllocObjects - prev.AllocObjects, Bytes: r.AllocBytes - prev.AllocBytes, Stack: names})
++		}
++		trials = append(trials, trial)
++		t.Logf("%s: measured trace %d allocations, %d bytes", trial.Variant, trial.Mallocs, trial.Bytes)
++	}
++	result := struct {
++		Go     string           `json:"go"`
++		Procs  int              `json:"gomaxprocs"`
++		Trials []headAllocTrial `json:"trials"`
++	}{runtime.Version(), runtime.GOMAXPROCS(0), trials}
++	data, err := json.MarshalIndent(result, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

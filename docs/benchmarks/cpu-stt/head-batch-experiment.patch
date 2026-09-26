@@ -1,0 +1,284 @@
+diff --git a/internal/qwen3lm/evaluator.go b/internal/qwen3lm/evaluator.go
+--- a/internal/qwen3lm/evaluator.go
++++ b/internal/qwen3lm/evaluator.go
+@@ -244,13 +244,14 @@
+ 	if k == 0 || len(hidden) != k*c.hidden || len(dst) != k*c.vocab || k > maxTail {
+ 		return fmt.Errorf("qwen3: logits of %d values into %d, want whole states of %d and %d", len(hidden), len(dst), c.hidden, c.vocab)
+ 	}
++	headBatchCalls[k].Add(1)
+ 	if ws.gpu != nil && k > 1 {
+ 		if e.m.gpu == nil || !e.m.gpu.hasHead() {
+ 			return errors.New("qwen3: the weights were loaded without a language-model head")
+ 		}
+ 		return ws.gpu.logitsRowsInto(e.m, hidden, dst, k)
+ 	}
+-	if k > 1 && ws.gpu == nil && e.m.head.f16 != nil && c.hidden%16 == 0 && q8gemm.Available() {
++	if !headBatchDisabled.Load() && k > 1 && ws.gpu == nil && e.m.head.f16 != nil && c.hidden%16 == 0 && q8gemm.Available() {
+ 		if err := ws.ensure(c, k, 1); err != nil {
+ 			return err
+ 		}
+diff --git a/internal/qwen3lm/head_batch_experiment.go b/internal/qwen3lm/head_batch_experiment.go
+new file mode 100644
+--- /dev/null
++++ b/internal/qwen3lm/head_batch_experiment.go
+@@ -0,0 +1,20 @@
++package qwen3lm
++
++import "sync/atomic"
++
++var headBatchDisabled atomic.Bool
++var headBatchCalls [maxTail + 1]atomic.Uint64
++
++func SetHeadBatchExperiment(disabled bool) {
++	headBatchDisabled.Store(disabled)
++	for i := range headBatchCalls {
++		headBatchCalls[i].Store(0)
++	}
++}
++
++func HeadBatchExperimentRows() (calls [maxTail + 1]uint64) {
++	for i := range calls {
++		calls[i] = headBatchCalls[i].Load()
++	}
++	return
++}
+diff --git a/qwen3asr/head_batch_experiment_test.go b/qwen3asr/head_batch_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/head_batch_experiment_test.go
+@@ -0,0 +1,235 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"math"
++	"os"
++	"runtime"
++	"slices"
++	"strconv"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/internal/qwen3lm"
++	"github.com/GetStream/gophonic/speech"
++)
++
++type headBatchSample struct {
++	Pair    int      `json:"pair"`
++	Variant string   `json:"variant"`
++	NS      int64    `json:"ns"`
++	Steps   [4]int64 `json:"steps_ns,omitempty"`
++}
++type headBatchCase struct {
++	Name    string            `json:"name"`
++	Hashes  []string          `json:"hashes"`
++	Calls   map[int]uint64    `json:"logits_rows_calls"`
++	Allocs  [2]float64        `json:"allocs"`
++	Samples []headBatchSample `json:"samples"`
++}
++type headBatchReport struct {
++	Baseline string          `json:"baseline"`
++	Go       string          `json:"go"`
++	Procs    int             `json:"gomaxprocs"`
++	Start    string          `json:"start_utc"`
++	End      string          `json:"end_utc"`
++	Cases    []headBatchCase `json:"cases"`
++}
++
++func headHash(groups ...[]float32) string {
++	h := sha256.New()
++	var b [4]byte
++	for _, g := range groups {
++		for _, v := range g {
++			binary.LittleEndian.PutUint32(b[:], math.Float32bits(v))
++			h.Write(b[:])
++		}
++	}
++	return hex.EncodeToString(h.Sum(nil))
++}
++func TestHeadBatchExperiment(t *testing.T) {
++	path := os.Getenv("STT_HEAD_OUTPUT")
++	if path == "" {
++		t.Skip("set STT_HEAD_OUTPUT for paired experiment")
++	}
++	pairs := 8
++	if s := os.Getenv("STT_HEAD_PAIRS"); s != "" {
++		var err error
++		pairs, err = strconv.Atoi(s)
++		if err != nil || pairs < 1 {
++			t.Fatal("invalid pairs")
++		}
++	}
++	report := headBatchReport{Baseline: "2086220ac9534e13450e8ead26afb84c3aadc91b; original serial LogitsRowsInto", Go: runtime.Version(), Procs: runtime.GOMAXPROCS(0), Start: time.Now().UTC().Format(time.RFC3339)}
++	m := loadModel(t, FormatF16)
++	ctx := context.Background()
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	defer qwen3lm.SetHeadBatchExperiment(false)
++	var dst speech.Transcript
++	if err = tr.Transcribe(ctx, clipPCM(t, "jfk"), speech.Options{}, &dst); err != nil {
++		t.Fatal(err)
++	}
++	c := m.lm.Config()
++	hidden := make([]float32, 32*c.Hidden)
++	kv, err := m.eval.NewPrefixKV(len(tr.ids))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer kv.Close()
++	if err = m.eval.HiddenTailExtendEmbedInto(kv, 0, tr.ids, qwen3lm.Embeds{Token: m.ids.audioPad, Rows: tr.embeds}, hidden, tr.lm); err != nil {
++		t.Fatal(err)
++	}
++	for _, rows := range []int{3, 8, 16, 32} {
++		if os.Getenv("STT_HEAD_SKIP_MICRO") == "1" {
++			break
++		}
++		out := make([]float32, rows*c.Vocab)
++		hc := headBatchCase{Name: fmt.Sprintf("head/%d", rows)}
++		run := func() {
++			if err := m.eval.LogitsRowsInto(hidden[:rows*c.Hidden], out, tr.lm); err != nil {
++				panic(err)
++			}
++		}
++		var want string
++		for variant := range 2 {
++			qwen3lm.SetHeadBatchExperiment(variant == 0)
++			for range 3 {
++				run()
++			}
++			got := headHash(out)
++			if variant == 0 {
++				want = got
++			} else if got != want {
++				t.Fatalf("%s hash %s != %s", hc.Name, got, want)
++			}
++			hc.Allocs[variant] = testing.AllocsPerRun(3, run)
++			if hc.Allocs[variant] != 0 {
++				t.Fatalf("%s variant%d allocs=%g", hc.Name, variant, hc.Allocs[variant])
++			}
++		}
++		hc.Hashes = []string{want}
++		for pair := range pairs {
++			for order := range 2 {
++				variant := (pair + order) % 2
++				qwen3lm.SetHeadBatchExperiment(variant == 0)
++				start := time.Now()
++				run()
++				elapsed := time.Since(start).Nanoseconds()
++				hc.Samples = append(hc.Samples, headBatchSample{Pair: pair, Variant: []string{"serial", "batch"}[variant], NS: elapsed})
++			}
++		}
++		report.Cases = append(report.Cases, hc)
++		t.Logf("finished %s, exact=%s, allocs=%v", hc.Name, want, hc.Allocs)
++	}
++	for _, clip := range []string{"jfk", "zh"} {
++		if os.Getenv("STT_HEAD_SKIP_STREAM") == "1" {
++			break
++		}
++		pcm := clipPCM(t, clip)
++		hc := headBatchCase{Name: "stream/" + clip}
++		var prev, cur speech.Transcript
++		var wanted [4][]byte
++		var expectedHashes [4]string
++		var expectedLanguage [4]string
++		var elapsed [4]int64
++		run := func(capture bool, first bool) {
++			prev.Reset()
++			cur.Reset()
++			for step := range 4 {
++				n := len(pcm) * (step + 1) / 4
++				opts := speech.Options{}
++				if step > 0 {
++					opts.Partial = &prev
++				}
++				if capture && cap(tr.vlogits) > 0 {
++					clear(tr.vlogits[:cap(tr.vlogits)])
++				}
++				begin := time.Now()
++				if err := tr.Transcribe(ctx, pcm[:n], opts, &cur); err != nil {
++					panic(err)
++				}
++				elapsed[step] = time.Since(begin).Nanoseconds()
++				if first {
++					wanted[step] = slices.Clone(cur.Text)
++					expectedLanguage[step] = cur.Language
++				} else if !bytes.Equal(cur.Text, wanted[step]) || cur.Language != expectedLanguage[step] {
++					t.Fatalf("%s step%d text changed: %q", clip, step, cur.Text)
++				}
++				if capture {
++					state := sha256.New()
++					state.Write([]byte(headHash(tr.embeds, tr.hidden, tr.logits)))
++					if len(tr.draft) > 0 {
++						state.Write([]byte(headHash(tr.tail, tr.vlogits[:cap(tr.vlogits)])))
++					}
++					var bits [8]byte
++					for _, id := range tr.gen {
++						binary.LittleEndian.PutUint64(bits[:], uint64(id))
++						state.Write(bits[:])
++					}
++					state.Write(cur.Text)
++					state.Write([]byte(cur.Language))
++					got := hex.EncodeToString(state.Sum(nil))
++					if first {
++						expectedHashes[step] = got
++					} else if got != expectedHashes[step] {
++						t.Fatalf("%s step%d state %s != %s", clip, step, got, expectedHashes[step])
++					}
++				}
++				prev, cur = cur, prev
++			}
++		}
++		for variant := range 2 {
++			qwen3lm.SetHeadBatchExperiment(variant == 0)
++			run(true, variant == 0)
++			for range 2 {
++				run(false, false)
++			}
++			hc.Allocs[variant] = testing.AllocsPerRun(2, func() { run(false, false) })
++			if hc.Allocs[variant] != 0 {
++				t.Fatalf("%s variant%d allocs=%g", hc.Name, variant, hc.Allocs[variant])
++			}
++		}
++		hc.Hashes = expectedHashes[:]
++		qwen3lm.SetHeadBatchExperiment(false)
++		run(false, false)
++		hc.Calls = make(map[int]uint64)
++		for r, n := range qwen3lm.HeadBatchExperimentRows() {
++			if n > 0 {
++				hc.Calls[r] = n
++			}
++		}
++		t.Logf("%s live batch rows=%v hashes=%v", hc.Name, hc.Calls, hc.Hashes)
++		for pair := range pairs {
++			for order := range 2 {
++				variant := (pair + order) % 2
++				qwen3lm.SetHeadBatchExperiment(variant == 0)
++				run(false, false)
++				var total int64
++				for _, ns := range elapsed {
++					total += ns
++				}
++				hc.Samples = append(hc.Samples, headBatchSample{Pair: pair, Variant: []string{"serial", "batch"}[variant], NS: total, Steps: elapsed})
++			}
++		}
++		report.Cases = append(report.Cases, hc)
++		t.Logf("finished %s allocs=%v", hc.Name, hc.Allocs)
++	}
++	report.End = time.Now().UTC().Format(time.RFC3339)
++	data, err := json.MarshalIndent(report, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(path, append(data, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

@@ -1,0 +1,2708 @@
+{
+  "Baseline": "14f4aa9",
+  "Toolchain": "go1.27.1-X:simd",
+  "Procs": 16,
+  "Samples": [
+    {
+      "Case": "jfk-w8",
+      "Pair": 0,
+      "Variant": 0,
+      "NS": 70101959,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 0,
+      "Variant": 1,
+      "NS": 65520875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 1,
+      "Variant": 1,
+      "NS": 62467792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 1,
+      "Variant": 0,
+      "NS": 68246584,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 2,
+      "Variant": 0,
+      "NS": 63778291,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 2,
+      "Variant": 1,
+      "NS": 61782084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 3,
+      "Variant": 1,
+      "NS": 63817708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 3,
+      "Variant": 0,
+      "NS": 70367041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 4,
+      "Variant": 0,
+      "NS": 68374000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 4,
+      "Variant": 1,
+      "NS": 63987250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 5,
+      "Variant": 1,
+      "NS": 65693500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 5,
+      "Variant": 0,
+      "NS": 70549042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 6,
+      "Variant": 0,
+      "NS": 77218958,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 6,
+      "Variant": 1,
+      "NS": 62414916,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 7,
+      "Variant": 1,
+      "NS": 62293042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 7,
+      "Variant": 0,
+      "NS": 67687959,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 8,
+      "Variant": 0,
+      "NS": 70916625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 8,
+      "Variant": 1,
+      "NS": 62995792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 9,
+      "Variant": 1,
+      "NS": 61826000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 9,
+      "Variant": 0,
+      "NS": 67379000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 10,
+      "Variant": 0,
+      "NS": 72713875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 10,
+      "Variant": 1,
+      "NS": 67470833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 11,
+      "Variant": 1,
+      "NS": 62959167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 11,
+      "Variant": 0,
+      "NS": 68545042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 12,
+      "Variant": 0,
+      "NS": 69005334,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 12,
+      "Variant": 1,
+      "NS": 63259292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 13,
+      "Variant": 1,
+      "NS": 63652833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 13,
+      "Variant": 0,
+      "NS": 71263083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 14,
+      "Variant": 0,
+      "NS": 68072250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 14,
+      "Variant": 1,
+      "NS": 66800125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 15,
+      "Variant": 1,
+      "NS": 62596084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 15,
+      "Variant": 0,
+      "NS": 69191334,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 16,
+      "Variant": 0,
+      "NS": 70874875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 16,
+      "Variant": 1,
+      "NS": 85044084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 17,
+      "Variant": 1,
+      "NS": 63696875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 17,
+      "Variant": 0,
+      "NS": 67270083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 18,
+      "Variant": 0,
+      "NS": 68117292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 18,
+      "Variant": 1,
+      "NS": 63612083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 19,
+      "Variant": 1,
+      "NS": 63852291,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 19,
+      "Variant": 0,
+      "NS": 71020125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 20,
+      "Variant": 0,
+      "NS": 69854875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 20,
+      "Variant": 1,
+      "NS": 68230875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 21,
+      "Variant": 1,
+      "NS": 62453708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 21,
+      "Variant": 0,
+      "NS": 67247250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 22,
+      "Variant": 0,
+      "NS": 78014458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 22,
+      "Variant": 1,
+      "NS": 63367833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 23,
+      "Variant": 1,
+      "NS": 67814083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 23,
+      "Variant": 0,
+      "NS": 68504959,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 24,
+      "Variant": 0,
+      "NS": 70060917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 24,
+      "Variant": 1,
+      "NS": 65470958,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 25,
+      "Variant": 1,
+      "NS": 62658750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 25,
+      "Variant": 0,
+      "NS": 66979333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 26,
+      "Variant": 0,
+      "NS": 67009250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 26,
+      "Variant": 1,
+      "NS": 68095458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 27,
+      "Variant": 1,
+      "NS": 66725666,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 27,
+      "Variant": 0,
+      "NS": 72934208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 28,
+      "Variant": 0,
+      "NS": 73956375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 28,
+      "Variant": 1,
+      "NS": 71251166,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 29,
+      "Variant": 1,
+      "NS": 68404250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 29,
+      "Variant": 0,
+      "NS": 73599833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 30,
+      "Variant": 0,
+      "NS": 86897708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 30,
+      "Variant": 1,
+      "NS": 81292708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 31,
+      "Variant": 1,
+      "NS": 81627750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 31,
+      "Variant": 0,
+      "NS": 77141042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 32,
+      "Variant": 0,
+      "NS": 75143750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 32,
+      "Variant": 1,
+      "NS": 68139875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 33,
+      "Variant": 1,
+      "NS": 69363292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 33,
+      "Variant": 0,
+      "NS": 74873917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 34,
+      "Variant": 0,
+      "NS": 102533875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 34,
+      "Variant": 1,
+      "NS": 68442291,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 35,
+      "Variant": 1,
+      "NS": 65698167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 35,
+      "Variant": 0,
+      "NS": 69994333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 36,
+      "Variant": 0,
+      "NS": 69877500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 36,
+      "Variant": 1,
+      "NS": 65347209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 37,
+      "Variant": 1,
+      "NS": 63281667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 37,
+      "Variant": 0,
+      "NS": 68934375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 38,
+      "Variant": 0,
+      "NS": 68997000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 38,
+      "Variant": 1,
+      "NS": 65257667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 39,
+      "Variant": 1,
+      "NS": 66765916,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 39,
+      "Variant": 0,
+      "NS": 72866792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 40,
+      "Variant": 0,
+      "NS": 73247167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 40,
+      "Variant": 1,
+      "NS": 67515000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 41,
+      "Variant": 1,
+      "NS": 64487917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 41,
+      "Variant": 0,
+      "NS": 71406209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 42,
+      "Variant": 0,
+      "NS": 69461458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 42,
+      "Variant": 1,
+      "NS": 63335416,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 43,
+      "Variant": 1,
+      "NS": 67457250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 43,
+      "Variant": 0,
+      "NS": 70440500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 44,
+      "Variant": 0,
+      "NS": 67844292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 44,
+      "Variant": 1,
+      "NS": 63070000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 45,
+      "Variant": 1,
+      "NS": 63646583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 45,
+      "Variant": 0,
+      "NS": 68809000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 46,
+      "Variant": 0,
+      "NS": 68070333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 46,
+      "Variant": 1,
+      "NS": 62526958,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 47,
+      "Variant": 1,
+      "NS": 63377250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 47,
+      "Variant": 0,
+      "NS": 69995375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 48,
+      "Variant": 0,
+      "NS": 70662875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 48,
+      "Variant": 1,
+      "NS": 64213750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 49,
+      "Variant": 1,
+      "NS": 63873708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 49,
+      "Variant": 0,
+      "NS": 66960250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 50,
+      "Variant": 0,
+      "NS": 66296667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 50,
+      "Variant": 1,
+      "NS": 62199708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 51,
+      "Variant": 1,
+      "NS": 64093417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 51,
+      "Variant": 0,
+      "NS": 71717333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 52,
+      "Variant": 0,
+      "NS": 70902167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 52,
+      "Variant": 1,
+      "NS": 64780791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 53,
+      "Variant": 1,
+      "NS": 65893292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 53,
+      "Variant": 0,
+      "NS": 74352834,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 54,
+      "Variant": 0,
+      "NS": 68636959,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 54,
+      "Variant": 1,
+      "NS": 64878000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 55,
+      "Variant": 1,
+      "NS": 65902875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 55,
+      "Variant": 0,
+      "NS": 72021375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 56,
+      "Variant": 0,
+      "NS": 77221875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 56,
+      "Variant": 1,
+      "NS": 72002833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 57,
+      "Variant": 1,
+      "NS": 65037125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 57,
+      "Variant": 0,
+      "NS": 69933750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 58,
+      "Variant": 0,
+      "NS": 67918916,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 58,
+      "Variant": 1,
+      "NS": 63511709,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 59,
+      "Variant": 1,
+      "NS": 65428167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 59,
+      "Variant": 0,
+      "NS": 72938292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 60,
+      "Variant": 0,
+      "NS": 69423000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 60,
+      "Variant": 1,
+      "NS": 63243667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 61,
+      "Variant": 1,
+      "NS": 63756875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 61,
+      "Variant": 0,
+      "NS": 69257083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 62,
+      "Variant": 0,
+      "NS": 70892416,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 62,
+      "Variant": 1,
+      "NS": 65633333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 63,
+      "Variant": 1,
+      "NS": 63784416,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w8",
+      "Pair": 63,
+      "Variant": 0,
+      "NS": 71388375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 0,
+      "Variant": 0,
+      "NS": 208844791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 0,
+      "Variant": 1,
+      "NS": 198640083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 1,
+      "Variant": 1,
+      "NS": 179815208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 1,
+      "Variant": 0,
+      "NS": 222563208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 2,
+      "Variant": 0,
+      "NS": 226443292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 2,
+      "Variant": 1,
+      "NS": 190362625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 3,
+      "Variant": 1,
+      "NS": 214431084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 3,
+      "Variant": 0,
+      "NS": 215750125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 4,
+      "Variant": 0,
+      "NS": 203749792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 4,
+      "Variant": 1,
+      "NS": 189541375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 5,
+      "Variant": 1,
+      "NS": 182751250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 5,
+      "Variant": 0,
+      "NS": 211983708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 6,
+      "Variant": 0,
+      "NS": 212692209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 6,
+      "Variant": 1,
+      "NS": 175564000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 7,
+      "Variant": 1,
+      "NS": 175909500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 7,
+      "Variant": 0,
+      "NS": 208891541,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 8,
+      "Variant": 0,
+      "NS": 198563167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 8,
+      "Variant": 1,
+      "NS": 178510292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 9,
+      "Variant": 1,
+      "NS": 183386875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 9,
+      "Variant": 0,
+      "NS": 205887625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 10,
+      "Variant": 0,
+      "NS": 204727708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 10,
+      "Variant": 1,
+      "NS": 182715375,
+      "Allocs": 4,
+      "Bytes": 240
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 11,
+      "Variant": 1,
+      "NS": 175042250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 11,
+      "Variant": 0,
+      "NS": 201750833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 12,
+      "Variant": 0,
+      "NS": 202773875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 12,
+      "Variant": 1,
+      "NS": 179093583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 13,
+      "Variant": 1,
+      "NS": 173312750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 13,
+      "Variant": 0,
+      "NS": 198043125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 14,
+      "Variant": 0,
+      "NS": 203865417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 14,
+      "Variant": 1,
+      "NS": 176429500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 15,
+      "Variant": 1,
+      "NS": 184801583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 15,
+      "Variant": 0,
+      "NS": 222466375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 16,
+      "Variant": 0,
+      "NS": 209000125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 16,
+      "Variant": 1,
+      "NS": 206415750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 17,
+      "Variant": 1,
+      "NS": 182751500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 17,
+      "Variant": 0,
+      "NS": 204662583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 18,
+      "Variant": 0,
+      "NS": 200401459,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 18,
+      "Variant": 1,
+      "NS": 181467500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 19,
+      "Variant": 1,
+      "NS": 178226000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 19,
+      "Variant": 0,
+      "NS": 207110459,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 20,
+      "Variant": 0,
+      "NS": 205862041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 20,
+      "Variant": 1,
+      "NS": 190186666,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 21,
+      "Variant": 1,
+      "NS": 185864500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 21,
+      "Variant": 0,
+      "NS": 207913334,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 22,
+      "Variant": 0,
+      "NS": 205003500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 22,
+      "Variant": 1,
+      "NS": 175405583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 23,
+      "Variant": 1,
+      "NS": 179667791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 23,
+      "Variant": 0,
+      "NS": 215446042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 24,
+      "Variant": 0,
+      "NS": 206907084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 24,
+      "Variant": 1,
+      "NS": 181454833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 25,
+      "Variant": 1,
+      "NS": 184557584,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 25,
+      "Variant": 0,
+      "NS": 214417834,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 26,
+      "Variant": 0,
+      "NS": 213447125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 26,
+      "Variant": 1,
+      "NS": 182694042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 27,
+      "Variant": 1,
+      "NS": 180997041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 27,
+      "Variant": 0,
+      "NS": 211690542,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 28,
+      "Variant": 0,
+      "NS": 213323083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 28,
+      "Variant": 1,
+      "NS": 181578458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 29,
+      "Variant": 1,
+      "NS": 177943333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 29,
+      "Variant": 0,
+      "NS": 202763000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 30,
+      "Variant": 0,
+      "NS": 204587417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 30,
+      "Variant": 1,
+      "NS": 180723167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 31,
+      "Variant": 1,
+      "NS": 188719041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "long-w8",
+      "Pair": 31,
+      "Variant": 0,
+      "NS": 210179833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 0,
+      "Variant": 0,
+      "NS": 72365250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 0,
+      "Variant": 1,
+      "NS": 69777000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 1,
+      "Variant": 1,
+      "NS": 70318125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 1,
+      "Variant": 0,
+      "NS": 70799167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 2,
+      "Variant": 0,
+      "NS": 69744291,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 2,
+      "Variant": 1,
+      "NS": 70113250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 3,
+      "Variant": 1,
+      "NS": 68397625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 3,
+      "Variant": 0,
+      "NS": 69501958,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 4,
+      "Variant": 0,
+      "NS": 68738750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 4,
+      "Variant": 1,
+      "NS": 70083167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 5,
+      "Variant": 1,
+      "NS": 69492584,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 5,
+      "Variant": 0,
+      "NS": 73372416,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 6,
+      "Variant": 0,
+      "NS": 69531208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 6,
+      "Variant": 1,
+      "NS": 70064167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 7,
+      "Variant": 1,
+      "NS": 69278250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 7,
+      "Variant": 0,
+      "NS": 71294958,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 8,
+      "Variant": 0,
+      "NS": 73656125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 8,
+      "Variant": 1,
+      "NS": 67524125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 9,
+      "Variant": 1,
+      "NS": 71424625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 9,
+      "Variant": 0,
+      "NS": 70901917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 10,
+      "Variant": 0,
+      "NS": 70197084,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 10,
+      "Variant": 1,
+      "NS": 70793292,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 11,
+      "Variant": 1,
+      "NS": 68565584,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 11,
+      "Variant": 0,
+      "NS": 73901042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 12,
+      "Variant": 0,
+      "NS": 71042250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 12,
+      "Variant": 1,
+      "NS": 69452500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 13,
+      "Variant": 1,
+      "NS": 68053375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 13,
+      "Variant": 0,
+      "NS": 70882833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 14,
+      "Variant": 0,
+      "NS": 71699458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 14,
+      "Variant": 1,
+      "NS": 71218167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 15,
+      "Variant": 1,
+      "NS": 69925625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 15,
+      "Variant": 0,
+      "NS": 75196875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 16,
+      "Variant": 0,
+      "NS": 73175041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 16,
+      "Variant": 1,
+      "NS": 70111791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 17,
+      "Variant": 1,
+      "NS": 71637417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 17,
+      "Variant": 0,
+      "NS": 90147917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 18,
+      "Variant": 0,
+      "NS": 71953083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 18,
+      "Variant": 1,
+      "NS": 70596041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 19,
+      "Variant": 1,
+      "NS": 69774792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 19,
+      "Variant": 0,
+      "NS": 72019792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 20,
+      "Variant": 0,
+      "NS": 70949458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 20,
+      "Variant": 1,
+      "NS": 69260208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 21,
+      "Variant": 1,
+      "NS": 69634333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 21,
+      "Variant": 0,
+      "NS": 76909750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 22,
+      "Variant": 0,
+      "NS": 73328083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 22,
+      "Variant": 1,
+      "NS": 70399959,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 23,
+      "Variant": 1,
+      "NS": 68325083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w2",
+      "Pair": 23,
+      "Variant": 0,
+      "NS": 69832875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 0,
+      "Variant": 0,
+      "NS": 72396625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 0,
+      "Variant": 1,
+      "NS": 67993167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 1,
+      "Variant": 1,
+      "NS": 69087334,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 1,
+      "Variant": 0,
+      "NS": 72407625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 2,
+      "Variant": 0,
+      "NS": 71098042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 2,
+      "Variant": 1,
+      "NS": 69847666,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 3,
+      "Variant": 1,
+      "NS": 69238209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 3,
+      "Variant": 0,
+      "NS": 72336458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 4,
+      "Variant": 0,
+      "NS": 70056708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 4,
+      "Variant": 1,
+      "NS": 71884167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 5,
+      "Variant": 1,
+      "NS": 69908417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 5,
+      "Variant": 0,
+      "NS": 71191875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 6,
+      "Variant": 0,
+      "NS": 74469875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 6,
+      "Variant": 1,
+      "NS": 71844459,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 7,
+      "Variant": 1,
+      "NS": 68541916,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 7,
+      "Variant": 0,
+      "NS": 68845375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 8,
+      "Variant": 0,
+      "NS": 74964792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 8,
+      "Variant": 1,
+      "NS": 73163500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 9,
+      "Variant": 1,
+      "NS": 67072166,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 9,
+      "Variant": 0,
+      "NS": 73572917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 10,
+      "Variant": 0,
+      "NS": 75835667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 10,
+      "Variant": 1,
+      "NS": 70362542,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 11,
+      "Variant": 1,
+      "NS": 65512000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 11,
+      "Variant": 0,
+      "NS": 70081375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 12,
+      "Variant": 0,
+      "NS": 70694334,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 12,
+      "Variant": 1,
+      "NS": 67043667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 13,
+      "Variant": 1,
+      "NS": 72321750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 13,
+      "Variant": 0,
+      "NS": 78062583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 14,
+      "Variant": 0,
+      "NS": 81966791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 14,
+      "Variant": 1,
+      "NS": 72461333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 15,
+      "Variant": 1,
+      "NS": 82977917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 15,
+      "Variant": 0,
+      "NS": 81045250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 16,
+      "Variant": 0,
+      "NS": 78397125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 16,
+      "Variant": 1,
+      "NS": 87191792,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 17,
+      "Variant": 1,
+      "NS": 74724000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 17,
+      "Variant": 0,
+      "NS": 72588500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 18,
+      "Variant": 0,
+      "NS": 69815542,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 18,
+      "Variant": 1,
+      "NS": 72664041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 19,
+      "Variant": 1,
+      "NS": 68945417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 19,
+      "Variant": 0,
+      "NS": 76541500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 20,
+      "Variant": 0,
+      "NS": 72949417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 20,
+      "Variant": 1,
+      "NS": 77948041,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 21,
+      "Variant": 1,
+      "NS": 73959458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 21,
+      "Variant": 0,
+      "NS": 86475750,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 22,
+      "Variant": 0,
+      "NS": 75093708,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 22,
+      "Variant": 1,
+      "NS": 68011584,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 23,
+      "Variant": 1,
+      "NS": 70571209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w4",
+      "Pair": 23,
+      "Variant": 0,
+      "NS": 71141375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 0,
+      "Variant": 0,
+      "NS": 64564917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 0,
+      "Variant": 1,
+      "NS": 59474791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 1,
+      "Variant": 1,
+      "NS": 59258875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 1,
+      "Variant": 0,
+      "NS": 66118209,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 2,
+      "Variant": 0,
+      "NS": 68155500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 2,
+      "Variant": 1,
+      "NS": 60541875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 3,
+      "Variant": 1,
+      "NS": 66310333,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 3,
+      "Variant": 0,
+      "NS": 66609667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 4,
+      "Variant": 0,
+      "NS": 67625000,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 4,
+      "Variant": 1,
+      "NS": 61827791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 5,
+      "Variant": 1,
+      "NS": 61884500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 5,
+      "Variant": 0,
+      "NS": 66326667,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 6,
+      "Variant": 0,
+      "NS": 70368833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 6,
+      "Variant": 1,
+      "NS": 60672791,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 7,
+      "Variant": 1,
+      "NS": 63359417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 7,
+      "Variant": 0,
+      "NS": 68099625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 8,
+      "Variant": 0,
+      "NS": 65590083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 8,
+      "Variant": 1,
+      "NS": 60724917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 9,
+      "Variant": 1,
+      "NS": 61755083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 9,
+      "Variant": 0,
+      "NS": 68514666,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 10,
+      "Variant": 0,
+      "NS": 68290167,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 10,
+      "Variant": 1,
+      "NS": 62909083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 11,
+      "Variant": 1,
+      "NS": 62467583,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 11,
+      "Variant": 0,
+      "NS": 70306834,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 12,
+      "Variant": 0,
+      "NS": 73560042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 12,
+      "Variant": 1,
+      "NS": 67350666,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 13,
+      "Variant": 1,
+      "NS": 93712083,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 13,
+      "Variant": 0,
+      "NS": 108082875,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 14,
+      "Variant": 0,
+      "NS": 90899625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 14,
+      "Variant": 1,
+      "NS": 81506208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 15,
+      "Variant": 1,
+      "NS": 91567917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 15,
+      "Variant": 0,
+      "NS": 96103500,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 16,
+      "Variant": 0,
+      "NS": 85856916,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 16,
+      "Variant": 1,
+      "NS": 75254416,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 17,
+      "Variant": 1,
+      "NS": 68073625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 17,
+      "Variant": 0,
+      "NS": 78901250,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 18,
+      "Variant": 0,
+      "NS": 106363375,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 18,
+      "Variant": 1,
+      "NS": 76195291,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 19,
+      "Variant": 1,
+      "NS": 75186458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 19,
+      "Variant": 0,
+      "NS": 79980042,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 20,
+      "Variant": 0,
+      "NS": 95054917,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 20,
+      "Variant": 1,
+      "NS": 82393833,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 21,
+      "Variant": 1,
+      "NS": 72081417,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 21,
+      "Variant": 0,
+      "NS": 86132458,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 22,
+      "Variant": 0,
+      "NS": 78875208,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 22,
+      "Variant": 1,
+      "NS": 73512625,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 23,
+      "Variant": 1,
+      "NS": 73254125,
+      "Allocs": 0,
+      "Bytes": 0
+    },
+    {
+      "Case": "jfk-w16",
+      "Pair": 23,
+      "Variant": 0,
+      "NS": 87536792,
+      "Allocs": 0,
+      "Bytes": 0
+    }
+  ],
+  "State": {
+    "jfk-w16": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "jfk-w2": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "jfk-w4": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "jfk-w8": "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1",
+    "long-w8": "901551e1412f14751082fd03d09138e1a178b49d102970e4a8ffc21e7f4e63b8"
+  },
+  "BinarySHA256": "98c98c12e5a2c8c2ee41427f72a27c165afb624c062a9f99654f45ff03c10081",
+  "PatchSHA256": "006479e3c4660aa7f8061c475167c9a36e65462eab75eb27f7f5de2de4c66221",
+  "Hardware": "Apple M4 Max",
+  "GOEXPERIMENT": "simd",
+  "CGO_ENABLED": "0",
+  "Method": "Alternating paired variants; full public TranscribeInto; per-call exact transcript and numeric-state comparison outside timing; all samples retained. Variant 0 original, 1 serial small packed heads."
+}

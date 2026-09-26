@@ -233,12 +233,15 @@ func answersAndStops(t *testing.T, asr fakeTranscriber, turns speech.TurnDetecto
 	// Speech over the answer, once it is under way, interrupts it: its
 	// audio stops.
 	run(t, c, nil, never, resumeWindow+200*time.Millisecond)
-	if !run(t, c, clip, notSpeaking, 2*time.Second) {
+	if !run(t, c, clip, notSpeaking, 3*time.Second) {
 		t.Fatal("the agent kept speaking over the user")
 	}
-	// Let the responder record the interruption.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the responder to record the cut reply, rather than for a
+	// fixed time a loaded runner may not keep.
 	said := rec.said()
+	for end := time.Now().Add(3 * time.Second); len(said) < 2 && time.Now().Before(end); said = rec.said() {
+		time.Sleep(10 * time.Millisecond)
+	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if len(said) < 2 || said[0] != "hello gopher" || !strings.HasSuffix(said[1], "…") {
@@ -269,13 +272,10 @@ func TestCascadeJudgesTalkOverAsWordsArrive(t *testing.T) {
 		t.Fatal("the agent never spoke")
 	}
 	run(t, c, nil, never, resumeWindow+200*time.Millisecond)
-	began := time.Now()
-	if !run(t, c, clip, notSpeaking, 2*time.Second) {
+	if !run(t, c, clip, notSpeaking, 3*time.Second) {
 		t.Fatal("the agent kept speaking over the user")
 	}
-	if took := time.Since(began); took >= overlapLong {
-		t.Fatalf("the agent stopped %v into the talk over it, as if no words had been made out", took)
-	}
+	// How much talk it took, not how long: a loaded runner stretches time.
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if len(rec.interrupted) != 1 || rec.interrupted[0] < overlapPeek+overlapEvery || rec.interrupted[0] >= overlapLong {
@@ -713,3 +713,38 @@ func TestCascadeCaptionsFollowTheVoice(t *testing.T) {
 }
 
 func (s *fakeSession) AddCalls(text string, _ []chat.Call) error { return s.Add(chat.Assistant, text) }
+
+// interrupt cancels the reply before it empties playback: a tick can find
+// playback empty without having seen the cancellation, and the reply is
+// cut all the same, never heard to its end.
+func TestPlaybackDrainKeepsTheCut(t *testing.T) {
+	for _, cut := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		c := &Cascade{play: newRing[float32](1), cancel: cancel, tick: time.NewTicker(time.Millisecond)}
+		c.play.write([]float32{0.5})
+		ticks := 0
+		got := c.waitPlayback(ctx, func() {
+			ticks++
+			if cut {
+				c.interrupt()
+			} else {
+				var heard [1]float32
+				c.play.read(heard[:])
+			}
+		})
+		c.tick.Stop()
+		cancel()
+		if ticks != 1 || got != cut {
+			t.Fatalf("cut %v: %d ticks, reported cut %v", cut, ticks, got)
+		}
+	}
+	// Cut before the wait begins, with playback already emptied.
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Cascade{play: newRing[float32](1), cancel: cancel, tick: time.NewTicker(time.Millisecond)}
+	defer c.tick.Stop()
+	c.play.write([]float32{0.5})
+	c.interrupt()
+	if !c.waitPlayback(ctx, func() { t.Fatal("a caption after the cut") }) {
+		t.Fatal("a cut reply reported heard")
+	}
+}

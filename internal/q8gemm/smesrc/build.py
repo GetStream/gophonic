@@ -58,6 +58,13 @@ out += args([("w", "R0"), ("kGroups", "R1"), ("panels", "R2"), ("activation", "R
              ("dst", "R4"), ("cols", "R5"), ("colScales", "R16"), ("rowScale", "R19")], 64)
 out += [words("row64h.S"), "\tMOVD\tR0, retries+64(FP)\n", "\tRET\n\n"]
 out += [
+    "// func smeRows2F16(w *uint16, kGroups, panels int, activation *uint16, dst *float32, cols, strideBytes int, colScales, rowScales *float32) (retries int)\n",
+    "TEXT ·smeRows2F16(SB), NOSPLIT, $0-80\n",
+]
+out += args([("w", "R0"), ("kGroups", "R1"), ("panels", "R2"), ("activation", "R3"),
+             ("dst", "R4"), ("cols", "R5"), ("strideBytes", "R6"), ("colScales", "R16"), ("rowScales", "R19")], 72)
+out += [words("row2x64h.S"), "\tMOVD\tR0, retries+72(FP)\n", "\tRET\n\n"]
+out += [
     "// func smeVectorBytes() int\n",
     "TEXT ·smeVectorBytes(SB), NOSPLIT, $0-8\n",
     "\tWORD\t$0x04bf5820\t// rdsvl x0, #1\n",
@@ -78,6 +85,14 @@ neon = [
     "\tMOVD\tpairs+16(FP), R2\n",
     "\tFMOVS\tscale+24(FP), F0\n",
     words("packpairs.S"),
+    "\tRET\n\n",
+    "// func packContiguousF16NEON(dst *uint16, src *float32, n int, scale float32)\n",
+    "TEXT ·packContiguousF16NEON(SB), NOSPLIT, $0-28\n",
+    "\tMOVD\tdst+0(FP), R0\n",
+    "\tMOVD\tsrc+8(FP), R1\n",
+    "\tMOVD\tn+16(FP), R2\n",
+    "\tFMOVS\tscale+24(FP), F0\n",
+    words("packrow.S"),
     "\tRET\n\n",
     "// func packQuadsNEON(dst *int8, src *float32, quads int, scale float32)\n",
     "TEXT ·packQuadsNEON(SB), NOSPLIT, $0-28\n",

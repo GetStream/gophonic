@@ -22,7 +22,7 @@ var (
 // Transcriber owns all mutable state for official Whisper tiny.en English
 // transcription. A Model can be shared; each concurrent caller needs its own
 // Transcriber. Construction allocates scratch and tokenizer tables. Warm calls
-// write into caller-owned text buffers without heap allocations.
+// reuse scratch and write into caller-owned text buffers.
 type Transcriber struct {
 	model               *Model
 	frontend            *FeatureWorkspace

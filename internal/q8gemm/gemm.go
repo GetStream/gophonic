@@ -5,9 +5,11 @@ package q8gemm
 
 import "math"
 
-// Workspace owns one 16-row activation tile in FP16, laid out [K/2][16][2],
-// plus one exact power-of-two scale per row. Each row is scaled so its largest
-// magnitude lies in [2^14, 2^15) before rounding to FP16, which keeps every
+// Workspace owns storage for one 16-row activation tile in FP16, plus one
+// exact power-of-two scale per row. Prepare uses the layout [K/2][16][2];
+// PrepareRowsF16 uses contiguous rows for exact batched row products. Each row
+// is scaled so its largest magnitude lies in [2^14, 2^15) before rounding to
+// FP16, which keeps every
 // value finite and gives each element FP16's 11-bit relative precision
 // (finer than the BF16 activations of the reference Qwen3 runtime). Products
 // and sums are accumulated in FP32; the row scale is removed exactly at the
@@ -16,13 +18,15 @@ import "math"
 // Prepare, SetRowScale, and PackRange fill a tile; afterwards any number of
 // goroutines may call MulPanels concurrently for disjoint panel ranges.
 type Workspace struct {
-	activation []uint16
-	row        []uint16                // contiguous copy of a single-row tile, for the row kernel
-	act32      []float32               // [K][16] FP32 copy of activation, only without SME
-	scratch    *Scratch                // MulInto's own scratch, only without SME
-	rowScale   [ActivationRows]float32 // multiplies inputs before FP16 rounding
-	rowInverse [ActivationRows]float32 // multiplies outputs
-	k, rows    int
+	activation  []uint16
+	row         []uint16                // contiguous copy of a single-row tile, for the row kernel
+	act32       []float32               // [K][16] FP32 copy of activation, only without SME
+	scratch     *Scratch                // MulInto's own scratch, only without SME
+	rowScale    [ActivationRows]float32 // multiplies inputs before FP16 rounding
+	rowInverse  [ActivationRows]float32 // multiplies outputs
+	k, rows     int
+	compactRow  bool // only contiguous FP16 row is packed; requires the F16 SME row kernel
+	compactRows bool // activation holds row-major FP16, preserving the one-row reduction
 }
 
 // Scratch holds one goroutine's weight-decoding buffer for the portable path
@@ -78,10 +82,42 @@ func (ws *Workspace) Prepare(rows, k int) error {
 	if ws == nil || rows < 0 || rows > ActivationRows || k < 0 || len(ws.activation) < ((k+1)/2)*2*ActivationRows {
 		return ErrDimensions
 	}
-	ws.k, ws.rows = k, rows
+	ws.k, ws.rows, ws.compactRow, ws.compactRows = k, rows, false, false
 	for i := range ws.rowScale {
 		ws.rowScale[i], ws.rowInverse[i] = 1, 1
 	}
+	return nil
+}
+
+// PrepareRowF16 prepares a compact one-row tile for FP16 weights on SME.
+// It omits the unused fifteen activation rows and their duplicate layout.
+// Subsequent MulPanels calls must use F16 weights with K divisible by sixteen.
+// Prepare restores the general tile layout for the next operation.
+func (ws *Workspace) PrepareRowF16(k int) error {
+	if !usingSME() || k == 0 || k%16 != 0 {
+		return ErrDimensions
+	}
+	if err := ws.Prepare(1, k); err != nil {
+		return err
+	}
+	ws.compactRow = true
+	return nil
+}
+
+// PrepareRowsF16 prepares up to sixteen contiguous FP16 rows for exact
+// batched row multiplication on SME. Each row uses the same eight partial
+// sums as PrepareRowF16; it does not use the general tile reduction. The
+// existing activation storage is reused, without allocating another buffer.
+// Subsequent MulPanels calls require F16 weights with positive K divisible
+// by sixteen. Prepare restores the general layout for the next operation.
+func (ws *Workspace) PrepareRowsF16(rows, k int) error {
+	if !usingSME() || rows < 1 || rows > ActivationRows || k <= 0 || k%16 != 0 {
+		return ErrDimensions
+	}
+	if err := ws.Prepare(rows, k); err != nil {
+		return err
+	}
+	ws.compactRow, ws.compactRows = rows == 1, rows > 1
 	return nil
 }
 
@@ -122,6 +158,25 @@ func (ws *Workspace) PackRange(x []float32, stride, k0, k1 int) error {
 		return ErrDimensions
 	}
 	rows := ws.rows
+	if ws.compactRow {
+		done := packContiguousRow(ws.row[k0:k1], x[k0:k1], ws.rowScale[0])
+		for i := k0 + done; i < k1; i++ {
+			ws.row[i] = f32ToF16(x[i] * ws.rowScale[0])
+		}
+		return nil
+	}
+	if ws.compactRows {
+		for row := range rows {
+			dst := ws.activation[row*ws.k+k0 : row*ws.k+k1]
+			src := x[row*stride+k0 : row*stride+k1]
+			scale := ws.rowScale[row]
+			done := packContiguousRow(dst, src, scale)
+			for i := done; i < len(dst); i++ {
+				dst[i] = f32ToF16(src[i] * scale)
+			}
+		}
+		return nil
+	}
 	p0, p1 := k0/2, (k1+1)/2
 	// Rows are converted independently; each row's pairs sit 64 bytes apart.
 	for row := range rows {
@@ -180,6 +235,9 @@ func MulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int,
 		return ErrDimensions
 	}
 	rows := ws.rows
+	if (ws.compactRow || ws.compactRows) && (w.h == nil || w.k%16 != 0 || !usingSME()) {
+		return ErrDimensions
+	}
 	if rows == 0 || p0 == p1 {
 		return nil
 	}
@@ -191,6 +249,12 @@ func MulPanels(dst []float32, stride int, ws *Workspace, w *Weights, p0, p1 int,
 			clear(dst[r*stride+p0*OutputPanel : r*stride+min(p1*OutputPanel, w.n)])
 		}
 		return nil
+	}
+	if ws.compactRows {
+		if mulRowsF16SME(dst, stride, ws, w, p0, p1) {
+			return nil
+		}
+		return ErrDimensions
 	}
 	if rows == 1 && w.h != nil && w.k%16 == 0 && mulRowF16SME(dst, ws, w, p0, p1) {
 		return nil

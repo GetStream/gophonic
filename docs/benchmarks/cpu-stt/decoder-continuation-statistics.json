@@ -1,0 +1,180 @@
+[
+  {
+    "source": "docs/benchmarks/cpu-stt/decoder-continuation-confirmation.json",
+    "pairs": 24,
+    "bootstrap_draws": 30000,
+    "seed": 250925,
+    "method": "paired log ratios, percentile 95% CI; all samples retained",
+    "results": [
+      {
+        "scope": "whole_trace",
+        "ratio": 0.9935083262402874,
+        "ratio_ci95": [
+          0.8639254939937507,
+          1.2060827679618968
+        ],
+        "recompute_median_ms": 5198.547875,
+        "reuse_median_ms": 4427.699792
+      },
+      {
+        "scope": "frames_400",
+        "ratio": 1.1139924600142337,
+        "ratio_ci95": [
+          0.9394940850643868,
+          1.3916922163940402
+        ],
+        "recompute_median_ms": 342.676625,
+        "reuse_median_ms": 341.0004165
+      },
+      {
+        "scope": "frames_800",
+        "ratio": 1.1590200079281998,
+        "ratio_ci95": [
+          0.8908022967367468,
+          1.6469580831286357
+        ],
+        "recompute_median_ms": 397.370937,
+        "reuse_median_ms": 398.437333
+      },
+      {
+        "scope": "frames_1602",
+        "ratio": 1.2507668639222655,
+        "ratio_ci95": [
+          0.9876747462849645,
+          1.6723158417815172
+        ],
+        "recompute_median_ms": 786.3385,
+        "reuse_median_ms": 794.246104
+      },
+      {
+        "scope": "frames_1700",
+        "ratio": 0.8913895877227177,
+        "ratio_ci95": [
+          0.7308342850063305,
+          1.1646851014874051
+        ],
+        "recompute_median_ms": 776.487687,
+        "reuse_median_ms": 654.592771
+      },
+      {
+        "scope": "frames_2400",
+        "ratio": 0.8716801859051073,
+        "ratio_ci95": [
+          0.7450273521114258,
+          1.0057944127385965
+        ],
+        "recompute_median_ms": 945.354542,
+        "reuse_median_ms": 838.8916665
+      },
+      {
+        "scope": "frames_3202",
+        "ratio": 1.0207196676792094,
+        "ratio_ci95": [
+          0.8303561461501678,
+          1.3127698871139457
+        ],
+        "recompute_median_ms": 1172.922229,
+        "reuse_median_ms": 1050.9341045
+      },
+      {
+        "scope": "frames_3300",
+        "ratio": 0.48152310898607,
+        "ratio_ci95": [
+          0.4282652179964309,
+          0.5555795618389754
+        ],
+        "recompute_median_ms": 745.0309375,
+        "reuse_median_ms": 334.909271
+      }
+    ]
+  },
+  {
+    "source": "docs/benchmarks/cpu-stt/decoder-continuation-adjacent-confirmation.json",
+    "pairs": 24,
+    "bootstrap_draws": 30000,
+    "seed": 250925,
+    "method": "paired log ratios, percentile 95% CI; all samples retained",
+    "results": [
+      {
+        "scope": "whole_trace",
+        "ratio": 0.8827120690864417,
+        "ratio_ci95": [
+          0.8400046847068675,
+          0.9453573638500471
+        ],
+        "recompute_median_ms": 5217.198249,
+        "reuse_median_ms": 4322.3463735
+      },
+      {
+        "scope": "frames_400",
+        "ratio": 1.0318058275213329,
+        "ratio_ci95": [
+          0.9581042337276137,
+          1.1493112134839558
+        ],
+        "recompute_median_ms": 336.2798125,
+        "reuse_median_ms": 344.265542
+      },
+      {
+        "scope": "frames_800",
+        "ratio": 1.0612202328870741,
+        "ratio_ci95": [
+          0.9874057191219772,
+          1.1881945456316434
+        ],
+        "recompute_median_ms": 399.4872915,
+        "reuse_median_ms": 410.8406875
+      },
+      {
+        "scope": "frames_1602",
+        "ratio": 1.1214063726371322,
+        "ratio_ci95": [
+          0.9885863076771881,
+          1.3382556761747395
+        ],
+        "recompute_median_ms": 798.053646,
+        "reuse_median_ms": 795.6783335
+      },
+      {
+        "scope": "frames_1700",
+        "ratio": 0.7799578610856392,
+        "ratio_ci95": [
+          0.7022845998040775,
+          0.8318253056029288
+        ],
+        "recompute_median_ms": 785.6965,
+        "reuse_median_ms": 637.786312
+      },
+      {
+        "scope": "frames_2400",
+        "ratio": 0.8829081589047945,
+        "ratio_ci95": [
+          0.8274914879675925,
+          0.972078271409162
+        ],
+        "recompute_median_ms": 956.8173955,
+        "reuse_median_ms": 807.362229
+      },
+      {
+        "scope": "frames_3202",
+        "ratio": 0.8954892637458054,
+        "ratio_ci95": [
+          0.8447032646548027,
+          0.9556104830493194
+        ],
+        "recompute_median_ms": 1157.930417,
+        "reuse_median_ms": 1023.759812
+      },
+      {
+        "scope": "frames_3300",
+        "ratio": 0.5056074461367005,
+        "ratio_ci95": [
+          0.4395108658489786,
+          0.6116582993275184
+        ],
+        "recompute_median_ms": 737.116,
+        "reuse_median_ms": 322.055604
+      }
+    ]
+  }
+]

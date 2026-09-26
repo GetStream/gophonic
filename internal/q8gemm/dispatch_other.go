@@ -18,3 +18,5 @@ func mulPanelsI8SME([]float32, int, *WorkspaceI8, *WeightsI8, int, int) bool { r
 func mulRowI8SME([]float32, *WorkspaceI8, *WeightsI8, int, int) bool { return false }
 
 func mulRowF16SME([]float32, *Workspace, *Weights, int, int) bool { return false }
+
+func mulRowsF16SME([]float32, int, *Workspace, *Weights, int, int) bool { return false }

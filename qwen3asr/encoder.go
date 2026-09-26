@@ -401,19 +401,27 @@ func ensure(s []float32, n int) []float32 {
 // encode runs the encoder on channel-major [bins][frames] features and
 // writes [tokens][out] embeddings to dst, returning the token count.
 func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWorkspace) (int, error) {
+	return e.encodeSuffix(mel, frames, 0, dst, w)
+}
+
+// encodeSuffix skips complete, unchanged attention windows. The caller also
+// aligns the skipped token count to ActivationRows so every remaining row
+// uses the same tile position and final-tile kernel as a full encode.
+func (e *encoder) encodeSuffix(mel []float32, frames, skipFrames int, dst []float32, w *encoderWorkspace) (int, error) {
 	defer runtime.KeepAlive(e)
 	defer runtime.KeepAlive(w)
-	if frames <= 0 || len(mel) != e.freq[0]*frames {
+	if frames <= 0 || len(mel) != e.freq[0]*frames || skipFrames < 0 || skipFrames >= frames || skipFrames%e.prefixStep() != 0 {
 		return 0, errors.New("qwen3asr: feature shape does not match the encoder")
 	}
-	chunks := (frames + e.chunkFrames - 1) / e.chunkFrames
+	totalChunks := (frames + e.chunkFrames - 1) / e.chunkFrames
+	chunks := totalChunks - skipFrames/e.chunkFrames
 	span := e.chunkFrames // every chunk is padded to the longest
-	if chunks == 1 {
+	if totalChunks == 1 {
 		span = frames
 	}
 	t1, t2, t3 := convLen(span), convLen(convLen(span)), frameTokens(span)
 	f1, f2, f3 := e.freq[1], e.freq[2], e.freq[3]
-	n := e.tokens(frames)
+	n := e.tokens(frames) - e.tokens(skipFrames)
 	if len(dst) < n*e.out {
 		return 0, errors.New("qwen3asr: encoder output buffer too short")
 	}
@@ -423,7 +431,7 @@ func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWor
 	}
 	op := &w.op
 	for c := range chunks {
-		start := c * e.chunkFrames
+		start := skipFrames + c*e.chunkFrames
 		real := min(e.chunkFrames, frames-start)
 		*op = encoderRows{w: w, e: e, kind: rowsMelColumns, src: mel, frames: frames, start: start, real: real, width: f1, inTime: span}
 		if err := w.rows(t1 * f1); err != nil {
@@ -457,7 +465,7 @@ func (e *encoder) encode(mel []float32, frames int, dst []float32, w *encoderWor
 	// Keep each chunk's real frames, in place, and add their positions.
 	row := 0
 	for c := range chunks {
-		keep := frameTokens(min(e.chunkFrames, frames-c*e.chunkFrames))
+		keep := frameTokens(min(e.chunkFrames, frames-skipFrames-c*e.chunkFrames))
 		for t := range keep {
 			dstRow, srcRow := w.x[row*d:(row+1)*d], w.x[(c*t3+t)*d:(c*t3+t+1)*d]
 			pos := e.positions[t*d : (t+1)*d]

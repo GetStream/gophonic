@@ -1,0 +1,224 @@
+diff --git a/qwen3asr/transcriber.go b/qwen3asr/transcriber.go
+--- a/qwen3asr/transcriber.go
++++ b/qwen3asr/transcriber.go
+@@ -281,6 +281,7 @@
+ 
+ func (t *Transcriber) encodeContinuation(frames int, continuing bool) error {
+ 	defer runtime.KeepAlive(t)
++	continuing = continuing && !encoderPrefixDisabled.Load()
+ 	if t.genc != nil {
+ 		embeds, err := t.genc.encode(frames)
+ 		if err != nil {
+@@ -301,6 +302,7 @@
+ 	if kept > len(t.embeds) {
+ 		skip, kept = 0, 0
+ 	}
++	encoderPrefixReused.Store(int64(skip))
+ 	if cap(t.embeds) < n {
+ 		dst := make([]float32, n)
+ 		copy(dst, t.embeds[:kept])
+diff --git a/qwen3asr/encoder_prefix_experiment.go b/qwen3asr/encoder_prefix_experiment.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/encoder_prefix_experiment.go
+@@ -0,0 +1,6 @@
++package qwen3asr
++
++import "sync/atomic"
++
++var encoderPrefixDisabled atomic.Bool
++var encoderPrefixReused atomic.Int64
+diff --git a/qwen3asr/stream_combined_experiment_test.go b/qwen3asr/stream_combined_experiment_test.go
+new file mode 100644
+--- /dev/null
++++ b/qwen3asr/stream_combined_experiment_test.go
+@@ -0,0 +1,189 @@
++package qwen3asr
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"math"
++	"os"
++	"runtime"
++	"slices"
++	"strconv"
++	"testing"
++	"time"
++
++	"github.com/GetStream/gophonic/internal/qwen3lm"
++	"github.com/GetStream/gophonic/speech"
++)
++
++type combinedSample struct {
++	Pair    int     `json:"pair"`
++	Variant string  `json:"variant"`
++	NS      int64   `json:"ns"`
++	Steps   []int64 `json:"steps_ns"`
++}
++
++func TestCPUStreamCombinedExperiment(t *testing.T) {
++	path := os.Getenv("STT_COMBINED_OUTPUT")
++	if path == "" {
++		t.Skip("set STT_COMBINED_OUTPUT")
++	}
++	pairs := 2
++	if s := os.Getenv("STT_COMBINED_PAIRS"); s != "" {
++		var err error
++		pairs, err = strconv.Atoi(s)
++		if err != nil || pairs < 1 {
++			t.Fatal("invalid pairs")
++		}
++	}
++	m := loadModel(t, FormatF16)
++	tr, err := NewTranscriber(m, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tr.Close()
++	pcm, frames := cpuGrowingAudio(t, m.enc)
++	var prev, cur speech.Transcript
++	names := []string{"serial-full", "batch-full", "batch-prefix"}
++	var elapsed, skipped []int64
++	var expectedText [][]byte
++	var expectedLanguage, hashes []string
++	var groups [7][5]string
++	var allocs [3]float64
++	var reused []int64
++	var calls map[int]uint64
++	var samples []combinedSample
++	configure := func(variant int) {
++		qwen3lm.SetHeadBatchExperiment(variant == 0)
++		encoderPrefixDisabled.Store(variant != 2)
++	}
++	defer func() { configure(2) }()
++	run := func(capture, first bool) {
++		prev.Reset()
++		cur.Reset()
++		for step, f := range frames {
++			if capture && cap(tr.vlogits) > 0 {
++				clear(tr.vlogits[:cap(tr.vlogits)])
++			}
++			begin := time.Now()
++			if err := tr.Transcribe(context.Background(), pcm[:f*160], speech.Options{Partial: &prev}, &cur); err != nil {
++				t.Fatal(err)
++			}
++			elapsed[step] = time.Since(begin).Nanoseconds()
++			skipped[step] = encoderPrefixReused.Load()
++			if first {
++				expectedText[step] = slices.Clone(cur.Text)
++				expectedLanguage[step] = cur.Language
++			} else if !bytes.Equal(cur.Text, expectedText[step]) || cur.Language != expectedLanguage[step] {
++				t.Fatalf("step%d text/language changed: %q", step, cur.Text)
++			}
++			if capture {
++				h := sha256.New()
++				var bits [8]byte
++				add := func(values []float32) {
++					for _, v := range values {
++						binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++						h.Write(bits[:4])
++					}
++				}
++				add(tr.embeds)
++				add(tr.hidden)
++				add(tr.logits)
++				if len(tr.draft) > 0 {
++					add(tr.tail)
++					add(tr.vlogits[:cap(tr.vlogits)])
++				}
++				for _, id := range tr.gen {
++					binary.LittleEndian.PutUint64(bits[:], uint64(id))
++					h.Write(bits[:])
++				}
++				h.Write(cur.Text)
++				h.Write([]byte(cur.Language))
++				got := hex.EncodeToString(h.Sum(nil))
++				detail := [5]string{headHash(tr.embeds), headHash(tr.hidden), headHash(tr.logits), headHash(tr.tail), headHash(tr.vlogits[:cap(tr.vlogits)])}
++				if first {
++					groups[step] = detail
++				}
++				if first {
++					hashes[step] = got
++				} else if got != hashes[step] {
++					t.Fatalf("step%d state hash %s != %s; groups got=%v want=%v", step, got, hashes[step], detail, groups[step])
++				}
++			}
++			prev, cur = cur, prev
++		}
++	}
++	elapsed = make([]int64, len(frames))
++	skipped = make([]int64, len(frames))
++	expectedText = make([][]byte, len(frames))
++	expectedLanguage = make([]string, len(frames))
++	hashes = make([]string, len(frames))
++	started := time.Now().UTC().Format(time.RFC3339)
++	configure(0)
++	run(false, true) // Warm prompt-prefix state and final lane capacity before capturing.
++	run(true, true)
++	run(true, false) // Require the warmed baseline to reproduce itself first.
++	for variant := range names {
++		configure(variant)
++		run(true, false)
++		for range 2 {
++			run(false, false)
++		}
++		allocs[variant] = testing.AllocsPerRun(2, func() { run(false, false) })
++		if allocs[variant] != 0 {
++			t.Fatalf("%s allocs=%g", names[variant], allocs[variant])
++		}
++		t.Logf("%s exact, allocs=%g, reused_frames=%v", names[variant], allocs[variant], skipped)
++	}
++	configure(2)
++	run(true, false)
++	reused = slices.Clone(skipped)
++	calls = make(map[int]uint64)
++	for r, n := range qwen3lm.HeadBatchExperimentRows() {
++		if n > 0 {
++			calls[r] = n
++		}
++	}
++	for pair := range pairs {
++		// Counterbalanced rotations, including both order directions.
++		for order := range 3 {
++			variant := (pair + order) % 3
++			if pair%2 == 1 {
++				variant = (pair + 2 - order) % 3
++			}
++			configure(variant)
++			run(false, false)
++			var total int64
++			for _, n := range elapsed {
++				total += n
++			}
++			samples = append(samples, combinedSample{pair, names[variant], total, slices.Clone(elapsed)})
++		}
++		if pair%4 == 3 {
++			t.Logf("completed %d pairs", pair+1)
++		}
++	}
++	report := struct {
++		Baseline string           `json:"baseline"`
++		Go       string           `json:"go"`
++		Procs    int              `json:"gomaxprocs"`
++		Start    string           `json:"start_utc"`
++		End      string           `json:"end_utc"`
++		Frames   []int            `json:"frames"`
++		Hashes   []string         `json:"hashes"`
++		Reused   []int64          `json:"reused_frames"`
++		Calls    map[int]uint64   `json:"logits_rows_calls"`
++		Allocs   [3]float64       `json:"allocs"`
++		Samples  []combinedSample `json:"samples"`
++	}{"2086220ac9534e13450e8ead26afb84c3aadc91b; serial vocabulary projection and full encoder", runtime.Version(), runtime.GOMAXPROCS(0), started, time.Now().UTC().Format(time.RFC3339), frames, hashes, reused, calls, allocs, samples}
++	data, err := json.MarshalIndent(report, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}

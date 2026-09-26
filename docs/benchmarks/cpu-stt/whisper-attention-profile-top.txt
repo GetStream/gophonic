@@ -1,0 +1,38 @@
+File: stt-next-whisper-profile.test
+Type: cpu
+Time: 2026-09-25 22:31:38 WEST
+Duration: 10.62s, Total samples = 33.51s (315.51%)
+Showing nodes accounting for 32.51s, 97.02% of 33.51s total
+Dropped 52 nodes (cum <= 0.17s)
+Showing top 30 nodes out of 101
+      flat  flat%   sum%        cum   cum%
+     7.74s 23.10% 23.10%      7.74s 23.10%  runtime.pthread_cond_wait
+     5.72s 17.07% 40.17%      5.72s 17.07%  github.com/GetStream/gophonic/internal/whispergemm.smeMulBlock
+     3.38s 10.09% 50.25%      3.38s 10.09%  runtime.kevent
+     3.05s  9.10% 59.36%      6.02s 17.96%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).execute
+     2.69s  8.03% 67.38%      2.69s  8.03%  runtime.pthread_cond_signal
+     2.48s  7.40% 74.78%      2.48s  7.40%  github.com/GetStream/gophonic/internal/whispergemm.smeVectorF16
+     1.90s  5.67% 80.45%      1.90s  5.67%  github.com/GetStream/gophonic/internal/nn.softmaxExpNEON
+     1.39s  4.15% 84.60%     11.73s 35.00%  github.com/GetStream/gophonic/internal/whispergemm.(*Executor).run
+     1.25s  3.73% 88.33%      1.25s  3.73%  runtime.usleep
+     0.57s  1.70% 90.03%      0.57s  1.70%  github.com/GetStream/gophonic/internal/nn.geluNEON
+     0.54s  1.61% 91.64%      0.54s  1.61%  github.com/GetStream/gophonic/internal/mel.fftRadix2[go.shape.float32]
+     0.34s  1.01% 92.66%      0.34s  1.01%  github.com/GetStream/gophonic/internal/mel.fftRadix5[go.shape.float32]
+     0.33s  0.98% 93.64%      0.34s  1.01%  github.com/GetStream/gophonic/internal/whispergemm.(*PackedVector).RepackColumns
+     0.23s  0.69% 94.33%      1.52s  4.54%  github.com/GetStream/gophonic/internal/mel.(*Spectrogram).Into
+     0.23s  0.69% 95.02%      0.23s  0.69%  runtime.asyncPreempt
+     0.19s  0.57% 95.58%      1.08s  3.22%  github.com/GetStream/gophonic/internal/mel.powerFrame[go.shape.float32]
+     0.18s  0.54% 96.12%      6.52s 19.46%  github.com/GetStream/gophonic/whisper.(*audioAttention).ApplyRows
+     0.13s  0.39% 96.51%      0.20s   0.6%  math.log
+     0.07s  0.21% 96.72%      0.23s  0.69%  runtime.stealWork
+     0.03s  0.09% 96.81%      2.01s  6.00%  runtime.lock2
+     0.01s  0.03% 96.84%      0.89s  2.66%  github.com/GetStream/gophonic/internal/mel.fft400[go.shape.float32]
+     0.01s  0.03% 96.87%      1.22s  3.64%  github.com/GetStream/gophonic/whisper.(*DecoderScratch).attend
+     0.01s  0.03% 96.90%      0.80s  2.39%  github.com/GetStream/gophonic/whisper.linearInto
+     0.01s  0.03% 96.93%      0.49s  1.46%  runtime.(*timers).check
+     0.01s  0.03% 96.96%      6.93s 20.68%  runtime.notesleep
+     0.01s  0.03% 96.99%      0.63s  1.88%  runtime.unlock2
+     0.01s  0.03% 97.02%      1.03s  3.07%  runtime.wakeNetPoller
+         0     0% 97.02%      0.41s  1.22%  _.goready.func1
+         0     0% 97.02%      0.57s  1.70%  github.com/GetStream/gophonic/internal/nn.BiasGELU
+         0     0% 97.02%      1.90s  5.67%  github.com/GetStream/gophonic/internal/nn.SoftmaxExp

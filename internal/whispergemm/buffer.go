@@ -87,6 +87,46 @@ func (b *PackedB) CopyRowsFrom(src *PackedB, rows int) error {
 	return nil
 }
 
+// UnpackColumns copies columns [start,start+rows) into a row-major rows-by-K
+// destination, without arithmetic. It is the inverse of PackColumns for a
+// range. dst must not overlap the packed storage.
+func (b *PackedB) UnpackColumns(dst []float32, stride, start, rows int) error {
+	if b == nil {
+		return ErrNilMatrix
+	}
+	if start < 0 || rows < 0 || start > b.n || rows > b.n-start || !validMatrix(dst, rows, b.k, stride) {
+		return ErrShape
+	}
+	for r := range rows {
+		col := start + r
+		base := col/panelColumns*panelColumns*b.panelRows() + col%panelColumns
+		for k := range b.k {
+			dst[r*stride+k] = b.data[base+k*panelColumns]
+		}
+	}
+	return nil
+}
+
+// UnpackRows copies rows [start,start+rows) into a row-major rows-by-N
+// destination, without arithmetic. Fixed-pitch pages retain their physical
+// stride. dst must not overlap the packed storage.
+func (b *PackedB) UnpackRows(dst []float32, stride, start, rows int) error {
+	if b == nil {
+		return ErrNilMatrix
+	}
+	if start < 0 || rows < 0 || start > b.k || rows > b.k-start || !validMatrix(dst, rows, b.n, stride) {
+		return ErrShape
+	}
+	for col := 0; col < b.n; col += panelColumns {
+		width := min(panelColumns, b.n-col)
+		base := col*b.panelRows() + start*panelColumns
+		for r := range rows {
+			copy(dst[r*stride+col:r*stride+col+width], b.data[base+r*panelColumns:base+r*panelColumns+width])
+		}
+	}
+	return nil
+}
+
 // PackRows writes rows of a row-major matrix at row start and discards the
 // previous suffix. The prefix [0,start) is preserved, including when changing
 // K requires moving overlapping panels. Storage capacity is fixed here.

@@ -130,11 +130,12 @@ func (w *encoderWorkspace) Close() {
 	w.weights = encoderWeights{}
 	w.conv1Weight = nil
 	w.conv2Weight = nil
-	w.attention = nil
 	if w.gemm != nil {
 		_ = w.gemm.Close()
 		w.gemm = nil
 	}
+	w.attention.close()
+	w.attention = nil
 	_ = w.memory.Close()
 	w.memory = nil
 }

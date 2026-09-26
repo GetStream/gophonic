@@ -1399,16 +1399,7 @@ func (c *Cascade) run(j job) {
 		// Silence, once the turn is over, shows only what was said.
 		c.obs.Heard(j.speaker, text, true)
 	}
-	interrupted := ctx.Err() != nil
-	// Wait for the reply to be heard, or cut.
-	for !interrupted && c.play.len() > 0 {
-		select {
-		case <-ctx.Done():
-			interrupted = true
-		case <-c.tick.C:
-			c.caption(j, text)
-		}
-	}
+	interrupted := c.waitPlayback(ctx, func() { c.caption(j, text) })
 	if j.audio != nil && !c.userShown && len(text) > 0 && c.played.Load() > 0 && !c.resumed.Load() {
 		// A reply heard only after the model finished writing it.
 		c.obs.Heard(j.speaker, text, true)
@@ -1596,6 +1587,21 @@ func (c *Cascade) pump() {
 		c.signalVoice()
 		c.speakDone <- err
 	}
+}
+
+// waitPlayback waits for the reply to be heard, or cut, showing its
+// captions as it plays, and reports whether it was cut. interrupt cancels
+// the reply before it empties playback, so a tick can see playback empty
+// without having seen the cancellation: that is a cut too.
+func (c *Cascade) waitPlayback(ctx context.Context, caption func()) bool {
+	for ctx.Err() == nil && c.play.len() > 0 {
+		select {
+		case <-ctx.Done():
+		case <-c.tick.C:
+			caption()
+		}
+	}
+	return ctx.Err() != nil
 }
 
 // voicedAt reports how many bytes of said the voice has spoken by the

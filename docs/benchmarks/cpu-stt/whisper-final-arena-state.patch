@@ -1,0 +1,139 @@
+--- /dev/null
++++ b/whisper/cpu_final_arena_experiment_test.go
+@@ -0,0 +1,113 @@
++package whisper
++
++import (
++	"crypto/sha256"
++	"encoding/binary"
++	"encoding/hex"
++	"encoding/json"
++	"math"
++	"os"
++	"runtime"
++	"testing"
++
++	"github.com/GetStream/gophonic/internal/testmodels"
++	"github.com/GetStream/gophonic/internal/whispergemm"
++)
++
++// Opt-in M4 Max SIMD fixture check against the pre-arena baseline fingerprints.
++func TestCPUFinalArenaState(t *testing.T) {
++	path := os.Getenv("STT_FINAL_ARENA")
++	if path == "" {
++		t.Skip("set STT_FINAL_ARENA")
++	}
++	m, err := Load(testmodels.Path(t, testmodels.WhisperTinyEN))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer m.Close()
++	data, err := os.ReadFile("../testdata/whisper_jfk.pcm.f32le")
++	if err != nil {
++		t.Fatal(err)
++	}
++	pcm := make([]float32, len(data)/4)
++	for i := range pcm {
++		pcm[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[4*i:]))
++	}
++	long := make([]float32, 0, 3*len(pcm))
++	for range 3 {
++		long = append(long, pcm...)
++	}
++	type result struct {
++		Case, State                                                    string
++		Workers, AttentionBytes, ExecutorBytes, PoolBuffers, PoolBytes int
++		ClosedAttentionBytes, ClosedExecutorBytes                      int
++		Allocs, Bytes                                                  uint64
++	}
++	var report []result
++	for _, tc := range []struct {
++		name    string
++		workers int
++		pcm     []float32
++		want    string
++	}{
++		{"jfk-w8", 8, pcm, "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1"},
++		{"long-w8", 8, long, "901551e1412f14751082fd03d09138e1a178b49d102970e4a8ffc21e7f4e63b8"},
++		{"jfk-w2", 2, pcm, "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1"},
++		{"jfk-w4", 4, pcm, "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1"},
++		{"jfk-w16", 16, pcm, "2f2ac6cd4de834f648086ee61d7cbe8121273291afc333bdc175287acf6dd7a1"},
++	} {
++		tr, err := NewTranscriberWithWorkers(m, tc.workers)
++		if err != nil {
++			t.Fatal(err)
++		}
++		dst := make([]byte, 0, 16384)
++		run := func() {
++			if _, err := tr.TranscribeInto(tc.pcm, dst); err != nil {
++				t.Fatal(err)
++			}
++		}
++		for range 3 {
++			run()
++		}
++		runtime.GC()
++		var before, after runtime.MemStats
++		runtime.ReadMemStats(&before)
++		run()
++		runtime.ReadMemStats(&after)
++		h := sha256.New()
++		var bits [8]byte
++		for _, group := range [][]float32{tr.audio, tr.logits, tr.decoder.x, tr.decoder.selfKey, tr.decoder.selfValue} {
++			for _, v := range group {
++				binary.LittleEndian.PutUint32(bits[:4], math.Float32bits(v))
++				h.Write(bits[:4])
++			}
++		}
++		for _, id := range tr.tokens {
++			binary.LittleEndian.PutUint64(bits[:], uint64(id))
++			h.Write(bits[:])
++		}
++		got := hex.EncodeToString(h.Sum(nil))
++		if got != tc.want {
++			t.Fatalf("%s state %s != baseline %s", tc.name, got, tc.want)
++		}
++		memory, executor := tr.encoder.attention.memory, tr.encoder.gemm
++		buffers, poolBytes := whispergemm.ScratchPoolExperiment()
++		r := result{Case: tc.name, State: got, Workers: tc.workers, AttentionBytes: memory.Bytes(), ExecutorBytes: executor.ScratchBytesExperiment(), PoolBuffers: buffers, PoolBytes: poolBytes, Allocs: after.Mallocs - before.Mallocs, Bytes: after.TotalAlloc - before.TotalAlloc}
++		if buffers != 0 {
++			t.Fatalf("%s uses global scratch pool", tc.name)
++		}
++		tr.Close()
++		r.ClosedAttentionBytes, r.ClosedExecutorBytes = memory.Bytes(), executor.ScratchBytesExperiment()
++		if r.ClosedAttentionBytes != 0 || r.ClosedExecutorBytes != 0 {
++			t.Fatal("retained arena")
++		}
++		report = append(report, r)
++	}
++	encoded, err := json.MarshalIndent(report, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, append(encoded, '\n'), 0644); err != nil {
++		t.Fatal(err)
++	}
++}
+--- /dev/null
++++ b/internal/whispergemm/pool_experiment_arm64.go
+@@ -0,0 +1,20 @@
++package whispergemm
++
++func ScratchPoolExperiment() (int, int) {
++	var buffers [64]*[]float32
++	n, bytes := len(smeScratch), 0
++	for i := 0; i < n; i++ {
++		buffers[i] = <-smeScratch
++		bytes += cap(*buffers[i]) * 4
++	}
++	for i := 0; i < n; i++ {
++		smeScratch <- buffers[i]
++	}
++	return n, bytes
++}
++func (e *Executor) ScratchBytesExperiment() int {
++	if e.memory == nil {
++		return 0
++	}
++	return e.memory.Bytes()
++}

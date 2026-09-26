@@ -813,7 +813,10 @@ func (s *decoderScratch) attend(keys, values []float32, frames, valueStride int)
 	}
 	s.attention = decoderAttentionOperation{keyVec: s.layerKeys, valueVec: s.layerValues, heads: heads, dst: s.context, scaledQuery: s.scaledQuery, keys: keys, values: values, scores: s.scores, frames: frames, valueStride: valueStride}
 	var err error
-	if s.gemm != nil && frames >= 128 {
+	// Small packed heads finish sooner on the caller than after a worker
+	// handoff. Larger and unpacked attention still uses the bounded pool.
+	parallel := s.layerKeys == nil || heads > 6 || headSize > 64
+	if s.gemm != nil && frames >= 128 && parallel {
 		err = s.gemm.Rows(&s.attention, heads, 1)
 	} else {
 		s.attention.ApplyRows(0, heads)

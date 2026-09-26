@@ -1,0 +1,280 @@
+diff --git a/internal/q8gemm/sme_arm64.s b/internal/q8gemm/sme_arm64.s
+index 2b10bf0..b1369cc 100644
+--- a/internal/q8gemm/sme_arm64.s
++++ b/internal/q8gemm/sme_arm64.s
+@@ -363,16 +363,16 @@ TEXT ·smeRowI8(SB), NOSPLIT, $0-72
+ 	MOVD	colScales+48(FP), R16
+ 	MOVD	rowScale+56(FP), R19
+ 	WORD	$0xd503477f	// smstart
+-	WORD	$0x2518e3e0	// ptrue p0.b
+-	WORD	$0x2598e3e1	// ptrue p1.s
+-	WORD	$0x25207810	// ptrue pn8.b
+ 	WORD	$0xd2800011	// mov x17, #0x0 ; =0
+ 	WORD	$0xd375d027	// lsl x7, x1, #11
+ 	WORD	$0xd2800009	// mov x9, #0x0 ; =0
+ 	WORD	$0x52800008	// mov w8, #0x0 ; =0
+-	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+ 	WORD	$0xc00800ff	// zero {za}
+ 	WORD	$0x25b9ce1f	// fmov z31.s, #1.00000000
++	WORD	$0x2518e3e0	// ptrue p0.b
++	WORD	$0x2598e3e1	// ptrue p1.s
++	WORD	$0x25207810	// ptrue pn8.b
++	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+ 	WORD	$0xaa0003ea	// mov x10, x0
+ 	WORD	$0xaa0303eb	// mov x11, x3
+ 	WORD	$0xaa0103ec	// mov x12, x1
+@@ -400,13 +400,9 @@ TEXT ·smeRowI8(SB), NOSPLIT, $0-72
+ 	WORD	$0x9100816b	// add x11, x11, #0x20
+ 	WORD	$0xd100058c	// sub x12, x12, #0x1
+ 	WORD	$0x17ffffe9	// b 0x38
+-	WORD	$0x2598e3e3	// ptrue p3.s
+-	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+-	WORD	$0x2550cc80	// ptest p3, p4.b
+-	WORD	$0x54000a01	// b.ne 0x1e4
+-	WORD	$0x25a08c2e	// cntp x14, p3, p1.s
+-	WORD	$0xf10041df	// cmp x14, #0x10
+-	WORD	$0x540009a1	// b.ne 0x1e4
++	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
++	WORD	$0x1e2603ee	// fmov w14, s31
++	WORD	$0x340009ae	// cbz w14, 0x1d4
+ 	WORD	$0xc0060c00	// mov { z0.d - z3.d }, za.d[w8, 0, vgx4]
+ 	WORD	$0xc0060c24	// mov { z4.d - z7.d }, za.d[w8, 1, vgx4]
+ 	WORD	$0x04a40000	// add z0.s, z0.s, z4.s
+@@ -473,19 +469,18 @@ TEXT ·smeRowI8(SB), NOSPLIT, $0-72
+ 	WORD	$0x65880863	// fmul z3.s, z3.s, z8.s
+ 	WORD	$0x65940863	// fmul z3.s, z3.s, z20.s
+ 	WORD	$0xe543e9c3	// st1w { z3.s }, p2, [x14, #0x3, mul vl]
+-	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+-	WORD	$0x2550cc80	// ptest p3, p4.b
+-	WORD	$0x54000101	// b.ne 0x1e4
++	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
++	WORD	$0x1e2603ee	// fmov w14, s31
++	WORD	$0x3400010e	// cbz w14, 0x1d4
+ 	WORD	$0x8b070000	// add x0, x0, x7
+ 	WORD	$0x91000529	// add x9, x9, #0x1
+ 	WORD	$0xeb02013f	// cmp x9, x2
+-	WORD	$0x54fff28b	// b.lt 0x24
++	WORD	$0x54fff28b	// b.lt 0x14
+ 	WORD	$0xd503467f	// smstop
+ 	WORD	$0xaa1103e0	// mov x0, x17
+-	WORD	$0x14000004	// b 0x1f0
++	WORD	$0x14000003	// b 0x1dc
+ 	WORD	$0x91000631	// add x17, x17, #0x1
+-	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+-	WORD	$0x17ffff8e	// b 0x24
++	WORD	$0x17ffff8f	// b 0x14
+ 	MOVD	R0, retries+64(FP)
+ 	RET
+ 
+@@ -500,16 +495,16 @@ TEXT ·smeRowF16(SB), NOSPLIT, $0-72
+ 	MOVD	colScales+48(FP), R16
+ 	MOVD	rowScale+56(FP), R19
+ 	WORD	$0xd503477f	// smstart
+-	WORD	$0x2558e3e0	// ptrue p0.h
+-	WORD	$0x2598e3e1	// ptrue p1.s
+-	WORD	$0x25607810	// ptrue pn8.h
+ 	WORD	$0xd2800011	// mov x17, #0x0 ; =0
+ 	WORD	$0xd375d027	// lsl x7, x1, #11
+ 	WORD	$0xd2800009	// mov x9, #0x0 ; =0
+ 	WORD	$0x52800008	// mov w8, #0x0 ; =0
+-	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+ 	WORD	$0xc00800ff	// zero {za}
+ 	WORD	$0x25b9ce1f	// fmov z31.s, #1.00000000
++	WORD	$0x2558e3e0	// ptrue p0.h
++	WORD	$0x2598e3e1	// ptrue p1.s
++	WORD	$0x25607810	// ptrue pn8.h
++	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+ 	WORD	$0xaa0003ea	// mov x10, x0
+ 	WORD	$0xaa0303eb	// mov x11, x3
+ 	WORD	$0xaa0103ec	// mov x12, x1
+@@ -537,13 +532,9 @@ TEXT ·smeRowF16(SB), NOSPLIT, $0-72
+ 	WORD	$0x9100816b	// add x11, x11, #0x20
+ 	WORD	$0xd100058c	// sub x12, x12, #0x1
+ 	WORD	$0x17ffffe9	// b 0x38
+-	WORD	$0x2598e3e3	// ptrue p3.s
+-	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+-	WORD	$0x2550cc80	// ptest p3, p4.b
+-	WORD	$0x54000981	// b.ne 0x1d4
+-	WORD	$0x25a08c2e	// cntp x14, p3, p1.s
+-	WORD	$0xf10041df	// cmp x14, #0x10
+-	WORD	$0x54000921	// b.ne 0x1d4
++	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
++	WORD	$0x1e2603ee	// fmov w14, s31
++	WORD	$0x3400092e	// cbz w14, 0x1c4
+ 	WORD	$0xc0060c00	// mov { z0.d - z3.d }, za.d[w8, 0, vgx4]
+ 	WORD	$0xc0060c24	// mov { z4.d - z7.d }, za.d[w8, 1, vgx4]
+ 	WORD	$0x65840000	// fadd z0.s, z0.s, z4.s
+@@ -606,19 +597,18 @@ TEXT ·smeRowF16(SB), NOSPLIT, $0-72
+ 	WORD	$0x65880863	// fmul z3.s, z3.s, z8.s
+ 	WORD	$0x65940863	// fmul z3.s, z3.s, z20.s
+ 	WORD	$0xe543e9c3	// st1w { z3.s }, p2, [x14, #0x3, mul vl]
+-	WORD	$0x65922fe4	// fcmeq p4.s, p3/z, z31.s, #0.0
+-	WORD	$0x2550cc80	// ptest p3, p4.b
+-	WORD	$0x54000101	// b.ne 0x1d4
++	WORD	$0x052603ff	// ext z31.b, z31.b, z31.b, #0x30
++	WORD	$0x1e2603ee	// fmov w14, s31
++	WORD	$0x3400010e	// cbz w14, 0x1c4
+ 	WORD	$0x8b070000	// add x0, x0, x7
+ 	WORD	$0x91000529	// add x9, x9, #0x1
+ 	WORD	$0xeb02013f	// cmp x9, x2
+-	WORD	$0x54fff30b	// b.lt 0x24
++	WORD	$0x54fff30b	// b.lt 0x14
+ 	WORD	$0xd503467f	// smstop
+ 	WORD	$0xaa1103e0	// mov x0, x17
+-	WORD	$0x14000004	// b 0x1e0
++	WORD	$0x14000003	// b 0x1cc
+ 	WORD	$0x91000631	// add x17, x17, #0x1
+-	WORD	$0x8540c674	// ld1rw { z20.s }, p1/z, [x19]
+-	WORD	$0x17ffff92	// b 0x24
++	WORD	$0x17ffff93	// b 0x14
+ 	MOVD	R0, retries+64(FP)
+ 	RET
+ 
+diff --git a/internal/q8gemm/smesrc/row64h.S b/internal/q8gemm/smesrc/row64h.S
+index c00f203..473cb88 100644
+--- a/internal/q8gemm/smesrc/row64h.S
++++ b/internal/q8gemm/smesrc/row64h.S
+@@ -15,19 +15,23 @@
+ //
+ // Darwin restores only the low 128 bits of each Z register on signal return;
+ // ZA survives. The z31 sentinel is checked after accumulation and after the
+-// stores, and a cleared sentinel recomputes the panel from zero.
++// stores, and a cleared sentinel recomputes the panel from zero. Each check
++// moves an upper 128-bit block into the signal-preserved low block before
++// reading it into a GPR, so signal-clobbered predicates cannot hide a retry.
++// Every live predicate and the row scale are rebuilt after the sentinel on
++// each panel, including retries; no streaming state crosses that boundary.
+ 	smstart
+-	ptrue p0.h
+-	ptrue p1.s
+-	ptrue pn8.h
+ 	mov x17, #0
+ 	lsl x7, x1, #11
+ 	mov x9, #0
+ 	mov w8, #0
+-	ld1rw {z20.s}, p1/z, [x19]
+ 1:
+ 	zero {za}
+ 	fdup z31.s, #1.0
++	ptrue p0.h
++	ptrue p1.s
++	ptrue pn8.h
++	ld1rw {z20.s}, p1/z, [x19]
+ 	mov x10, x0
+ 	mov x11, x3
+ 	mov x12, x1
+@@ -57,13 +61,9 @@
+ 	sub x12, x12, #1
+ 	b 2b
+ 3:
+-	ptrue p3.s
+-	fcmeq p4.s, p3/z, z31.s, #0.0
+-	ptest p3, p4.b
+-	b.ne 8f
+-	cntp x14, p3, p1.s
+-	cmp x14, #16
+-	b.ne 8f
++	ext z31.b, z31.b, z31.b, #48
++	fmov w14, s31
++	cbz w14, 8f
+ 	// Sum the eight vector groups: z0-z3 hold columns 0-15, 16-31, 32-47, 48-63.
+ 	mova {z0.d-z3.d}, za.d[w8, 0, vgx4]
+ 	mova {z4.d-z7.d}, za.d[w8, 1, vgx4]
+@@ -127,9 +127,9 @@
+ 	fmul z3.s, z3.s, z8.s
+ 	fmul z3.s, z3.s, z20.s
+ 	st1w {z3.s}, p2, [x14, #3, mul vl]
+-	fcmeq p4.s, p3/z, z31.s, #0.0
+-	ptest p3, p4.b
+-	b.ne 8f
++	ext z31.b, z31.b, z31.b, #48
++	fmov w14, s31
++	cbz w14, 8f
+ 	add x0, x0, x7
+ 	add x9, x9, #1
+ 	cmp x9, x2
+@@ -138,9 +138,7 @@
+ 	mov x0, x17
+ 	b 9f
+ 8:
+-	// A signal cleared the upper Z lanes: reload the row scale and redo
+-	// this panel from zero.
++	// A signal cleared the upper Z lanes: rebuild the panel state and retry.
+ 	add x17, x17, #1
+-	ld1rw {z20.s}, p1/z, [x19]
+ 	b 1b
+ 9:
+diff --git a/internal/q8gemm/smesrc/row64i8.S b/internal/q8gemm/smesrc/row64i8.S
+index 242a9ca..f7e9f56 100644
+--- a/internal/q8gemm/smesrc/row64i8.S
++++ b/internal/q8gemm/smesrc/row64i8.S
+@@ -15,19 +15,23 @@
+ //
+ // Darwin restores only the low 128 bits of each Z register on signal return;
+ // ZA survives. The z31 sentinel is checked after accumulation and after the
+-// stores, and a cleared sentinel recomputes the panel from zero.
++// stores, and a cleared sentinel recomputes the panel from zero. Each check
++// moves an upper 128-bit block into the signal-preserved low block before
++// reading it into a GPR, so signal-clobbered predicates cannot hide a retry.
++// Every live predicate and the row scale are rebuilt after the sentinel on
++// each panel, including retries; no streaming state crosses that boundary.
+ 	smstart
+-	ptrue p0.b
+-	ptrue p1.s
+-	ptrue pn8.b
+ 	mov x17, #0
+ 	lsl x7, x1, #11
+ 	mov x9, #0
+ 	mov w8, #0
+-	ld1rw {z20.s}, p1/z, [x19]
+ 1:
+ 	zero {za}
+ 	fdup z31.s, #1.0
++	ptrue p0.b
++	ptrue p1.s
++	ptrue pn8.b
++	ld1rw {z20.s}, p1/z, [x19]
+ 	mov x10, x0
+ 	mov x11, x3
+ 	mov x12, x1
+@@ -57,13 +61,9 @@
+ 	sub x12, x12, #1
+ 	b 2b
+ 3:
+-	ptrue p3.s
+-	fcmeq p4.s, p3/z, z31.s, #0.0
+-	ptest p3, p4.b
+-	b.ne 8f
+-	cntp x14, p3, p1.s
+-	cmp x14, #16
+-	b.ne 8f
++	ext z31.b, z31.b, z31.b, #48
++	fmov w14, s31
++	cbz w14, 8f
+ 	// Sum the eight vector groups: z0-z3 hold columns 0-15, 16-31, 32-47, 48-63.
+ 	mova {z0.d-z3.d}, za.d[w8, 0, vgx4]
+ 	mova {z4.d-z7.d}, za.d[w8, 1, vgx4]
+@@ -131,9 +131,9 @@
+ 	fmul z3.s, z3.s, z8.s
+ 	fmul z3.s, z3.s, z20.s
+ 	st1w {z3.s}, p2, [x14, #3, mul vl]
+-	fcmeq p4.s, p3/z, z31.s, #0.0
+-	ptest p3, p4.b
+-	b.ne 8f
++	ext z31.b, z31.b, z31.b, #48
++	fmov w14, s31
++	cbz w14, 8f
+ 	add x0, x0, x7
+ 	add x9, x9, #1
+ 	cmp x9, x2
+@@ -142,9 +142,7 @@
+ 	mov x0, x17
+ 	b 9f
+ 8:
+-	// A signal cleared the upper Z lanes: reload the row scale and redo
+-	// this panel from zero.
++	// A signal cleared the upper Z lanes: rebuild the panel state and retry.
+ 	add x17, x17, #1
+-	ld1rw {z20.s}, p1/z, [x19]
+ 	b 1b
+ 9:

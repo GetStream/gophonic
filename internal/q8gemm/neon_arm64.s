@@ -27,6 +27,23 @@ TEXT ·packPairsNEON(SB), NOSPLIT, $0-28
 	WORD	$0x17fffff4	// b 0x8
 	RET
 
+// func packContiguousF16NEON(dst *uint16, src *float32, n int, scale float32)
+TEXT ·packContiguousF16NEON(SB), NOSPLIT, $0-28
+	MOVD	dst+0(FP), R0
+	MOVD	src+8(FP), R1
+	MOVD	n+16(FP), R2
+	FMOVS	scale+24(FP), F0
+	WORD	$0x4e04041f	// dup.4s v31, v0[0]
+	WORD	$0x4cdfa820	// ld1.4s { v0, v1 }, [x1], #32
+	WORD	$0x6e3fdc00	// fmul.4s v0, v0, v31
+	WORD	$0x6e3fdc21	// fmul.4s v1, v1, v31
+	WORD	$0x0e216802	// fcvtn v2.4h, v0.4s
+	WORD	$0x4e216822	// fcvtn2 v2.8h, v1.4s
+	WORD	$0x4c9f7402	// st1.8h { v2 }, [x0], #16
+	WORD	$0xd1002042	// sub x2, x2, #0x8
+	WORD	$0xb5ffff22	// cbnz x2, 0x4
+	RET
+
 // func packQuadsNEON(dst *int8, src *float32, quads int, scale float32)
 TEXT ·packQuadsNEON(SB), NOSPLIT, $0-28
 	MOVD	dst+0(FP), R0
