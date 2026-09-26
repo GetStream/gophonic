@@ -119,3 +119,28 @@ func TestOnePreparer(t *testing.T) {
 	f.Close()
 	first.Close()
 }
+
+// A checkpoint reached through a symbolic link has the entry it has when
+// reached directly.
+func TestKeyFollowsLinks(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "Model")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "model.safetensors"), []byte("weights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	direct, err := Key(real, "gpu-q8", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := Key(link, "gpu-q8", "v1")
+	if err != nil || linked != direct {
+		t.Fatalf("through a link %q (%v), directly %q", linked, err, direct)
+	}
+}
