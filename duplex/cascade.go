@@ -432,9 +432,12 @@ func open[T interface{ Close() error }](lane *T, models []*gophonic.Model, opene
 	return fmt.Errorf("duplex: no model provides %v: %w", reflect.TypeFor[T](), speech.ErrUnsupported)
 }
 
-// warm runs the transcriber and the synthesizer once, so that their first
-// use in a conversation is as fast as every later one.
+// warm runs the transcriber and the synthesizer once, and evaluates the
+// system prompt, so that the first turn is as fast as every later one.
 func (c *Cascade) warm() error {
+	if err := c.cfg.Session.Prefill(context.Background()); err != nil {
+		return err
+	}
 	var t speech.Transcript
 	opts := c.cfg.Listen
 	opts.Turn = true
@@ -1135,12 +1138,18 @@ func (c *Cascade) dispatch(j job) uint32 {
 	c.mu.Unlock()
 	c.held.Store(j.held)
 	c.busy.Store(true)
-	select {
-	case c.jobs <- j:
-		return j.id
-	default:
-		c.fail(errors.New("duplex: responder is behind; utterance dropped"))
-		return 0
+	// A job waiting unanswered is superseded by this one, as the responder
+	// would supersede it; so a full queue loses its oldest job, not this.
+	for {
+		select {
+		case c.jobs <- j:
+			return j.id
+		default:
+		}
+		select {
+		case <-c.jobs:
+		default:
+		}
 	}
 }
 
@@ -1327,13 +1336,14 @@ func (c *Cascade) run(j job) {
 			// answered, not noted; and a silence answers only a request
 			// for quiet (alone with one person, any silence; in a
 			// meeting, one until something happens), so one chosen for a
-			// misheard word is overruled. Either way the model answers
-			// after all, told why.
+			// misheard word is overruled. A silence that plans its next
+			// moment (<silent 30s>, a reminder) ends by itself and stands.
+			// Either way the model answers after all, told why.
 			var note string
 			switch {
 			case called && !retried:
 				note, retried = answerTools, true
-			case j.audio != nil && !overruled && (c.rw.until != "" || j.speaker == "") && !c.asksQuiet(ctx, text):
+			case j.audio != nil && !overruled && c.rw.wait == 0 && (c.rw.until != "" || j.speaker == "") && !c.asksQuiet(ctx, text):
 				note, overruled = notAskedQuiet, true
 				c.obs.Stage(Overruled, time.Since(j.at))
 				err = c.cfg.Session.Restore(replyMark)
@@ -1442,7 +1452,7 @@ const wakeQuestion = `A voice assistant chose to stay silent until something hap
 
 var wakeLabels = []string{
 	"No: the assistant stays silent",
-	"Yes: it happened, or the user asks the assistant to speak",
+	"Yes: it happened, or the user tells the assistant it may speak again",
 }
 
 // wakes reports whether text ends the silence the agent keeps, as Wake
