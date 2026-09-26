@@ -4,11 +4,14 @@
 package qwen3tts
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -37,32 +40,87 @@ func TestVoicedFollowsWords(t *testing.T) {
 	if !m.aligned {
 		t.Skip("no alignment head for this checkpoint")
 	}
+	ears := whisperEars(t)
+	mean, worst := voicedDistance(t, m, ears, voicedSentences)
+	t.Logf("Voiced is %.2f words from the word being spoken on average, %v at worst", mean, worst)
+	if mean > 0.5 || worst > 2 {
+		t.Fatalf("Voiced is %.2f words from the word being spoken on average, %v at worst", mean, worst)
+	}
+}
+
+// TestRankAlignmentHeads finds a checkpoint's alignment head: ALIGN_RANK
+// names a Qwen3-TTS checkpoint in the models directory, every talker head
+// is ranked by how far Voiced, read from it, is from the word Whisper
+// hears being spoken in one sentence, and the ten closest again in all of
+// them.
+func TestRankAlignmentHeads(t *testing.T) {
+	name := os.Getenv("ALIGN_RANK")
+	if name == "" {
+		t.Skip("ALIGN_RANK names the checkpoint whose heads to rank")
+	}
+	m, err := Load(testmodels.Path(t, name), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ears := whisperEars(t)
+	c := m.cfg.Talker
+	type ranked struct {
+		head        [2]int
+		mean, worst float64
+	}
+	var all []ranked
+	for layer := range c.Layers {
+		for head := range c.Heads {
+			m.align, m.aligned = [2]int{layer, head}, true
+			mean, worst := voicedDistance(t, m, ears, voicedSentences[:1])
+			all = append(all, ranked{m.align, mean, worst})
+		}
+	}
+	slices.SortFunc(all, func(a, b ranked) int { return cmp.Compare(a.mean, b.mean) })
+	t.Logf("median head: %.2f words away", all[len(all)/2].mean)
+	for _, r := range all[:10] {
+		m.align = r.head
+		mean, worst := voicedDistance(t, m, ears, voicedSentences)
+		t.Logf("layer %d, head %d: %.2f words away on one sentence; %.2f on all, %v at worst", r.head[0], r.head[1], r.mean, mean, worst)
+	}
+}
+
+var voicedSentences = []struct{ voice, text string }{
+	{"ryan", "The quick brown fox jumps over the lazy dog, and then it runs back home to sleep."},
+	{"ryan", "Lisbon is the capital of Portugal, a city of hills, trams, and old yellow houses by the river."},
+	{"serena", "I can remind you in thirty seconds, or whenever you like. Just tell me what to say."},
+	{"ryan", "Sure! The meeting starts at three o'clock, so you still have about twenty minutes to prepare."},
+	{"serena", "Photosynthesis turns sunlight, water, and carbon dioxide into sugar and oxygen inside green leaves."},
+	{"ryan", "Well, that depends. If you want speed, take the train; if you want the view, drive along the coast."},
+	{"serena", "Hello there. How are you doing today?"},
+	{"ryan", "My favorite number is forty two, because it is the answer to life, the universe, and everything."},
+}
+
+func whisperEars(t *testing.T) *whisper.Transcriber {
 	wm, err := whisper.Load(filepath.Join(testmodels.Path(t, testmodels.WhisperBaseEN)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer wm.Close()
+	t.Cleanup(func() { wm.Close() })
 	ears, err := whisper.NewTranscriber(wm, whisper.LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ears.Close()
+	t.Cleanup(func() { ears.Close() })
+	return ears
+}
+
+// voicedDistance speaks each sentence, streamed a word at a time, and
+// returns how many words Voiced is from the word Whisper hears being
+// spoken, on average over the frames of speech and at worst.
+func voicedDistance(t *testing.T, m *Model, ears *whisper.Transcriber, sentences []struct{ voice, text string }) (mean, worst float64) {
 	s, err := NewSynthesizer(m, LaneOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	sentences := []struct{ voice, text string }{
-		{"ryan", "The quick brown fox jumps over the lazy dog, and then it runs back home to sleep."},
-		{"ryan", "Lisbon is the capital of Portugal, a city of hills, trams, and old yellow houses by the river."},
-		{"serena", "I can remind you in thirty seconds, or whenever you like. Just tell me what to say."},
-		{"ryan", "Sure! The meeting starts at three o'clock, so you still have about twenty minutes to prepare."},
-		{"serena", "Photosynthesis turns sunlight, water, and carbon dioxide into sugar and oxygen inside green leaves."},
-		{"ryan", "Well, that depends. If you want speed, take the train; if you want the view, drive along the coast."},
-		{"serena", "Hello there. How are you doing today?"},
-		{"ryan", "My favorite number is forty two, because it is the answer to life, the universe, and everything."},
-	}
-	var sum, worst float64
+	var sum float64
 	frames := 0
 	resampler := speech.NewResampler()
 	defer resampler.Close()
@@ -101,6 +159,9 @@ func TestVoicedFollowsWords(t *testing.T) {
 		if err := ears.Transcribe(context.Background(), mono[:n], speech.Options{Words: true}, &heard); err != nil {
 			t.Fatal(err)
 		}
+		if len(heard.Words) == 0 {
+			continue
+		}
 		starts := wordStarts(sen.text, &heard)
 		words := wordSpans(sen.text)
 		var errs []float64
@@ -119,20 +180,13 @@ func TestVoicedFollowsWords(t *testing.T) {
 			}
 			errs = append(errs, float64(reached-spoken))
 		}
-		var mean float64
 		for _, e := range errs {
-			mean += math.Abs(e)
+			sum += math.Abs(e)
 			worst = max(worst, math.Abs(e))
 		}
-		sum += mean
 		frames += len(errs)
-		t.Logf("%s: %.2f words from the word spoken over %d frames; heard %q", sen.voice, mean/float64(len(errs)), len(errs), heard.Text)
 	}
-	mean := sum / float64(frames)
-	t.Logf("Voiced is %.2f words from the word being spoken on average, %v at worst", mean, worst)
-	if mean > 0.5 || worst > 2 {
-		t.Fatalf("Voiced is %.2f words from the word being spoken on average, %v at worst", mean, worst)
-	}
+	return sum / float64(max(1, frames)), worst
 }
 
 // wordSpans returns the byte span of each word of text.

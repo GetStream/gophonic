@@ -60,10 +60,15 @@ func defaultDir() string {
 // for the checkpoint in dir. parts are everything else the prepared bytes
 // depend on, such as a layout version and options; the checkpoint's files
 // are fingerprinted by name, size, and modification time, so an entry is
-// rebuilt after they change.
+// rebuilt after they change, and located by their resolved path.
 func Key(dir, kind string, parts ...string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
+		return "", err
+	}
+	// One checkpoint has one entry, however its path is spelled: through a
+	// symbolic link, or not.
+	if abs, err = filepath.EvalSymlinks(abs); err != nil {
 		return "", err
 	}
 	entries, err := os.ReadDir(abs)
