@@ -135,7 +135,23 @@ func (ck *Checkpoint) ReferenceHidden(ids []int) []float32 {
 // ReferenceHiddenEmbeds is ReferenceHidden with the i-th occurrence of
 // token taking row i of rows as its input embedding.
 func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32) []float32 {
+	hidden, _ := ck.forward(ids, token, rows, -1, -1)
+	return hidden
+}
+
+// ReferenceAttention returns the attention probabilities of the last of
+// ids over every position, in layer layer and query head head.
+func (ck *Checkpoint) ReferenceAttention(ids []int, layer, head int) []float64 {
+	_, probs := ck.forward(ids, -1, nil, layer, head)
+	return probs
+}
+
+// forward evaluates ids, returning the last position's final-normalized
+// state and, when layer is not negative, its attention probabilities in
+// that layer and query head.
+func (ck *Checkpoint) forward(ids []int, token int, rows []float32, layer, head int) ([]float32, []float64) {
 	s := Shape
+	var probs []float64
 	w := func(name string) []float32 { return ck.Tensors[name] }
 	matvec := func(m []float32, x []float64, n, k int) []float64 {
 		out := make([]float64, n)
@@ -217,6 +233,12 @@ func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32
 					scores[j] = math.Exp(scores[j] - maxScore)
 					sum += scores[j]
 				}
+				if l == layer && hh == head && i == n-1 {
+					probs = make([]float64, len(scores))
+					for j, v := range scores {
+						probs[j] = v / sum
+					}
+				}
 				for j := range scores {
 					for d := range s.HeadDim {
 						ctx[hh*s.HeadDim+d] += scores[j] / sum * v[j][g*s.HeadDim+d]
@@ -244,7 +266,7 @@ func (ck *Checkpoint) ReferenceHiddenEmbeds(ids []int, token int, rows []float32
 	for i, v := range out {
 		res[i] = float32(v)
 	}
-	return res
+	return res, probs
 }
 
 // ReferenceLogits applies lm_head.weight to a final-normalized state in

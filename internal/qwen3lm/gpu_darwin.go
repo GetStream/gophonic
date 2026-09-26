@@ -63,6 +63,7 @@ type gpuModel struct {
 	qkv, o, gateup, down, attend *metal.Pipeline
 	rotate, qkRope, attendM      *metal.Pipeline
 	attendFlash, gemvHead        *metal.Pipeline
+	probe                        *metal.Pipeline       // one head's attention, for a Probe
 	mm                           [2][4]*metal.Pipeline // [32-token, 16-token tiles][qkv, o, gateup, down]
 	finish                       [3]*metal.Pipeline    // split-K epilogues: store, add, SwiGLU
 	mmHead                       [2]*metal.Pipeline    // the head over several rows: 32-token, 16-token tiles
@@ -161,7 +162,7 @@ func (m *Weights) loadGPU(st *safetensors.Checkpoint, bits int, headName string)
 	for _, p := range []struct {
 		dst  **metal.Pipeline
 		name string
-	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.rotate, "rotate"},
+	}{{&g.qkv, "gemv_qkv" + suffix}, {&g.o, "gemv_o" + suffix}, {&g.gateup, "gemv_gateup" + suffix}, {&g.down, "gemv_down" + suffix}, {&g.attend, "attend1"}, {&g.probe, "probe1"}, {&g.rotate, "rotate"},
 		{&g.gemvHead, "gemv_head"},
 		{&g.qkRope, "qkRope"}, {&g.attendM, "attendM"}, {&g.attendFlash, "attendFlash"},
 		{&g.mm[0][0], "mm_qkv" + suffix + "_w"}, {&g.mm[0][1], "mm_o" + suffix + "_w"}, {&g.mm[0][2], "mm_gateup" + suffix + "_w"}, {&g.mm[0][3], "mm_down" + suffix + "_w"},
@@ -648,6 +649,9 @@ type gpuWorkspace struct {
 	logitRows                               int // rows the logits buffer holds
 	headArgs                                gemvArgs
 	tail                                    []float32 // a single sequence's last states, when set
+	probe                                   *Probe    // the head a one-token pass reads, when set
+	probeOut                                *metal.Buffer
+	probeArgs                               probeArgs
 	oneSeq                                  [1][]int
 	// A mixture of experts: the router's logits, each row's experts and
 	// weights, and the arguments of its kernels. Batches group their (row,
@@ -714,6 +718,11 @@ type gemvArgs struct {
 	k, n  uint32
 	eps   float32
 	parts uint32
+}
+
+// probeArgs is ProbeArgs in gpu.metal.
+type probeArgs struct {
+	head, from, n uint32
 }
 
 type attnArgs struct {
@@ -842,6 +851,7 @@ func (g *gpuModel) newWorkspace() (*gpuWorkspace, error) {
 		{&w.list, 4 * pairs},
 		{&w.tiles, 16 * (pairs/16 + experts)},
 		{&w.moeOut, 4 * pairOut},
+		{&w.probeOut, 4 * maxProbe},
 	} {
 		if *b.dst, err = g.dev.Buffer(b.n); err != nil {
 			return nil, err
@@ -1192,6 +1202,9 @@ func (w *gpuWorkspace) pass(m *Weights, seqs [][]int, dst [][]float32, rows int)
 	if hybrid {
 		w.hy.state.pos += rows
 	}
+	if p := w.probe; p != nil {
+		copy(p.Probs, floats(w.probeOut.Bytes()))
+	}
 	if k := len(w.tail) / c.hidden; k > 1 && len(seqs) == 1 && rows >= k {
 		for i := range k {
 			out := w.tail[i*c.hidden : (i+1)*c.hidden]
@@ -1355,6 +1368,9 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 			e.SetBuffer(w.ctx, 0, 6)
 			e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
 			e.Dispatch(metal.Size{X: c.kvHeads, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits * c.heads / c.kvHeads, Y: 1, Z: 1})
+			if p := w.probe; p != nil && p.Layer == i && t == n-1 {
+				w.encodeProbe(i)
+			}
 
 			w.gemv(g.o, gl.buf, gl.o, gl.oScale, w.ctx, 0, w.h, hOff, w.mlpParts, w.mlpParts, 0, &w.oArgs)
 			if c.experts > 0 {
@@ -1376,8 +1392,24 @@ func (w *gpuWorkspace) encodeTokens(n int) {
 	}
 }
 
+// encodeProbe reads w.probe's head of layer i as attend1 weighed it, before
+// the next layer overwrites the query.
+func (w *gpuWorkspace) encodeProbe(i int) {
+	g, c, e, p := w.g, w.g.cfg, &w.enc, w.probe
+	w.probeArgs = probeArgs{uint32(p.Head), uint32(p.From), uint32(len(p.Probs))}
+	e.SetPipeline(g.probe)
+	e.SetBuffer(w.qkv, 0, 0)
+	e.SetBuffer(w.curK, i*w.curStride, 1)
+	e.SetBuffer(g.norms, 4*2*i*c.headDim, 3)
+	e.SetBuffer(g.rope, 0, 5)
+	e.SetBuffer(w.probeOut, 0, 6)
+	e.SetBytes(unsafe.Pointer(&w.attn), int(unsafe.Sizeof(w.attn)), 7)
+	e.SetBytes(unsafe.Pointer(&w.probeArgs), int(unsafe.Sizeof(w.probeArgs)), 8)
+	e.Dispatch(metal.Size{X: 1, Y: 1, Z: 1}, metal.Size{X: 32 * attendSplits, Y: 1, Z: 1})
+}
+
 func (w *gpuWorkspace) release() {
-	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut} {
+	for _, b := range []*metal.Buffer{w.h, w.qkv, w.ctx, w.act, w.kc, w.vc, w.embedParts, w.info, w.scratch, w.attnParts, w.mlpParts, w.logits, w.route, w.ids, w.wts, w.counts, w.rank, w.list, w.tiles, w.moeOut, w.probeOut} {
 		b.Release()
 	}
 	w.hy.release()

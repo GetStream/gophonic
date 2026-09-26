@@ -13,7 +13,10 @@ import (
 
 type gpuModel struct{}
 
-type gpuWorkspace struct{ tail []float32 }
+type gpuWorkspace struct {
+	tail  []float32
+	probe *Probe
+}
 
 type gpuPrefix struct{}
 

@@ -216,6 +216,46 @@ func (e *Evaluator) HiddenLastExtendEmbedInto(kv *PrefixKV, keep int, ids []int,
 	return nil
 }
 
+// Probe reads one attention head of a one-token extension: the
+// probabilities with which the token's query in layer Layer, head Head,
+// attends to the key positions From, From+1, ..., From+len(Probs)-1, as the
+// forward pass weighs them. Positions after the token's own read 0.
+//
+// A model's attention is its own alignment: as Whisper times words from
+// the cross-attention of a few heads, Qwen3-TTS's talker attends in one
+// head to the text token it is speaking.
+type Probe struct {
+	Layer, Head, From int
+	Probs             []float32
+}
+
+// maxProbe bounds the positions one Probe reads.
+const maxProbe = 64
+
+// HiddenLastExtendProbeInto is HiddenLastExtendEmbedInto of one token that
+// also fills probe, at no cost beyond reading the one head. Hybrid models,
+// whose attention is gated, have no probe.
+func (e *Evaluator) HiddenLastExtendProbeInto(kv *PrefixKV, keep int, ids []int, embeds Embeds, dst []float32, probe *Probe, ws *Workspace) error {
+	if e == nil || e.m == nil || ws == nil || probe == nil {
+		return errors.New("qwen3: nil evaluator, workspace, or probe")
+	}
+	c := &e.m.cfg
+	switch {
+	case len(ids) != 1:
+		return fmt.Errorf("qwen3: a probe reads a one-token extension, not %d tokens", len(ids))
+	case c.hybrid:
+		return errors.New("qwen3: a hybrid model's gated attention has no probe")
+	case probe.Layer < 0 || probe.Layer >= c.layers || probe.Head < 0 || probe.Head >= c.heads:
+		return fmt.Errorf("qwen3: no attention head %d of layer %d", probe.Head, probe.Layer)
+	case probe.From < 0 || len(probe.Probs) > maxProbe:
+		return fmt.Errorf("qwen3: a probe reads up to %d positions from 0, not %d from %d", maxProbe, len(probe.Probs), probe.From)
+	}
+	ws.probe = probe
+	err := e.HiddenLastExtendEmbedInto(kv, keep, ids, embeds, dst, ws)
+	ws.probe = nil
+	return err
+}
+
 // maxTail bounds the states of HiddenTailExtendEmbedInto and
 // LogitsRowsInto, within one GPU pass.
 const maxTail = 256
@@ -349,6 +389,7 @@ type Workspace struct {
 	prefix                          *PrefixKV          // set by HiddenLastExtendInto and HiddenLastSharedInto
 	embeds                          Embeds             // set by HiddenLastExtendEmbedInto
 	tail                            []float32          // set by HiddenTailExtendEmbedInto
+	probe                           *Probe             // set by HiddenLastExtendProbeInto
 	shared                          bool               // prefix is read-only and shared by every sequence
 	attnPerHead                     bool               // prefix attention items are per query head, not per group
 	past                            int
@@ -482,8 +523,8 @@ func (e *Evaluator) HiddenLastBatchInto(seqs [][]int, dst [][]float32, ws *Works
 		if ws.prefix != nil {
 			pre = ws.prefix.gpu
 		}
-		ws.gpu.tail = ws.tail
-		defer func() { ws.gpu.tail = nil }()
+		ws.gpu.tail, ws.gpu.probe = ws.tail, ws.probe
+		defer func() { ws.gpu.tail, ws.gpu.probe = nil, nil }()
 		return ws.gpu.batch(m, seqs, dst, pre, ws.past, ws.shared, ws.embeds)
 	}
 	if err := ws.ensure(c, rows, ws.past+longest); err != nil {

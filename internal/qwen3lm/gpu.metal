@@ -298,6 +298,66 @@ kernel void attend1(device const float *qkv [[buffer(0)]], device float *kc [[bu
 	o[lane] = acc.x, o[lane + 32] = acc.y, o[lane + 64] = acc.z, o[lane + 96] = acc.w;
 }
 
+struct ProbeArgs {
+	uint head; // the query head read
+	uint from; // the first key position read
+	uint n;    // the positions read
+};
+
+// probe1 reads one query head of the token attend1 just attended with: the
+// probabilities of keys p.from..p.from+p.n-1 (0 past the token), from the
+// same normalized, rotated query and the same keys. Its AS simdgroups take
+// every AS-th block of AK keys with a streaming log-sum-exp, as attend1's
+// do, and the first merges them and weighs the keys read.
+kernel void probe1(device const float *qkv [[buffer(0)]], device const float *kc [[buffer(1)]],
+		device const float *qn [[buffer(3)]], device const float *rope [[buffer(5)]],
+		device float *out [[buffer(6)]], constant AttnArgs &a [[buffer(7)]],
+		constant ProbeArgs &p [[buffer(8)]], uint sg [[simdgroup_index_in_threadgroup]],
+		uint lane [[thread_index_in_simdgroup]]) {
+	threadgroup float2 partML[AS];
+	uint g = p.head / GROUP, n = a.pos + 1;
+	device const float *q = qkv + p.head * 128;
+	float4 qv = normRopeAt(float4(q[lane], q[lane + 32], q[lane + 64], q[lane + 96]), qn, rope, a, lane) * a.scale;
+	float m = -INFINITY, l = 0;
+	for (uint j0 = sg * AK; j0 < n; j0 += AK * AS) {
+		float s[AK];
+		float bm = -INFINITY;
+		for (uint u = 0; u < AK; u++) {
+			device const float *k = kc + min(j0 + u, n - 1) * KVD + g * 128;
+			s[u] = dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]));
+		}
+		for (uint u = 0; u < AK; u++) {
+			s[u] = j0 + u < n ? simd_sum(s[u]) : -INFINITY;
+			bm = max(bm, s[u]);
+		}
+		float mn = max(m, bm);
+		l *= exp(m - mn);
+		for (uint u = 0; u < AK; u++)
+			l += exp(s[u] - mn);
+		m = mn;
+	}
+	if (lane == 0)
+		partML[sg] = float2(m, l);
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+	if (sg != 0)
+		return;
+	float mx = -INFINITY, sum = 0;
+	for (uint i = 0; i < AS; i++)
+		mx = max(mx, partML[i].x);
+	for (uint i = 0; i < AS; i++)
+		sum += partML[i].x == -INFINITY ? 0 : partML[i].y * exp(partML[i].x - mx);
+	for (uint i = 0; i < p.n; i++) {
+		uint j = p.from + i;
+		float v = 0;
+		if (j < n) {
+			device const float *k = kc + j * KVD + g * 128;
+			v = exp(simd_sum(dot(qv, float4(k[lane], k[lane + 32], k[lane + 64], k[lane + 96]))) - mx) / sum;
+		}
+		if (lane == 0)
+			out[i] = v;
+	}
+}
+
 // ---- Batched (multi-token) kernels ----
 
 struct MMArgs {
