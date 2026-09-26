@@ -1089,16 +1089,7 @@ func (c *Cascade) respond() {
 		close(pieces)
 		speakErr := <-done
 		pieces = make(chan string, ahead)
-		interrupted := ctx.Err() != nil
-		// Wait for the reply to be heard, or cut.
-		for !interrupted && c.play.len() > 0 {
-			select {
-			case <-ctx.Done():
-				interrupted = true
-			case <-time.After(frameTime):
-				showUser()
-			}
-		}
+		interrupted := c.waitPlayback(ctx, showUser)
 		if c.cfg.OnText != nil && j.audio != nil && !userShown && text != "" && c.played.Load() > 0 && !c.resumed.Load() {
 			// A reply heard only after the model finished writing it.
 			c.cfg.OnText(chat.User, text, true)
@@ -1130,6 +1121,24 @@ func (c *Cascade) respond() {
 		}
 		c.finish(cancel, errors.Join(err, speakErr))
 	}
+}
+
+// waitPlayback waits for the reply to be heard, or cut, and reports whether
+// it was interrupted. showUser publishes captions as playback progresses.
+func (c *Cascade) waitPlayback(ctx context.Context, showUser func()) bool {
+	interrupted := ctx.Err() != nil
+	for !interrupted && c.play.len() > 0 {
+		select {
+		case <-ctx.Done():
+			interrupted = true
+		case <-time.After(frameTime):
+			showUser()
+		}
+	}
+	// interrupt cancels the context before clearing playback. The timer
+	// branch can win that select, then an empty queue ends the loop without
+	// ever selecting ctx.Done. Observe cancellation again at that boundary.
+	return interrupted || ctx.Err() != nil
 }
 
 // finish ends the current reply.
