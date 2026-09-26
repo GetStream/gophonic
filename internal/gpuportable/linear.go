@@ -22,21 +22,23 @@ const (
 )
 
 const (
-	linearWorkgroupSize = 128
-	linearParamStride   = 256
+	linearParamStride = 256
 )
 
 // Linear is an immutable row-major matrix and its shared projection pipeline.
 // Matrix data is uploaded in bounded chunks and split into storage bindings
 // when the adapter's actual per-binding limit requires it.
 type Linear struct {
-	engine *Engine
-	format LinearFormat
-	rows   int
-	cols   int
-	chunks []linearChunk
-	kernel *Kernel
-	closed bool
+	engine           *Engine
+	format           LinearFormat
+	rows             int
+	cols             int
+	workgroupSize    uint32
+	rowsPerWorkgroup uint32
+	vectorized       bool
+	chunks           []linearChunk
+	kernel           *Kernel
+	closed           bool
 }
 
 type linearChunk struct {
@@ -50,7 +52,15 @@ type linearChunk struct {
 // little-endian BF16 values in row-major order and requires an even column
 // count. LinearQ8B uses row-major signed int8 codes (one byte per value) and
 // row-major FP16 scales (one value for each block of 32 columns).
-func NewLinear(e *Engine, format LinearFormat, rows, cols int, weights, scales []byte, uploadChunkBytes int) (_ *Linear, err error) {
+func NewLinear(e *Engine, format LinearFormat, rows, cols int, weights, scales []byte, uploadChunkBytes int) (*Linear, error) {
+	workgroupSize, rowsPerWorkgroup, err := defaultLinearGeometry(e, cols)
+	if err != nil {
+		return nil, err
+	}
+	return newLinearGeometry(e, format, rows, cols, weights, scales, uploadChunkBytes, workgroupSize, rowsPerWorkgroup)
+}
+
+func newLinearGeometry(e *Engine, format LinearFormat, rows, cols int, weights, scales []byte, uploadChunkBytes int, workgroupSize, rowsPerWorkgroup uint32) (_ *Linear, err error) {
 	if e == nil || e.device == nil || rows <= 0 || cols <= 0 {
 		return nil, errors.New("gpuportable: invalid linear dimensions or engine")
 	}
@@ -92,19 +102,29 @@ func NewLinear(e *Engine, format LinearFormat, rows, cols int, weights, scales [
 	if maxGroups == 0 {
 		return nil, errors.New("gpuportable: adapter reported zero compute workgroups per dimension")
 	}
-	maxRows := min(rows, maxGroups, int(maxBinding/uint64(weightRowBytes)))
-	maxRows = min(maxRows, int((uint64(^uint32(0))+1)/uint64(cols)))
-	if format == LinearQ8B {
-		maxRows = min(maxRows, int(maxBinding/uint64(scaleRowBytes)))
+	vectorized := format == LinearQ8B || cols%16 == 0
+	if !vectorized && rowsPerWorkgroup != 1 {
+		return nil, errors.New("gpuportable: unaligned BF16 linear supports one row per workgroup")
 	}
+	tilesPerWorkgroup := uint64(1)
+	if vectorized {
+		tilesPerWorkgroup = uint64(workgroupSize / linearLogicalTileSize)
+	}
+	rowsPerGroup := tilesPerWorkgroup * uint64(rowsPerWorkgroup)
+	maxRows64 := min(uint64(rows), uint64(maxGroups)*rowsPerGroup, maxBinding/uint64(weightRowBytes))
+	maxRows64 = min(maxRows64, (uint64(^uint32(0))+1)/uint64(cols))
+	if format == LinearQ8B {
+		maxRows64 = min(maxRows64, maxBinding/uint64(scaleRowBytes))
+	}
+	maxRows := int(maxRows64)
 	if maxRows < 1 {
 		return nil, errors.New("gpuportable: one projection row exceeds adapter storage limits")
 	}
-	kernel, err := e.linearKernel(format)
+	kernel, err := e.linearKernel(format, workgroupSize, rowsPerWorkgroup, vectorized)
 	if err != nil {
 		return nil, err
 	}
-	l := &Linear{engine: e, format: format, rows: rows, cols: cols, kernel: kernel}
+	l := &Linear{engine: e, format: format, rows: rows, cols: cols, workgroupSize: workgroupSize, rowsPerWorkgroup: rowsPerWorkgroup, vectorized: vectorized, kernel: kernel}
 	defer func() {
 		if err != nil {
 			l.Close()
@@ -149,6 +169,10 @@ func NewLinear(e *Engine, format LinearFormat, rows, cols int, weights, scales [
 // NewWorkspace allocates one lane's input, output, params, bind groups, and
 // readback staging for this matrix. A workspace must not be used concurrently.
 func (l *Linear) NewWorkspace() (*LinearWorkspace, error) {
+	return l.newWorkspace(nil, nil)
+}
+
+func (l *Linear) newWorkspace(sharedInput, sharedOutput *wgpu.Buffer) (*LinearWorkspace, error) {
 	if l == nil || l.closed || l.engine == nil || l.engine.device == nil {
 		return nil, errors.New("gpuportable: linear is closed")
 	}
@@ -159,15 +183,35 @@ func (l *Linear) NewWorkspace() (*LinearWorkspace, error) {
 		}
 	}()
 	var err error
-	if w.input, err = l.engine.NewBuffer("gophonic-linear-input", uint64(l.cols*4), wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst); err != nil {
-		w.linear = nil
-		w.Close()
-		return nil, err
+	if sharedInput != nil {
+		if sharedInput.Size() < uint64(l.cols*4) {
+			w.linear = nil
+			w.Close()
+			return nil, errors.New("gpuportable: shared linear input buffer is too small")
+		}
+		w.input = sharedInput
+	} else {
+		if w.input, err = l.engine.NewBuffer("gophonic-linear-input", uint64(l.cols*4), wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst); err != nil {
+			w.linear = nil
+			w.Close()
+			return nil, err
+		}
+		w.ownsInput = true
 	}
-	if w.output, err = l.engine.NewBuffer("gophonic-linear-output", uint64(l.rows*4), wgpu.BufferUsageStorage|wgpu.BufferUsageCopySrc); err != nil {
-		w.linear = nil
-		w.Close()
-		return nil, err
+	if sharedOutput != nil {
+		if sharedOutput.Size() < uint64(l.rows*4) {
+			w.linear = nil
+			w.Close()
+			return nil, errors.New("gpuportable: shared linear output buffer is too small")
+		}
+		w.output = sharedOutput
+	} else {
+		if w.output, err = l.engine.NewBuffer("gophonic-linear-output", uint64(l.rows*4), wgpu.BufferUsageStorage|wgpu.BufferUsageCopySrc); err != nil {
+			w.linear = nil
+			w.Close()
+			return nil, err
+		}
+		w.ownsOutput = true
 	}
 	if len(l.chunks) > maxIntForLinear()/linearParamStride {
 		w.linear = nil
@@ -204,7 +248,13 @@ func (l *Linear) NewWorkspace() (*LinearWorkspace, error) {
 			return nil, err
 		}
 		w.groups[i] = group
-		w.dispatches[i] = Dispatch{Kernel: l.kernel, BindGroup: group, Workgroups: [3]uint32{uint32(chunk.rows), 1, 1}}
+		tilesPerWorkgroup := uint64(1)
+		if l.vectorized {
+			tilesPerWorkgroup = uint64(l.workgroupSize / linearLogicalTileSize)
+		}
+		rowsPerGroup := tilesPerWorkgroup * uint64(l.rowsPerWorkgroup)
+		groups := (uint64(chunk.rows) + rowsPerGroup - 1) / rowsPerGroup
+		w.dispatches[i] = Dispatch{Kernel: l.kernel, BindGroup: group, Workgroups: [3]uint32{uint32(groups), 1, 1}}
 	}
 	if err := l.engine.UploadBounded(w.params, 0, paramData, min(paramBytes, 16<<20)); err != nil {
 		w.linear = nil
@@ -258,13 +308,20 @@ func (w *LinearWorkspace) Close() {
 			group.Release()
 		}
 	}
-	for _, b := range []*wgpu.Buffer{w.input, w.output, w.params, w.staging} {
+	for _, b := range []*wgpu.Buffer{w.params, w.staging} {
 		if b != nil {
 			b.Release()
 		}
 	}
+	if w.ownsInput && w.input != nil {
+		w.input.Release()
+	}
+	if w.ownsOutput && w.output != nil {
+		w.output.Release()
+	}
 	w.linear, w.groups, w.dispatches = nil, nil, nil
 	w.input, w.output, w.params, w.staging = nil, nil, nil, nil
+	w.ownsInput, w.ownsOutput = false, false
 	w.inputBytes, w.outputBytes = nil, nil
 }
 
@@ -289,6 +346,8 @@ type LinearWorkspace struct {
 	linear      *Linear
 	input       *wgpu.Buffer
 	output      *wgpu.Buffer
+	ownsInput   bool
+	ownsOutput  bool
 	params      *wgpu.Buffer
 	staging     *wgpu.Buffer
 	groups      []*wgpu.BindGroup
@@ -298,86 +357,3 @@ type LinearWorkspace struct {
 }
 
 func maxIntForLinear() int { return int(^uint(0) >> 1) }
-
-const linearBF16WGSL = `
-@group(0) @binding(0) var<storage, read> packedWeights: array<u32>;
-@group(0) @binding(1) var<storage, read> input: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
-@group(0) @binding(3) var<storage, read> params: array<u32>;
-var<workgroup> partial: array<f32, 128>;
-
-fn bf16At(i: u32) -> f32 {
-  let word = packedWeights[i >> 1u];
-  let bits = (word >> ((i & 1u) * 16u)) & 0xffffu;
-  return bitcast<f32>(bits << 16u);
-}
-
-@compute @workgroup_size(128)
-fn gemv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lane: vec3<u32>) {
-  let row = wg.x;
-  let rows = params[0];
-  let cols = params[1];
-  let rowBase = params[2];
-  if (row >= rows) { return; }
-  var sum = 0.0;
-  for (var col = lane.x; col < cols; col += 128u) {
-    sum += bf16At(row * cols + col) * input[col];
-  }
-  partial[lane.x] = sum;
-  workgroupBarrier();
-  var stride = 64u;
-  loop {
-    if (stride == 0u) { break; }
-    if (lane.x < stride) { partial[lane.x] += partial[lane.x + stride]; }
-    workgroupBarrier();
-    stride = stride >> 1u;
-  }
-  if (lane.x == 0u) { output[rowBase + row] = partial[0]; }
-}
-`
-
-const linearQ8BWGSL = `
-@group(0) @binding(0) var<storage, read> packedWeights: array<u32>;
-@group(0) @binding(1) var<storage, read> packedScales: array<u32>;
-@group(0) @binding(2) var<storage, read> input: array<f32>;
-@group(0) @binding(3) var<storage, read_write> output: array<f32>;
-@group(0) @binding(4) var<storage, read> params: array<u32>;
-var<workgroup> partial: array<f32, 128>;
-
-fn q8At(i: u32) -> f32 {
-  let word = packedWeights[i >> 2u];
-  let bits = (word >> ((i & 3u) * 8u)) & 0xffu;
-  return f32(bitcast<i32>(bits << 24u) >> 24);
-}
-
-fn scaleAt(i: u32) -> f32 {
-  let pair = unpack2x16float(packedScales[i >> 1u]);
-  return select(pair.x, pair.y, (i & 1u) == 1u);
-}
-
-@compute @workgroup_size(128)
-fn gemv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lane: vec3<u32>) {
-  let row = wg.x;
-  let rows = params[0];
-  let cols = params[1];
-  let rowBase = params[2];
-  if (row >= rows) { return; }
-  var sum = 0.0;
-  let blocks = cols / 32u;
-  for (var col = lane.x; col < cols; col += 128u) {
-    let weightIndex = row * cols + col;
-    let scaleIndex = row * blocks + (col >> 5u);
-    sum += q8At(weightIndex) * scaleAt(scaleIndex) * input[col];
-  }
-  partial[lane.x] = sum;
-  workgroupBarrier();
-  var stride = 64u;
-  loop {
-    if (stride == 0u) { break; }
-    if (lane.x < stride) { partial[lane.x] += partial[lane.x + stride]; }
-    workgroupBarrier();
-    stride = stride >> 1u;
-  }
-  if (lane.x == 0u) { output[rowBase + row] = partial[0]; }
-}
-`

@@ -33,7 +33,7 @@ type Engine struct {
 	info          gputypes.AdapterInfo
 	limits        gputypes.Limits
 	mu            sync.Mutex
-	linearKernels [3]*Kernel
+	linearKernels map[linearKernelKey]*Kernel
 	closed        bool
 }
 
@@ -131,10 +131,10 @@ func (e *Engine) Close() {
 	}
 	e.closed = true
 	_ = e.device.WaitIdle()
-	for i, k := range e.linearKernels {
+	for key, k := range e.linearKernels {
 		if k != nil {
 			k.Close()
-			e.linearKernels[i] = nil
+			delete(e.linearKernels, key)
 		}
 	}
 	e.device.Release()
@@ -278,8 +278,8 @@ func (e *Engine) NewKernel(label, source, entry string, bindings []Binding) (*Ke
 	return k, nil
 }
 
-func (e *Engine) linearKernel(format LinearFormat) (*Kernel, error) {
-	if e == nil || e.device == nil || int(format) >= len(e.linearKernels) || format == 0 {
+func (e *Engine) linearKernel(format LinearFormat, workgroupSize, rowsPerWorkgroup uint32, vectorized bool) (*Kernel, error) {
+	if e == nil || e.device == nil || format == 0 {
 		return nil, errors.New("gpuportable: invalid linear format or nil engine")
 	}
 	e.mu.Lock()
@@ -287,23 +287,31 @@ func (e *Engine) linearKernel(format LinearFormat) (*Kernel, error) {
 	if e.closed {
 		return nil, errors.New("gpuportable: engine is closed")
 	}
-	if k := e.linearKernels[format]; k != nil {
+	if workgroupSize < 32 || workgroupSize > e.limits.MaxComputeWorkgroupSizeX || workgroupSize > e.limits.MaxComputeInvocationsPerWorkgroup || workgroupSize&(workgroupSize-1) != 0 ||
+		rowsPerWorkgroup != 1 && rowsPerWorkgroup != 2 && rowsPerWorkgroup != 4 {
+		return nil, fmt.Errorf("gpuportable: unsupported linear geometry workgroup=%d rows=%d", workgroupSize, rowsPerWorkgroup)
+	}
+	key := linearKernelKey{format: format, workgroupSize: workgroupSize, rowsPerWorkgroup: rowsPerWorkgroup, vectorized: vectorized}
+	if k := e.linearKernels[key]; k != nil {
 		return k, nil
 	}
 	bindings := []Binding{BindingReadOnlyStorage, BindingReadOnlyStorage, BindingStorage, BindingReadOnlyStorage}
 	if format == LinearQ8B {
 		bindings = []Binding{BindingReadOnlyStorage, BindingReadOnlyStorage, BindingReadOnlyStorage, BindingStorage, BindingReadOnlyStorage}
 	}
-	source, entry := linearBF16WGSL, "gemv"
 	label := "gophonic-bf16-gemv"
 	if format == LinearQ8B {
-		source, label = linearQ8BWGSL, "gophonic-q8b-gemv"
+		label = "gophonic-q8b-gemv"
 	}
-	k, err := e.NewKernel(label, source, entry, bindings)
+	label = fmt.Sprintf("%s-wg%d-r%d", label, workgroupSize, rowsPerWorkgroup)
+	k, err := e.NewKernel(label, linearWGSL(format, workgroupSize, rowsPerWorkgroup, vectorized), "gemv", bindings)
 	if err != nil {
 		return nil, err
 	}
-	e.linearKernels[format] = k
+	if e.linearKernels == nil {
+		e.linearKernels = make(map[linearKernelKey]*Kernel)
+	}
+	e.linearKernels[key] = k
 	return k, nil
 }
 
@@ -361,7 +369,13 @@ type Dispatch struct {
 // Submit records each dispatch as its own compute pass and submits one command
 // buffer. This preserves dependencies without waiting on the CPU between ops.
 func (e *Engine) Submit(dispatches ...Dispatch) error {
-	return e.submit(dispatches, nil)
+	return e.submit(dispatches, nil, false)
+}
+
+// SubmitIndependent records dispatches with no inter-dispatch data dependency
+// in one compute pass. Callers must ensure their writes do not overlap.
+func (e *Engine) SubmitIndependent(dispatches ...Dispatch) error {
+	return e.submit(dispatches, nil, true)
 }
 
 // SubmitReadback records the dispatches and output copy into one queue
@@ -386,16 +400,49 @@ func (e *Engine) SubmitReadback(dispatches []Dispatch, src *wgpu.Buffer, offset 
 		}
 	}
 	copyOp := &bufferCopy{src: src, srcOffset: offset, dst: *staging, size: size}
-	if err := e.submit(dispatches, copyOp); err != nil {
+	if err := e.submit(dispatches, copyOp, false); err != nil {
 		return err
 	}
+	return e.mapReadback(*staging, size, dst)
+}
+
+// SubmitIndependentReadback batches independent dispatches into one compute
+// pass and copies one result in the same queue submission. The caller must
+// ensure dispatches have no dependencies and their writes do not overlap.
+func (e *Engine) SubmitIndependentReadback(dispatches []Dispatch, src *wgpu.Buffer, offset uint64, dst []byte, staging **wgpu.Buffer) error {
+	if e == nil || e.device == nil || src == nil || staging == nil || len(dst) == 0 {
+		return errors.New("gpuportable: invalid readback")
+	}
+	size := (uint64(len(dst)) + 3) &^ uint64(3)
+	if offset%4 != 0 || offset > src.Size() || size > src.Size()-offset {
+		return fmt.Errorf("gpuportable: invalid readback range at %d with %d bytes", offset, len(dst))
+	}
+	if *staging == nil || (*staging).Size() < size {
+		b, err := e.NewBuffer("gophonic-readback", size, wgpu.BufferUsageCopyDst|wgpu.BufferUsageMapRead)
+		if err != nil {
+			return err
+		}
+		old := *staging
+		*staging = b
+		if old != nil {
+			old.Release()
+		}
+	}
+	copyOp := &bufferCopy{src: src, srcOffset: offset, dst: *staging, size: size}
+	if err := e.submit(dispatches, copyOp, true); err != nil {
+		return err
+	}
+	return e.mapReadback(*staging, size, dst)
+}
+
+func (e *Engine) mapReadback(staging *wgpu.Buffer, size uint64, dst []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := (*staging).Map(ctx, wgpu.MapModeRead, 0, size); err != nil {
+	if err := staging.Map(ctx, wgpu.MapModeRead, 0, size); err != nil {
 		return fmt.Errorf("gpuportable: map readback: %w", err)
 	}
-	defer (*staging).Unmap()
-	mapped, err := (*staging).MappedRange(0, size)
+	defer staging.Unmap()
+	mapped, err := staging.MappedRange(0, size)
 	if err != nil {
 		return fmt.Errorf("gpuportable: read mapped result: %w", err)
 	}
@@ -416,7 +463,7 @@ type bufferCopy struct {
 	size      uint64
 }
 
-func (e *Engine) submit(dispatches []Dispatch, copyOp *bufferCopy) error {
+func (e *Engine) submit(dispatches []Dispatch, copyOp *bufferCopy, independent bool) error {
 	if e == nil || e.device == nil {
 		return errors.New("gpuportable: nil engine")
 	}
@@ -435,16 +482,35 @@ func (e *Engine) submit(dispatches []Dispatch, copyOp *bufferCopy) error {
 			encoder.DiscardEncoding()
 		}
 	}()
-	for i, d := range dispatches {
-		pass, err := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "gophonic-dispatch"})
+	if independent && len(dispatches) != 0 {
+		pass, err := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "gophonic-independent-dispatches"})
 		if err != nil {
-			return fmt.Errorf("gpuportable: begin compute pass %d: %w", i, err)
+			return fmt.Errorf("gpuportable: begin independent compute pass: %w", err)
 		}
-		pass.SetPipeline(d.Kernel.pipeline)
-		pass.SetBindGroup(0, d.BindGroup, nil)
-		pass.Dispatch(d.Workgroups[0], d.Workgroups[1], d.Workgroups[2])
+		var currentPipeline *wgpu.ComputePipeline
+		for _, d := range dispatches {
+			if d.Kernel.pipeline != currentPipeline {
+				pass.SetPipeline(d.Kernel.pipeline)
+				currentPipeline = d.Kernel.pipeline
+			}
+			pass.SetBindGroup(0, d.BindGroup, nil)
+			pass.Dispatch(d.Workgroups[0], d.Workgroups[1], d.Workgroups[2])
+		}
 		if err := pass.End(); err != nil {
-			return fmt.Errorf("gpuportable: end compute pass %d: %w", i, err)
+			return fmt.Errorf("gpuportable: end independent compute pass: %w", err)
+		}
+	} else {
+		for i, d := range dispatches {
+			pass, err := encoder.BeginComputePass(&wgpu.ComputePassDescriptor{Label: "gophonic-dispatch"})
+			if err != nil {
+				return fmt.Errorf("gpuportable: begin compute pass %d: %w", i, err)
+			}
+			pass.SetPipeline(d.Kernel.pipeline)
+			pass.SetBindGroup(0, d.BindGroup, nil)
+			pass.Dispatch(d.Workgroups[0], d.Workgroups[1], d.Workgroups[2])
+			if err := pass.End(); err != nil {
+				return fmt.Errorf("gpuportable: end compute pass %d: %w", i, err)
+			}
 		}
 	}
 	if copyOp != nil {

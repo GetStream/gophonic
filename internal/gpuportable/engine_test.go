@@ -284,6 +284,170 @@ func TestLinearQ8BParity(t *testing.T) {
 	assertLinearClose(t, got, want, 5e-5)
 }
 
+func TestLinearOptimizedGeometries(t *testing.T) {
+	e := gpuTestEngine(t)
+	defer e.Close()
+	const rows, cols = 13, 256
+	input := make([]float32, cols)
+	for i := range input {
+		input[i] = float32((i%23)-11) * 0.027
+	}
+	geometries := []struct{ wg, rps uint32 }{{32, 1}, {32, 2}, {32, 4}, {64, 2}, {64, 4}, {128, 2}, {128, 4}, {256, 2}, {256, 4}}
+	for _, format := range []LinearFormat{LinearBF16, LinearQ8B} {
+		weights, scales := benchmarkPackedWeights(format, rows, cols, 47)
+		want := make([]float32, rows)
+		for row := range rows {
+			for col := range cols {
+				if format == LinearBF16 {
+					bits := binary.LittleEndian.Uint16(weights[(row*cols+col)*2:])
+					want[row] += math.Float32frombits(uint32(bits)<<16) * input[col]
+				} else {
+					blocks := cols / 32
+					q := int8(weights[row*cols+col])
+					scaleBits := binary.LittleEndian.Uint16(scales[(row*blocks+col/32)*2:])
+					want[row] += float32(q) * safetensors.F16ToF32(scaleBits) * input[col]
+				}
+			}
+		}
+		for _, geometry := range geometries {
+			if geometry.wg > min(e.Limits().MaxComputeWorkgroupSizeX, e.Limits().MaxComputeInvocationsPerWorkgroup) {
+				continue
+			}
+			linear, err := newLinearGeometry(e, format, rows, cols, weights, scales, 0, geometry.wg, geometry.rps)
+			if err != nil {
+				t.Fatalf("format=%d geometry=%d/%d: %v", format, geometry.wg, geometry.rps, err)
+			}
+			lane, err := linear.NewWorkspace()
+			if err != nil {
+				linear.Close()
+				t.Fatalf("format=%d geometry=%d/%d workspace: %v", format, geometry.wg, geometry.rps, err)
+			}
+			got := make([]float32, rows)
+			err = lane.Run(input, got)
+			lane.Close()
+			linear.Close()
+			if err != nil {
+				t.Fatalf("format=%d geometry=%d/%d run: %v", format, geometry.wg, geometry.rps, err)
+			}
+			assertLinearClose(t, got, want, 5e-5)
+		}
+	}
+}
+
+func TestIndependentProjectionDispatches(t *testing.T) {
+	e := gpuTestEngine(t)
+	defer e.Close()
+	const rows, cols = 3, 256
+	sharedInput, err := e.NewBuffer("independent-projection-input", cols*4, wgpu.BufferUsageStorage|wgpu.BufferUsageCopyDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sharedInput.Release()
+	input := make([]float32, cols)
+	for i := range input {
+		input[i] = float32((i%17)-8) * 0.03125
+	}
+	inputBytes := make([]byte, cols*4)
+	for i, value := range input {
+		binary.LittleEndian.PutUint32(inputBytes[i*4:], math.Float32bits(value))
+	}
+	linears := make([]*Linear, 2)
+	lanes := make([]*LinearWorkspace, 2)
+	weights := make([][]byte, 2)
+	wants := make([][]float32, 2)
+	for matrix := range linears {
+		weights[matrix] = make([]byte, rows*cols*2)
+		wants[matrix] = make([]float32, rows)
+		for row := range rows {
+			for col := range cols {
+				v := float32((((matrix+1)*row*13+col*5)%43)-21) * 0.001
+				bits := uint16(math.Float32bits(v) >> 16)
+				binary.LittleEndian.PutUint16(weights[matrix][(row*cols+col)*2:], bits)
+				wants[matrix][row] += math.Float32frombits(uint32(bits)<<16) * input[col]
+			}
+		}
+		linears[matrix], err = NewLinear(e, LinearBF16, rows, cols, weights[matrix], nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer linears[matrix].Close()
+		lanes[matrix], err = linears[matrix].newWorkspace(sharedInput, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lanes[matrix].Close()
+	}
+	if err := e.Upload(sharedInput, 0, inputBytes); err != nil {
+		t.Fatal(err)
+	}
+	dispatches := append(append([]Dispatch(nil), lanes[0].dispatches...), lanes[1].dispatches...)
+	lastBytes := make([]byte, rows*4)
+	var staging *wgpu.Buffer
+	defer func() {
+		if staging != nil {
+			staging.Release()
+		}
+	}()
+	if err := e.SubmitIndependentReadback(dispatches, lanes[1].output, 0, lastBytes, &staging); err != nil {
+		t.Fatal(err)
+	}
+	firstBytes := make([]byte, rows*4)
+	if err := e.Readback(lanes[0].output, 0, firstBytes, &staging); err != nil {
+		t.Fatal(err)
+	}
+	for matrix, data := range [][]byte{firstBytes, lastBytes} {
+		got := make([]float32, rows)
+		for row := range rows {
+			got[row] = math.Float32frombits(binary.LittleEndian.Uint32(data[row*4:]))
+		}
+		assertLinearClose(t, got, wants[matrix], 2e-5)
+	}
+}
+
+func TestProjectionBankParity(t *testing.T) {
+	e := gpuTestEngine(t)
+	defer e.Close()
+	const matrices, rows, cols = 3, 5, 256
+	input := make([]float32, cols)
+	for i := range input {
+		input[i] = float32((i%19)-9) * 0.021
+	}
+	weights := make([]byte, 0, matrices*rows*cols)
+	scales := make([]byte, 0, matrices*rows*(cols/32)*2)
+	want := make([]float32, matrices*rows)
+	for matrix := range matrices {
+		w, s := benchmarkPackedWeights(LinearQ8B, rows, cols, 17+matrix*23)
+		for row := range rows {
+			for col := range cols {
+				q := int8(w[row*cols+col])
+				scaleIndex := (row*(cols/32) + col/32) * 2
+				scale := safetensors.F16ToF32(binary.LittleEndian.Uint16(s[scaleIndex:]))
+				want[matrix*rows+row] += float32(q) * scale * input[col]
+			}
+		}
+		weights = append(weights, w...)
+		scales = append(scales, s...)
+	}
+	linear, err := NewLinear(e, LinearQ8B, matrices*rows, cols, weights, scales, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer linear.Close()
+	lane, err := linear.NewWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lane.Close()
+	if len(lane.dispatches) != 1 {
+		t.Fatalf("same-input matrix bank should use one dispatch, got %d", len(lane.dispatches))
+	}
+	got := make([]float32, matrices*rows)
+	if err := lane.Run(input, got); err != nil {
+		t.Fatal(err)
+	}
+	assertLinearClose(t, got, want, 5e-5)
+}
+
 func TestDependentDispatchPassOrdering(t *testing.T) {
 	e := gpuTestEngine(t)
 	defer e.Close()
